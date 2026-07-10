@@ -1,0 +1,16 @@
+# 可选：为本 skill 包的 worker 指定独立 LLM API（profiles.json 中的 profile id）
+#
+# 省略本文件、或 profileId 为空 → 全部 worker 使用会话当前默认 API（与总管相同）。
+# 配置多个 profile 后，可为不同角色绑定不同模型，实现「多 AI 博弈」。
+
+# defaultProfileId: null
+
+workers:
+  setup-scenario: {}
+  world-engine: {}
+  role-decide:
+    # 示例：按决策角色 id 分配不同 profile（把 uuid 换成你本地的 ApiProfile.id）
+    # byRole:
+    #   A: "00000000-0000-0000-0000-000000000001"
+    #   B: "00000000-0000-0000-0000-000000000002"
+  present-round: {}

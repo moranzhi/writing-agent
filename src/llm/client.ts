@@ -1,0 +1,389 @@
+import type { LlmConfig } from "../config/env.js";
+import type { GenerationParameters } from "../types/preset.js";
+
+export type ToolCallPayload = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
+export type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | {
+      role: "assistant";
+      content: string | null;
+      tool_calls?: ToolCallPayload[];
+    }
+  | { role: "tool"; content: string; tool_call_id: string };
+
+export type ToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type ParsedToolCall = {
+  id: string;
+  name: string;
+  arguments: string;
+};
+
+export type TokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** Prompt tokens served from provider cache (OpenAI cached_tokens, DeepSeek prompt_cache_hit_tokens) */
+  cachedTokens?: number;
+  /** Prompt tokens not served from cache (DeepSeek prompt_cache_miss_tokens) */
+  cacheMissTokens?: number;
+};
+
+export type CompleteResult = {
+  content: string;
+  /** 推理模型思维链（如 DeepSeek reasoner 的 reasoning_content） */
+  reasoning?: string;
+  usage?: TokenUsage;
+  model?: string;
+};
+
+export type CompleteOptions = {
+  responseFormat?: "json_object" | "text";
+  generation?: GenerationParameters;
+  /** 统计用途，如 main_agent / worker:write-rules */
+  caller?: string;
+};
+
+export type CompleteWithToolsOptions = CompleteOptions & {
+  tools: ToolDefinition[];
+};
+
+export type CompleteWithToolsResult = {
+  content: string | null;
+  toolCalls: ParsedToolCall[];
+  reasoning?: string;
+  usage?: TokenUsage;
+  model?: string;
+};
+
+export type LlmProvider = {
+  complete(
+    messages: ChatMessage[],
+    options?: CompleteOptions,
+  ): Promise<CompleteResult>;
+  completeWithTools(
+    messages: ChatMessage[],
+    options: CompleteWithToolsOptions,
+  ): Promise<CompleteWithToolsResult>;
+};
+
+function buildRequestBody(
+  config: LlmConfig,
+  messages: ChatMessage[],
+  options?: CompleteOptions & { tools?: ToolDefinition[] },
+): Record<string, unknown> {
+  const gen = options?.generation ?? {};
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages,
+  };
+
+  if (options?.tools?.length) {
+    body.tools = options.tools;
+    body.tool_choice = "auto";
+  }
+
+  if (gen.temperature !== undefined) body.temperature = gen.temperature;
+  else body.temperature = 0.2;
+
+  if (gen.topP !== undefined) body.top_p = gen.topP;
+  if (gen.topK !== undefined) body.top_k = gen.topK;
+  if (gen.minP !== undefined) body.min_p = gen.minP;
+  if (gen.frequencyPenalty !== undefined) {
+    body.frequency_penalty = gen.frequencyPenalty;
+  }
+  if (gen.presencePenalty !== undefined) {
+    body.presence_penalty = gen.presencePenalty;
+  }
+  if (gen.repetitionPenalty !== undefined) {
+    body.repetition_penalty = gen.repetitionPenalty;
+  }
+  if (gen.maxOutputTokens !== undefined) {
+    body.max_tokens = gen.maxOutputTokens;
+  }
+  if (gen.seed !== undefined) body.seed = gen.seed;
+  if (gen.reasoningEffort !== undefined) {
+    body.reasoning_effort = gen.reasoningEffort;
+  }
+
+  if (options?.responseFormat === "json_object") {
+    body.response_format = { type: "json_object" };
+  }
+
+  return body;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function readCachedTokens(u: Record<string, unknown>): number | undefined {
+  const details = u.prompt_tokens_details ?? u.promptTokensDetails;
+  if (details && typeof details === "object") {
+    const d = details as Record<string, unknown>;
+    const cached = readFiniteNumber(d.cached_tokens ?? d.cachedTokens);
+    if (cached != null) return cached;
+  }
+  return readFiniteNumber(u.prompt_cache_hit_tokens ?? u.promptCacheHitTokens);
+}
+
+function readCacheMissTokens(u: Record<string, unknown>): number | undefined {
+  return readFiniteNumber(u.prompt_cache_miss_tokens ?? u.promptCacheMissTokens);
+}
+
+/** Parse OpenAI-compatible usage object, including provider-specific cache fields. */
+export function parseUsage(raw: unknown): TokenUsage | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const u = raw as Record<string, unknown>;
+  const prompt = Number(u.prompt_tokens ?? u.promptTokens);
+  const completion = Number(u.completion_tokens ?? u.completionTokens);
+  const total = Number(u.total_tokens ?? u.totalTokens);
+  if (!Number.isFinite(total) && !Number.isFinite(prompt)) return undefined;
+
+  const cachedTokens = readCachedTokens(u);
+  const cacheMissTokens = readCacheMissTokens(u);
+
+  return {
+    promptTokens: Number.isFinite(prompt) ? prompt : 0,
+    completionTokens: Number.isFinite(completion) ? completion : 0,
+    totalTokens: Number.isFinite(total)
+      ? total
+      : (Number.isFinite(prompt) ? prompt : 0) +
+        (Number.isFinite(completion) ? completion : 0),
+    ...(cachedTokens != null ? { cachedTokens } : {}),
+    ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+  };
+}
+
+function extractMessageParts(message: Record<string, unknown> | undefined): {
+  content: string | null;
+  reasoning?: string;
+  toolCalls: ParsedToolCall[];
+} {
+  if (!message) return { content: "", toolCalls: [] };
+  const rawContent = message.content;
+  const content =
+    typeof rawContent === "string"
+      ? rawContent.trim() || null
+      : rawContent == null
+        ? null
+        : "";
+  const reasoning =
+    typeof message.reasoning_content === "string"
+      ? message.reasoning_content.trim()
+      : undefined;
+
+  const toolCalls: ParsedToolCall[] = [];
+  const rawCalls = message.tool_calls;
+  if (Array.isArray(rawCalls)) {
+    for (const call of rawCalls) {
+      if (!call || typeof call !== "object") continue;
+      const c = call as Record<string, unknown>;
+      const fn = c.function;
+      if (!fn || typeof fn !== "object") continue;
+      const f = fn as Record<string, unknown>;
+      const name = typeof f.name === "string" ? f.name : "";
+      const id = typeof c.id === "string" ? c.id : "";
+      const args =
+        typeof f.arguments === "string" ? f.arguments : "{}";
+      if (name && id) {
+        toolCalls.push({ id, name, arguments: args });
+      }
+    }
+  }
+
+  if (toolCalls.length > 0) {
+    return { content, reasoning: reasoning || undefined, toolCalls };
+  }
+  if (content) return { content, reasoning: reasoning || undefined, toolCalls };
+  if (reasoning) return { content: reasoning, reasoning, toolCalls };
+  return { content: "", toolCalls };
+}
+
+export class OpenAiCompatibleProvider implements LlmProvider {
+  constructor(private readonly config: LlmConfig) {}
+
+  async complete(
+    messages: ChatMessage[],
+    options?: CompleteOptions,
+  ): Promise<CompleteResult> {
+    const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify(buildRequestBody(this.config, messages, options)),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`LLM request failed (${response.status}): ${body}`);
+    }
+
+    const data = (await response.json()) as {
+      model?: string;
+      usage?: unknown;
+      choices?: Array<{ message?: Record<string, unknown> }>;
+    };
+    const parts = extractMessageParts(data.choices?.[0]?.message);
+    if (!parts.content && parts.toolCalls.length === 0) {
+      throw new Error("LLM returned empty content");
+    }
+    return {
+      content: parts.content ?? "",
+      reasoning: parts.reasoning,
+      usage: parseUsage(data.usage),
+      model: data.model ?? this.config.model,
+    };
+  }
+
+  async completeWithTools(
+    messages: ChatMessage[],
+    options: CompleteWithToolsOptions,
+  ): Promise<CompleteWithToolsResult> {
+    const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify(
+        buildRequestBody(this.config, messages, {
+          ...options,
+          tools: options.tools,
+        }),
+      ),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`LLM request failed (${response.status}): ${body}`);
+    }
+
+    const data = (await response.json()) as {
+      model?: string;
+      usage?: unknown;
+      choices?: Array<{ message?: Record<string, unknown> }>;
+    };
+    const parts = extractMessageParts(data.choices?.[0]?.message);
+    if (!parts.content && parts.toolCalls.length === 0) {
+      throw new Error("LLM returned empty content and no tool calls");
+    }
+    return {
+      content: parts.content,
+      toolCalls: parts.toolCalls,
+      reasoning: parts.reasoning,
+      usage: parseUsage(data.usage),
+      model: data.model ?? this.config.model,
+    };
+  }
+}
+
+export type MockLlmStep =
+  | string
+  | {
+      toolCalls: Array<{ name: string; arguments: Record<string, unknown>; id?: string }>;
+      content?: string | null;
+    };
+
+export class MockLlmProvider implements LlmProvider {
+  private readonly responses: MockLlmStep[];
+  private index = 0;
+
+  constructor(responses: MockLlmStep[]) {
+    this.responses = responses;
+  }
+
+  private nextStep(): MockLlmStep {
+    const step = this.responses[this.index] ?? this.responses.at(-1)!;
+    this.index += 1;
+    return step;
+  }
+
+  async complete(
+    _messages: ChatMessage[],
+    options?: CompleteOptions,
+  ): Promise<CompleteResult> {
+    const step = this.nextStep();
+    const response =
+      typeof step === "string"
+        ? step
+        : (step.content ?? JSON.stringify({ action: "ask_user", reason: "mock" }));
+    const approx = Math.max(1, Math.ceil(response.length / 4));
+    return {
+      content: response,
+      usage: {
+        promptTokens: approx,
+        completionTokens: approx,
+        totalTokens: approx * 2,
+      },
+      model: "mock",
+      ...(options?.caller ? {} : {}),
+    };
+  }
+
+  async completeWithTools(
+    _messages: ChatMessage[],
+    _options: CompleteWithToolsOptions,
+  ): Promise<CompleteWithToolsResult> {
+    const step = this.nextStep();
+    if (typeof step === "string") {
+      return {
+        content: step,
+        toolCalls: [],
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        model: "mock",
+      };
+    }
+    const toolCalls: ParsedToolCall[] = step.toolCalls.map((tc, i) => ({
+      id: tc.id ?? `mock_call_${this.index}_${i}`,
+      name: tc.name,
+      arguments: JSON.stringify(tc.arguments),
+    }));
+    return {
+      content: step.content ?? null,
+      toolCalls,
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      model: "mock",
+    };
+  }
+}
+
+export function createMockMainAgentResponse(
+  overrides: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    action: "ask_user",
+    reason: "请告诉我你想创作什么类型的作品、目标篇幅和风格偏好。",
+    workerId: null,
+    requiresApproval: false,
+    ...overrides,
+  });
+}
+
+export function createMockToolCall(
+  name: string,
+  args: Record<string, unknown>,
+  id?: string,
+): MockLlmStep {
+  return { toolCalls: [{ name, arguments: args, id }] };
+}

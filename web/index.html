@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Writing Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body data-lifecycle="design">
+    <div class="layout">
+      <aside class="panel panel-books" id="panel-books">
+        <header class="panel-head">
+          <strong>作品</strong>
+          <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
+        </header>
+        <div class="book-list" id="book-list"></div>
+      </aside>
+
+      <main class="panel panel-main">
+        <header class="main-head" id="main-head">
+          <div class="main-head-left">
+            <h1 class="work-title" id="work-title">未打开作品</h1>
+            <span class="work-meta" id="work-meta"></span>
+          </div>
+          <div class="main-head-center">
+            <div class="lifecycle-toggle" id="lifecycle-toggle" role="group" aria-label="创作 / 游玩">
+              <button type="button" class="lifecycle-btn active" data-stage="design">创作</button>
+              <button type="button" class="lifecycle-btn" data-stage="play" disabled>游玩</button>
+            </div>
+          </div>
+          <div class="main-head-right">
+            <a class="link" href="/settings.html">设置</a>
+            <button type="button" class="btn-sm" id="btn-saves" hidden>存档</button>
+            <button type="button" class="btn-sm" id="btn-export" disabled>导出</button>
+            <button type="button" class="btn-sm btn-danger" id="btn-delete" hidden>删除</button>
+            <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
+          </div>
+        </header>
+
+        <div class="main-body">
+          <section class="panel-feed" id="panel-feed">
+            <div id="skill-picker" class="skill-picker" hidden></div>
+            <div id="message-feed" class="message-feed">
+              <p class="empty">点击左侧 + 新建作品</p>
+            </div>
+            <div id="skill-guide" class="skill-guide" hidden>
+              <header class="skill-guide-head">计划中的 skill（占位）</header>
+              <div id="skill-guide-list"></div>
+            </div>
+          </section>
+
+          <aside class="panel-agent" id="panel-agent">
+            <header class="panel-head">
+              <strong>Agent</strong>
+              <span class="burst-badge" id="burst-badge" hidden></span>
+            </header>
+            <div id="agent-focus" class="agent-focus"></div>
+            <div id="tool-trace" class="tool-trace" hidden></div>
+            <div id="agent-timeline" class="agent-timeline"></div>
+          </aside>
+        </div>
+
+        <footer class="composer" id="composer"></footer>
+      </main>
+    </div>
+
+    <dialog id="dialog-new-book" class="dialog">
+      <form method="dialog" id="form-new-book">
+        <h2>新建作品</h2>
+        <p class="dialog-desc">只需起名。打开后由 Agent 引导你选择 skill 包并开始实例化。</p>
+        <label class="field">
+          名称
+          <input id="input-book-title" type="text" placeholder="未命名作品" maxlength="80" autofocus />
+        </label>
+        <div class="dialog-actions">
+          <button type="button" class="btn" value="cancel" id="btn-cancel-new">取消</button>
+          <button type="submit" class="btn btn-primary" id="btn-create-book">创建</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dialog-saves" class="dialog dialog-wide">
+      <header class="dialog-head-row">
+        <h2>存档</h2>
+        <button type="button" class="btn-sm" id="btn-close-saves">关闭</button>
+      </header>
+      <p class="dialog-desc">实例 = 设计完成后的设定；进度 = 含运行状态的完整快照。</p>
+      <div class="saves-new">
+        <input id="input-save-label" type="text" placeholder="存档名称" maxlength="60" />
+        <label><input type="radio" name="save-kind" value="instance" /> 实例</label>
+        <label><input type="radio" name="save-kind" value="run" checked /> 进度</label>
+        <button type="button" class="btn btn-primary" id="btn-save-create">保存</button>
+      </div>
+      <div id="saves-list" class="saves-list"></div>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

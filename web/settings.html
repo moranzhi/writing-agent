@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>设置 · Writing Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/settings.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <div class="header-left">
+          <a href="/" class="brand" aria-label="Writing Agent 首页">
+            <span class="brand-logo" aria-hidden="true"></span>
+            <span class="brand-name">Writing Agent</span>
+          </a>
+          <nav class="header-nav" aria-label="主导航">
+            <a class="header-nav-link" href="/">对话</a>
+            <a class="header-nav-link active" href="/settings.html" aria-current="page">设置</a>
+          </nav>
+        </div>
+      </header>
+
+      <div class="app-body">
+        <aside class="sidebar settings-sidebar">
+          <div class="sidebar-head">
+            <h2>设置</h2>
+          </div>
+          <button type="button" class="sidebar-nav-item active" data-section="api">
+            <span class="sidebar-nav-icon">⚡</span> API 配置
+          </button>
+          <button type="button" class="sidebar-nav-item" data-section="preset">
+            <span class="sidebar-nav-icon">📋</span> 预设 Preset
+          </button>
+          <p class="sidebar-note">
+            保存在本地 <code>~/.writing-agent/</code><br />明文存储，不同步
+          </p>
+        </aside>
+
+        <main class="settings-panel">
+          <header class="panel-header">
+            <div>
+              <h1 id="panel-title">API 配置</h1>
+              <span class="panel-subtitle" id="panel-subtitle">管理 LLM 连接</span>
+            </div>
+            <div class="panel-header-actions" id="panel-actions"></div>
+          </header>
+
+          <div class="active-settings-bar" id="active-settings-bar"></div>
+          <div class="settings-toast" id="settings-toast" hidden></div>
+
+          <div class="panel-body">
+            <div class="settings-content">
+              <section class="settings-section" id="section-api">
+                <div id="profiles-list" class="card-list"></div>
+              </section>
+
+              <section class="settings-section hidden" id="section-preset">
+                <div id="presets-list" class="card-list"></div>
+                <pre id="import-report" class="import-report" hidden></pre>
+              </section>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <dialog id="profile-dialog" class="profile-dialog">
+      <form id="profile-form" method="dialog">
+        <h3 id="profile-dialog-title">新增 API 配置</h3>
+        <label>
+          名称
+          <input name="name" required placeholder="例如：DeepSeek" />
+        </label>
+        <label>
+          Base URL
+          <input name="baseUrl" required placeholder="https://api.deepseek.com" />
+        </label>
+        <label>
+          API Key
+          <input name="apiKey" type="password" placeholder="sk-..." />
+        </label>
+        <label>
+          Model
+          <input name="model" required placeholder="deepseek-v4-pro" />
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="profile-cancel" class="btn-secondary">取消</button>
+          <button type="button" id="profile-save" class="btn-secondary">仅保存</button>
+          <button type="submit" class="btn-primary">保存并选用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <input type="file" id="preset-file" accept=".json,application/json" hidden />
+    <script src="/settings.js" type="module"></script>
+  </body>
+</html>
