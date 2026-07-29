@@ -13,8 +13,8 @@ function formatExportTime(iso) {
 
 const KIND_LABELS = {
   user_input: "用户输入",
-  orchestrator_decision: "总管决策",
-  orchestrator_prompt: "总管询问",
+  orchestrator_decision: "导演决策",
+  orchestrator_prompt: "导演询问",
   agent_tool: "Agent Tool",
   worker_running: "Worker 执行",
   worker_output: "Worker 产出",

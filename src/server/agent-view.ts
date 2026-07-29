@@ -8,11 +8,18 @@ import {
   type LifecycleStage,
   type SkillCatalogEntry,
 } from "./skill-catalog.js";
+import {
+  displayWorkerLabel,
+  formatAgentDisplayTitle,
+  formatWorkerDisplayTitle,
+} from "./display-labels.js";
 
 export type AgentMessageKind =
   | "user_input"
   | "orchestrator_decision"
+  | "orchestrator_thinking"
   | "orchestrator_prompt"
+  | "orchestrator_assessment"
   | "agent_tool"
   | "worker_running"
   | "worker_output"
@@ -77,8 +84,19 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "agent_tool",
       actor: "orchestrator",
-      title: `Tool · ${name}`,
+      title: `工具 · ${name}`,
       body: detail || "（无输出）",
+      text: trimmed,
+    };
+  }
+
+  const agentThink = trimmed.match(/^\[总管 思考\]\s*\n?\n?([\s\S]*)$/);
+  if (agentThink) {
+    return {
+      kind: "orchestrator_thinking",
+      actor: "orchestrator",
+      title: formatAgentDisplayTitle("思考"),
+      body: agentThink[1]?.trim() || "（无内容）",
       text: trimmed,
     };
   }
@@ -88,7 +106,7 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "orchestrator_decision",
       actor: "orchestrator",
-      title: `Agent · ${orchestrator[1]}`,
+      title: formatAgentDisplayTitle(orchestrator[1]),
       body: orchestrator[2].trim(),
       text: trimmed,
     };
@@ -99,8 +117,30 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "worker_running",
       actor: workerRunning[1],
-      title: `Worker · ${workerRunning[1]}`,
-      body: "正在调用模型执行 SKILL…",
+      title: formatWorkerDisplayTitle(workerRunning[1], "running"),
+      body: "正在调用模型执行…",
+      text: trimmed,
+    };
+  }
+
+  const compressed = trimmed.match(/^\[上下文已压缩\]\s*([\s\S]+)$/);
+  if (compressed) {
+    return {
+      kind: "system_info",
+      actor: "system",
+      title: "上下文已压缩",
+      body: compressed[1].trim(),
+      text: trimmed,
+    };
+  }
+
+  const unitAccepted = trimmed.match(/^\[创作单位已验收\]\s*([\s\S]+)$/);
+  if (unitAccepted) {
+    return {
+      kind: "system_info",
+      actor: "system",
+      title: "创作单位已验收",
+      body: unitAccepted[1].trim(),
       text: trimmed,
     };
   }
@@ -110,7 +150,7 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "worker_output",
       actor: workerDone[1],
-      title: `Worker · ${workerDone[1]} 产出`,
+      title: formatWorkerDisplayTitle(workerDone[1], "output"),
       body: workerDone[2]?.trim() || "（无正文）",
       text: trimmed,
     };
@@ -121,7 +161,7 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "worker_stub",
       actor: stub?.[1],
-      title: `占位 Worker · ${stub?.[1] ?? "?"}`,
+      title: formatWorkerDisplayTitle(stub?.[1], "stub"),
       body: trimmed,
       text: trimmed,
     };
@@ -135,7 +175,7 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "worker_questions",
       actor: workerAskTagged[1],
-      title: `Worker · ${workerAskTagged[1]} 提问`,
+      title: formatWorkerDisplayTitle(workerAskTagged[1], "questions"),
       body,
       text: trimmed,
     };
@@ -170,6 +210,44 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     };
   }
 
+  if (trimmed.startsWith("[Agent] 内容评价")) {
+    return {
+      kind: "orchestrator_assessment",
+      actor: "orchestrator",
+      title: "总管 · 内容评价",
+      body: trimmed.replace(/^\[Agent\]\s*内容评价[：:]\s*/, "").trim() || trimmed,
+      text: trimmed,
+    };
+  }
+
+  if (trimmed.startsWith("[Agent] 提问") || trimmed.startsWith("[Agent] 可选追问")) {
+    return {
+      kind: "worker_questions",
+      actor: "orchestrator",
+      title: "总管 · 可选追问",
+      body: formatWorkerQuestionBody(
+        trimmed
+          .replace(/^\[Agent\]\s*可选追问（可跳过）[：:]\s*/, "")
+          .replace(/^\[Agent\]\s*提问[：:]\s*/, ""),
+      ),
+      text: trimmed,
+    };
+  }
+
+  if (trimmed.match(/^\[Worker\]\s*可选追问/)) {
+    return {
+      kind: "worker_questions",
+      title: "可选追问",
+      body: formatWorkerQuestionBody(
+        trimmed.replace(
+          /^\[Worker\]\s*可选追问（可跳过，直接接受(?:目前)?产物）[：:]\s*/,
+          "",
+        ),
+      ),
+      text: trimmed,
+    };
+  }
+
   if (
     trimmed.includes("请告诉我") ||
     trimmed.includes("启动询问") ||
@@ -178,7 +256,7 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     return {
       kind: "orchestrator_prompt",
       actor: "orchestrator",
-      title: "Agent · 启动询问",
+      title: "总管 · 启动询问",
       body: trimmed,
       text: trimmed,
     };
@@ -268,16 +346,37 @@ export function buildFocus(
     const detail =
       intake && intake.requiredTotal > 0
         ? `必要项 ${intake.requiredFilled}/${intake.requiredTotal}`
-        : "完成必要项后可进入实例化";
+        : "总管将根据描述推理 Worker 集";
     return {
       actorType: "user",
       actorLabel: "你",
-      action: "填写创作信息",
+      action: "描述创作需求",
       detail,
     };
   }
 
+  if (reason?.kind === "input" && !session.slots.startupCompleted) {
+    return {
+      actorType: "user",
+      actorLabel: "你",
+      action: "描述创作需求",
+      detail: "发送后总管将开始：创作 · 核心",
+    };
+  }
+
   if (reason?.kind === "input") {
+    if (reason.questions?.length) {
+      const q = reason.questions
+        .map((item) => item.prompt)
+        .filter((s) => s?.trim())
+        .join("；");
+      return {
+        actorType: "user",
+        actorLabel: "你",
+        action: "回答追问",
+        detail: q.slice(0, 200) || reason.message,
+      };
+    }
     return {
       actorType: "user",
       actorLabel: "你",
@@ -291,30 +390,37 @@ export function buildFocus(
     return {
       actorType: "orchestrator",
       actorId: "orchestrator",
-      actorLabel: "Agent",
-      action: `建议 invoke ${worker}`,
+      actorLabel: "总管",
+      action: `建议调用 ${displayWorkerLabel(worker)}`,
       detail: session.pendingDecision?.reason,
     };
   }
 
   if (reason?.kind === "worker_questions") {
-    const q = reason.questions?.filter((s) => s?.trim()).join("；") ?? "";
+    const q =
+      reason.questions
+        ?.map((item) => item.prompt)
+        .filter((s) => s?.trim())
+        .join("；") ?? "";
     return {
       actorType: "user",
       actorId: reason.workerId,
       actorLabel: "你",
-      action: `回答 · ${reason.workerId}`,
-      detail: q.slice(0, 200) || "请在下框补充",
+      action: `回答 · ${displayWorkerLabel(reason.workerId)}`,
+      detail: q.slice(0, 200) || "请在询问卡作答",
     };
   }
 
   if (reason?.kind === "review_artifact") {
     const art = session.artifacts.find((a) => a.id === session.pendingArtifactId);
+    const optionalQs = reason.questions?.length
+      ? `；另有 ${reason.questions.length} 道可选追问`
+      : "";
     return {
       actorType: "user",
       actorLabel: "你",
       action: "验收产物",
-      detail: art?.summary ?? art?.workerId,
+      detail: `${art?.summary ?? displayWorkerLabel(art?.workerId) ?? ""}${optionalQs}`,
     };
   }
 
@@ -322,9 +428,9 @@ export function buildFocus(
     return {
       actorType: "worker",
       actorId: session.currentWorkerId,
-      actorLabel: `Skill · ${session.currentWorkerId}`,
+      actorLabel: displayWorkerLabel(session.currentWorkerId),
       action: "执行中",
-      detail: "模型按 SKILL 产出…",
+      detail: "模型正在产出…",
     };
   }
 
@@ -332,9 +438,9 @@ export function buildFocus(
     return {
       actorType: "orchestrator",
       actorId: "orchestrator",
-      actorLabel: "Agent",
-      action: stage === "design" ? "设计 burst" : "游玩 burst",
-      detail: "tool loop：读黑板 → 选 skill",
+      actorLabel: "总管",
+      action: stage === "design" ? "创作调度" : "游玩调度",
+      detail: "读黑板 → 选下一步",
     };
   }
 
@@ -342,7 +448,8 @@ export function buildFocus(
     return {
       actorType: "user",
       actorLabel: "你",
-      action: "选择 Skill 包",
+      action: "恢复中的旧会话",
+      detail: "请发送任意消息继续，或联系维护者",
     };
   }
 

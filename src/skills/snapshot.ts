@@ -12,6 +12,8 @@ export function toActiveSkillSnapshot(skill: ParsedSkill): ActiveSkillSnapshot {
     bookKind: skill.bookKind,
     defaultFlowId: skill.defaultFlowId,
     suggestedWorkers: skill.suggestedWorkers,
+    startupMode: skill.startupMode,
+    uiPrompt: skill.uiPrompt,
     startupPrompt: skill.startupInquiry.prompt,
     startupTargetKey: skill.startupInquiry.targetKey,
     intakeFields,

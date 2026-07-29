@@ -10,6 +10,7 @@ export type PersistedBookSession = {
   runtimeSession: RuntimeSession;
   blackboardItems: BlackboardItem[];
   messages: PersistedChatMessage[];
+  messageBranchState?: PersistedMessageBranchState;
   savedAt: string;
 };
 
@@ -31,4 +32,40 @@ export type PersistedChatMessage = {
     caller?: string;
     model?: string;
   };
+  /** 全量 LLM 请求上下文（可选；按设置只保留最新 N 条） */
+  contextTrace?: {
+    caller: string;
+    createdAt: string;
+    messages: Array<{ role: string; content: string }>;
+    charCount: number;
+    model?: string;
+  };
+  branchGroupId?: string;
+  branchIndex?: number;
+  branchTotal?: number;
+};
+
+export type PersistedMessageBranchState = {
+  branches: Record<
+    string,
+    {
+      anchorIndex: number;
+      groupId: string;
+      activeIndex: number;
+      variants: Array<{
+        messages: PersistedChatMessage[];
+        checkpoint: {
+          runtimeSession: RuntimeSession;
+          blackboardItems: BlackboardItem[];
+        };
+      }>;
+    }
+  >;
+  preMessageCheckpoints: Record<
+    string,
+    {
+      runtimeSession: RuntimeSession;
+      blackboardItems: BlackboardItem[];
+    }
+  >;
 };

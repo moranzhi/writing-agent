@@ -1,0 +1,21 @@
+id: round-present
+label: 回合陈述
+role: transcription
+duty: >
+  结构化陈述本轮：发生了什么、各方行动/思考摘要（Markdown/表格）；
+  适合思想实验、博弈，通常不必文学化 narrator。
+when: 多角色模拟一轮结束，需 输出.用户展示
+suggested_context:
+  static:
+    - 设计.worker集
+  dynamic:
+    - 输出.回合摘要
+    - 场景.公开叙述
+    - 角色.*.思考
+    - 角色.*.行动
+    - 运行.事件流
+suggested_outputs:
+  - 输出.用户展示
+prompt_excerpt: |
+  按参数决定是否展示思考层；公开局面与思考分节，不混写。
+  摘录自旧「回合展示」worker 写法，写入 Worker 集时按实例改 tag 名。

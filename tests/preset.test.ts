@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { assemblePresetMessages } from "../src/preset/assembler.js";
-import { listEnabledPresetEntries, countInjectingEntries } from "../src/preset/entries.js";
+import {
+  applyPresetEntryPatches,
+  countInjectingEntries,
+  listAllPresetEntries,
+  listEnabledPresetEntries,
+} from "../src/preset/entries.js";
 import { importSillyTavernPreset } from "../src/preset/importer.js";
 
 const samplePreset = {
@@ -80,5 +85,31 @@ describe("listEnabledPresetEntries", () => {
       "instruction A",
       "prefill B",
     ]);
+  });
+});
+
+describe("applyPresetEntryPatches", () => {
+  it("toggles enable and edits content", () => {
+    const report = importSillyTavernPreset(samplePreset);
+    const disabled = applyPresetEntryPatches(report.preset, [
+      { id: "custom-a", enabled: false },
+    ]);
+    expect(listAllPresetEntries(disabled).find((e) => e.id === "custom-a")?.enabled).toBe(
+      false,
+    );
+    expect(assemblePresetMessages(disabled).map((m) => m.content)).toEqual([
+      "prefill B",
+    ]);
+
+    const edited = applyPresetEntryPatches(disabled, [
+      { id: "main", enabled: true, content: "hello main", name: "主提示" },
+    ]);
+    const main = listAllPresetEntries(edited).find((e) => e.id === "main");
+    expect(main?.enabled).toBe(true);
+    expect(main?.willInject).toBe(true);
+    expect(main?.name).toBe("主提示");
+    expect(
+      assemblePresetMessages(edited).some((m) => m.content === "hello main"),
+    ).toBe(true);
   });
 });

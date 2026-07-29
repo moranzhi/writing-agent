@@ -1,16 +1,8 @@
 skills:
-  - name: basic
-    description: 最小演示：创作简报 → 大纲。
-    category: novel
-    bookKind: novel
-    path: novel/basic/orchestrator.md
-  - name: weird-rules-short
-    description: 规则怪谈：隐含核心 → 护命规则 + 解析 → 检查。
-    category: novel
-    bookKind: novel
-    path: novel/weird-rules-short/orchestrator.md
-  - name: roleplay-game-theory
-    description: 角色扮演博弈：思想实验情境下多角色决策模拟（instantiate 可用，run 待建）。
+  - name: world-simulator
+    description: >-
+      默认包：用户选导演 → 从能力编排剧本 → 演员上场；
+      创作末尾可选开场白；play 按声明调度。
     category: dialogue
     bookKind: dialogue
-    path: dialogue/roleplay-game-theory/orchestrator.md
+    path: dialogue/world-simulator/orchestrator.md

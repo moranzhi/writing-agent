@@ -8,6 +8,7 @@
  */
 
 import type { IntakeFieldDef } from "./intake.js";
+import type { QuestionItem } from "./questions.js";
 
 /** 运行相位：系统当前在等什么。只有 5 种。 */
 export type RuntimePhase =
@@ -24,10 +25,30 @@ export type RuntimePhase =
 export type WaitingReason =
   | { kind: "skill_selection"; availableSkills: SkillIndexEntry[] } // 启动：选 SKILL.md
   | { kind: "intake"; prompt: string } // 启动填空：必要/可选项收集
-  | { kind: "input"; message?: string } // 总管 ask_user / 返工说明（启动完成后）
+  | {
+      kind: "input";
+      message?: string;
+      /** 总管 ask_user 结构化追问（有则走询问卡） */
+      questions?: QuestionItem[];
+      pageSize?: number;
+    } // 总管 ask_user / 返工说明（启动完成后）
   | { kind: "approve_step"; decisionId: string } // 总管建议 run_worker，等用户确认
-  | { kind: "review_artifact"; artifactId: string } // worker 产物待验收
-  | { kind: "worker_questions"; workerId: string; questions: string[] } // worker 中途提问
+  | {
+      kind: "review_artifact";
+      artifactId: string;
+      /**
+       * 挂在产物下的可选追问（Cursor AskQuestion 心流）。
+       * 有值时不阻断验收：用户可直接 Accept，也可先作答再 Accept。
+       */
+      questions?: QuestionItem[];
+      pageSize?: number;
+    } // worker 产物待验收
+  | {
+      kind: "worker_questions";
+      workerId: string;
+      questions: QuestionItem[];
+      pageSize?: number;
+    } // worker 无产物时的阻塞提问
   | { kind: "revision"; instruction?: string }; // 产物被拒或程序验收失败
 
 /** 与 src/skills/types 对齐的最小 skill 索引字段，避免 runtime 强依赖 skills 模块 */
@@ -43,6 +64,9 @@ export type SkillIndexEntry = {
  */
 export type BookKind = "novel" | "dialogue";
 
+/** orchestrator 启动模式 */
+export type SkillStartupMode = "intake" | "agent-first";
+
 /** 选中的 skill 快照，写入 session.slots.activeSkill，供启动询问与后续流程使用 */
 export type ActiveSkillSnapshot = {
   name: string;
@@ -52,6 +76,10 @@ export type ActiveSkillSnapshot = {
   bookKind?: BookKind;
   defaultFlowId?: string;
   suggestedWorkers: string[];
+  /** intake：总管填空；agent-first：UI 固定引导 → 用户首句 → Agent 调 Skill */
+  startupMode?: SkillStartupMode;
+  /** agent-first 时首屏展示给用户的固定引导（纯 UI） */
+  uiPrompt?: string;
   /** 来自 SKILL.md ## 启动询问 的展示文案 */
   startupPrompt: string;
   /** 用户首次输入写入的 slots 键，如 book.brief */
@@ -118,6 +146,10 @@ export type MainAgentDecision = {
   workerId?: string;
   /** 调度 role-decide 等时指定当前决策角色，Runtime 写入 世界.当前角色.id */
   workerContext?: { roleId?: string };
+  /** ask_user：给用户看的内容完备度评价（写入 waitingReason.message） */
+  assessment?: string;
+  /** ask_user 结构化追问（有则前端询问卡） */
+  questions?: QuestionItem[];
   /** true 时进入 waiting_user(approve_step)，等用户确认后才 run_worker */
   requiresApproval: boolean;
   statePatchAllowed: false;
@@ -149,7 +181,7 @@ export type ResumeContext = {
   workerId: string;
   stepId?: string;
   acceptanceMode: AcceptanceMode;
-  questions: string[];
+  questions: QuestionItem[];
 };
 
 /**
@@ -159,7 +191,13 @@ export type ResumeContext = {
 export type RuntimeEvent =
   | {
       type: "session_started";
-      payload: { presetId: string; flowId?: string; availableSkills: SkillIndexEntry[] };
+      payload: {
+        presetId: string;
+        flowId?: string;
+        availableSkills: SkillIndexEntry[];
+        /** 提供时跳过 skill_selection，直接进入 intake（新建作品默认路径） */
+        initialSkill?: ActiveSkillSnapshot;
+      };
     }
   | { type: "skill_selected"; payload: { skill: ActiveSkillSnapshot } }
   | {
@@ -184,10 +222,26 @@ export type RuntimeEvent =
         acceptanceMode: AcceptanceMode;
       };
     }
-  | { type: "worker_completed"; payload: { artifactId: string } }
+  | {
+      type: "worker_completed";
+      payload: {
+        artifactId: string;
+        /** 有产物时的可选追问，挂到 review_artifact */
+        questions?: QuestionItem[] | string[];
+      };
+    }
   | {
       type: "worker_needs_input";
-      payload: { workerId: string; stepId?: string; questions: string[] };
+      payload: {
+        workerId: string;
+        stepId?: string;
+        questions: QuestionItem[] | string[];
+      };
+    }
+  | {
+      /** 验收态下作答/跳过挂载追问：不离开 review_artifact */
+      type: "user_resolved_sidecar_questions";
+      payload: { answersText?: string };
     }
   | { type: "user_accepted_artifact"; payload: { artifactId: string } }
   | {

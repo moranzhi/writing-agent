@@ -10,20 +10,24 @@ import {
 import {
   ensureActiveProfileDefault,
   loadAppSettings,
+  normalizeContextTraceKeepLatest,
   saveAppSettings,
   setActivePresetId,
   setActiveProfileId,
 } from "../config/settings.js";
+import {
+  countEnabledEntries,
+  countInjectingEntries,
+  listAllPresetEntries,
+  patchPresetEntries,
+  type PresetEntryPatch,
+} from "../preset/entries.js";
 import {
   deletePreset,
   getPreset,
   importAndSavePreset,
   listPresets,
 } from "../preset/store.js";
-import {
-  countInjectingEntries,
-  listEnabledPresetEntries,
-} from "../preset/entries.js";
 import { sessionManager } from "./session-manager.js";
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -49,13 +53,14 @@ export async function handleSettingsApi(
     const settings = loadAppSettings();
     const profiles = listApiProfiles();
     const presets = listPresets().map((p) => {
-      const entries = listEnabledPresetEntries(p);
+      const all = listAllPresetEntries(p);
       return {
         id: p.id,
         name: p.name,
         source: p.source,
-        enabledCount: p.promptOrder.filter((o) => o.enabled).length,
-        injectingCount: countInjectingEntries(entries),
+        enabledCount: countEnabledEntries(all),
+        injectingCount: countInjectingEntries(all),
+        entryCount: all.length,
         importedAt: p.importedAt,
       };
     });
@@ -67,6 +72,7 @@ export async function handleSettingsApi(
     const body = JSON.parse(await readBody(req)) as {
       activeProfileId?: string | null;
       activePresetId?: string | null;
+      contextTraceKeepLatest?: number;
     };
     const settings = loadAppSettings();
     if (body.activeProfileId !== undefined) {
@@ -75,8 +81,25 @@ export async function handleSettingsApi(
     if (body.activePresetId !== undefined) {
       settings.activePresetId = body.activePresetId;
     }
+    if (body.contextTraceKeepLatest !== undefined) {
+      settings.contextTraceKeepLatest = normalizeContextTraceKeepLatest(
+        body.contextTraceKeepLatest,
+      );
+    }
     saveAppSettings(settings);
     json(res, 200, { settings });
+    return true;
+  }
+
+  if (pathname === "/api/settings/context-traces/prune" && req.method === "POST") {
+    const result = sessionManager.pruneAllOpenContextTraces();
+    json(res, 200, result);
+    return true;
+  }
+
+  if (pathname === "/api/settings/context-traces/clear" && req.method === "POST") {
+    const result = sessionManager.clearAllOpenContextTraces();
+    json(res, 200, result);
     return true;
   }
 
@@ -206,22 +229,65 @@ export async function handleSettingsApi(
   const presetEntriesMatch = pathname.match(
     /^\/api\/presets\/([^/]+)\/entries$/,
   );
-  if (presetEntriesMatch && req.method === "GET") {
+  if (presetEntriesMatch) {
     const id = decodeURIComponent(presetEntriesMatch[1]);
     const preset = getPreset(id);
     if (!preset) {
       json(res, 404, { error: "预设不存在" });
       return true;
     }
-    const entries = listEnabledPresetEntries(preset);
-    json(res, 200, {
-      presetId: preset.id,
-      presetName: preset.name,
-      generation: preset.generation,
-      entries,
-      injectingCount: countInjectingEntries(entries),
-    });
-    return true;
+
+    if (req.method === "GET") {
+      const entries = listAllPresetEntries(preset);
+      json(res, 200, {
+        presetId: preset.id,
+        presetName: preset.name,
+        generation: preset.generation,
+        entries,
+        enabledCount: countEnabledEntries(entries),
+        injectingCount: countInjectingEntries(entries),
+      });
+      return true;
+    }
+
+    if (req.method === "PATCH" || req.method === "PUT") {
+      const body = JSON.parse(await readBody(req)) as {
+        entries?: PresetEntryPatch[];
+        entry?: PresetEntryPatch;
+      };
+      const patches = body.entries?.length
+        ? body.entries
+        : body.entry
+          ? [body.entry]
+          : [];
+      if (!patches.length) {
+        json(res, 400, { error: "缺少 entries 或 entry" });
+        return true;
+      }
+      try {
+        const next = patchPresetEntries(preset, patches);
+        const entries = listAllPresetEntries(next);
+        const settings = loadAppSettings();
+        let reloadedSessions = 0;
+        if (settings.activePresetId === id) {
+          reloadedSessions = sessionManager.reloadAllLlms();
+        }
+        json(res, 200, {
+          presetId: next.id,
+          presetName: next.name,
+          generation: next.generation,
+          entries,
+          enabledCount: countEnabledEntries(entries),
+          injectingCount: countInjectingEntries(entries),
+          reloadedSessions,
+        });
+      } catch (err) {
+        json(res, 400, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return true;
+    }
   }
 
   const presetMatch = pathname.match(/^\/api\/presets\/([^/]+)(\/activate)?$/);
@@ -246,8 +312,13 @@ export async function handleSettingsApi(
         json(res, 404, { error: "预设不存在" });
         return true;
       }
-      const entries = listEnabledPresetEntries(preset);
-      json(res, 200, { preset, entries, injectingCount: countInjectingEntries(entries) });
+      const entries = listAllPresetEntries(preset);
+      json(res, 200, {
+        preset,
+        entries,
+        enabledCount: countEnabledEntries(entries),
+        injectingCount: countInjectingEntries(entries),
+      });
       return true;
     }
 

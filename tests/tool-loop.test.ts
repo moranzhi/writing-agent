@@ -63,4 +63,36 @@ describe("main agent tool loop", () => {
     expect(decision.action).toBe("finish");
     expect(decision.reason).toBe("完成");
   });
+
+  it("maps ask_user assessment + questions", () => {
+    const decision = toolCallToDecision({
+      id: "c2",
+      name: "ask_user",
+      arguments: JSON.stringify({
+        reason: "核心体验分叉需用户拍板",
+        assessment:
+          "核心感觉: 完备度 40%\n  已知: 皇帝权力幻想\n  待探: 【冷峻威严】还是【感官沉沦】？",
+        questions: [
+          {
+            id: "q1",
+            prompt: "你更倾向于哪种皇帝的享受？",
+            options: [
+              {
+                label: "冰冷的、主宰一切的权力感——九重宫阙一言定生死",
+              },
+              {
+                label: "私密的、极致的感官享受——温柔乡中的沉沦",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(decision.action).toBe("ask_user");
+    expect(decision.reason).toBe("核心体验分叉需用户拍板");
+    expect(decision.assessment).toContain("完备度 40%");
+    expect(decision.questions).toHaveLength(1);
+    expect(decision.questions?.[0]?.prompt).toContain("皇帝的享受");
+    expect(decision.questions?.[0]?.options?.[0]?.label).toContain("权力感");
+  });
 });

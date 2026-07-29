@@ -7,7 +7,10 @@ let state = {
 let editingProfileId = null;
 let activeSection = "api";
 let lastImportedPresetId = null;
+/** presetId → entries API payload */
 const expandedPresetEntries = new Map();
+/** presetId → 当前展开编辑的 entry id（一次一条） */
+const openPresetEntryId = new Map();
 
 const profilesListEl = document.getElementById("profiles-list");
 const presetsListEl = document.getElementById("presets-list");
@@ -21,8 +24,10 @@ const panelSubtitleEl = document.getElementById("panel-subtitle");
 const panelActionsEl = document.getElementById("panel-actions");
 const sectionApiEl = document.getElementById("section-api");
 const sectionPresetEl = document.getElementById("section-preset");
+const sectionStorageEl = document.getElementById("section-storage");
 const activeSettingsBarEl = document.getElementById("active-settings-bar");
 const settingsToastEl = document.getElementById("settings-toast");
+const contextTraceKeepEl = document.getElementById("context-trace-keep");
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -79,34 +84,39 @@ function renderActiveBar() {
 
 function switchSection(section) {
   activeSection = section;
-  document.querySelectorAll(".sidebar-nav-item").forEach((el) => {
+  document.querySelectorAll(".st-rail-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.section === section);
   });
   sectionApiEl.classList.toggle("hidden", section !== "api");
   sectionPresetEl.classList.toggle("hidden", section !== "preset");
+  sectionStorageEl?.classList.toggle("hidden", section !== "storage");
   renderPanelHeader();
 }
 
 function renderPanelHeader() {
   panelActionsEl.innerHTML = "";
   if (activeSection === "api") {
-    panelTitleEl.textContent = "API 配置";
-    panelSubtitleEl.textContent = "保存后点击「选用」或「保存并选用」立即生效";
+    panelTitleEl.textContent = "API";
+    panelSubtitleEl.textContent = "保存后点「选用」才会用于对话";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-primary";
-    btn.textContent = "新增配置";
+    btn.textContent = "新增";
     btn.addEventListener("click", () => openProfileDialog());
     panelActionsEl.appendChild(btn);
-  } else {
-    panelTitleEl.textContent = "预设 Preset";
-    panelSubtitleEl.textContent = "导入后点击「选用此预设」注入所有 LLM 请求";
+  } else if (activeSection === "preset") {
+    panelTitleEl.textContent = "预设";
+    panelSubtitleEl.textContent =
+      "导入后可启用/编辑条目；选用后注入全部 LLM 请求";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-primary";
     btn.textContent = "导入 JSON";
     btn.addEventListener("click", () => presetFileEl.click());
     panelActionsEl.appendChild(btn);
+  } else {
+    panelTitleEl.textContent = "上下文";
+    panelSubtitleEl.textContent = "控制每个对话保留多少条完整 prompt 痕迹";
   }
 }
 
@@ -174,8 +184,8 @@ function renderPresets() {
             ${active ? '<span class="badge">当前</span>' : ""}
           </div>
           <div class="config-card-meta">
-            ${escapeHtml(p.source)} · 启用 ${p.enabledCount} 条
-            · 注入 ${p.injectingCount ?? "?"} 条
+            ${escapeHtml(p.source)} · 共 ${p.entryCount ?? "?"} 条
+            · 启用 ${p.enabledCount} · 注入 ${p.injectingCount ?? "?"}
             · ${escapeHtml(p.importedAt?.slice(0, 10) ?? "")}
           </div>
         </div>
@@ -183,7 +193,7 @@ function renderPresets() {
       <div class="config-card-actions">
         ${activateButtonHtml(active, p.id, "activate-preset")}
         <button type="button" data-action="toggle-preset-entries" data-id="${p.id}">
-          ${expanded ? "收起条目" : "查看启用条目"}
+          ${expanded ? "收起条目" : "编辑条目"}
         </button>
         <button type="button" class="btn-danger" data-action="delete-preset" data-id="${p.id}">删除</button>
       </div>
@@ -204,46 +214,111 @@ function renderPresetEntriesPanel(presetId, data) {
     .filter(([, v]) => v !== undefined && v !== null)
     .map(([k, v]) => `${k}: ${v}`);
 
+  const openId = openPresetEntryId.get(presetId) ?? null;
+
   const entriesHtml = data.entries
     .map((entry, idx) => {
       const roleClass = `role-${entry.role}`;
-      const status = entry.willInject
-        ? ""
+      const open = openId === entry.id;
+      const preview = (entry.content || "").trim();
+      const previewText = preview
+        ? preview.length > 72
+          ? `${preview.slice(0, 72)}…`
+          : preview
         : entry.marker
-          ? '<span class="entry-skip">marker · 无内容</span>'
-          : '<span class="entry-skip">空内容 · 不注入</span>';
+          ? "（marker · 无正文）"
+          : "（空）";
+      const status = entry.enabled
+        ? entry.willInject
+          ? '<span class="entry-skip ok">将注入</span>'
+          : '<span class="entry-skip">已启用 · 不注入</span>'
+        : '<span class="entry-skip">未启用</span>';
+
       return `
-        <article class="preset-entry ${entry.willInject ? "injecting" : "skipped"}">
-          <header class="preset-entry-head">
+        <article class="preset-entry ${entry.enabled ? "" : "disabled"} ${open ? "is-open" : ""}" data-entry-id="${escapeHtml(entry.id)}">
+          <header class="preset-entry-head" data-action="expand-entry" data-id="${escapeHtml(entry.id)}" role="button" tabindex="0" aria-expanded="${open}">
+            <label class="entry-enable" title="启用后才会注入请求" data-stop-expand>
+              <input type="checkbox" data-action="toggle-entry" data-id="${escapeHtml(entry.id)}" ${entry.enabled ? "checked" : ""} />
+              <span>启用</span>
+            </label>
             <span class="entry-index">${idx + 1}</span>
             <span class="entry-role ${roleClass}">${escapeHtml(entry.role)}</span>
             <span class="entry-name">${escapeHtml(entry.name)}</span>
             ${status}
+            <span class="entry-chevron" aria-hidden="true">${open ? "▾" : "▸"}</span>
           </header>
-          ${entry.content
-            ? `<pre class="preset-entry-content">${escapeHtml(entry.content)}</pre>`
-            : `<p class="preset-entry-empty">（无文本内容）</p>`}
+          ${open
+            ? ""
+            : `<p class="entry-preview" data-action="expand-entry" data-id="${escapeHtml(entry.id)}">${escapeHtml(previewText)}</p>`}
+          <div class="preset-entry-body" ${open ? "" : "hidden"}>
+            <label class="entry-field">
+              名称
+              <input class="entry-name-input" type="text" data-field="name" value="${escapeHtml(entry.name)}" />
+            </label>
+            <label class="entry-field">
+              正文
+              <textarea class="preset-entry-editor" data-field="content" rows="${Math.min(14, Math.max(4, (entry.content || "").split("\n").length + 1))}" placeholder="空则即使启用也不注入">${escapeHtml(entry.content || "")}</textarea>
+            </label>
+            <div class="preset-entry-actions">
+              <button type="button" class="btn-secondary" data-action="collapse-entry" data-id="${escapeHtml(entry.id)}">收起</button>
+              <button type="button" class="btn-primary" data-action="save-entry" data-id="${escapeHtml(entry.id)}">保存此条</button>
+            </div>
+          </div>
         </article>`;
     })
     .join("");
 
   panel.innerHTML = `
-    <div class="preset-entries-inner">
+    <div class="preset-entries-inner" data-preset-id="${escapeHtml(presetId)}">
       ${genLines.length ? `<div class="preset-gen-params"><strong>生成参数</strong> ${escapeHtml(genLines.join(" · "))}</div>` : ""}
-      <p class="preset-entries-summary">共 ${data.entries.length} 条启用顺序，${data.injectingCount} 条会注入请求</p>
-      ${entriesHtml || '<p class="empty-hint">无启用条目</p>'}
+      <p class="preset-entries-summary">共 ${data.entries.length} 条 · 启用 ${data.enabledCount ?? 0} · 注入 ${data.injectingCount ?? 0}。点条目展开编辑；启用开关即时保存。</p>
+      ${entriesHtml || '<p class="empty-hint">无条目</p>'}
     </div>`;
+}
+
+async function refreshPresetEntries(presetId) {
+  const data = await api(`/api/presets/${encodeURIComponent(presetId)}/entries`);
+  expandedPresetEntries.set(presetId, data);
+  // 同步卡片上的计数
+  const cardMeta = state.presets.find((p) => p.id === presetId);
+  if (cardMeta) {
+    cardMeta.enabledCount = data.enabledCount;
+    cardMeta.injectingCount = data.injectingCount;
+    cardMeta.entryCount = data.entries?.length;
+  }
+  renderPresets();
 }
 
 async function togglePresetEntries(presetId) {
   if (expandedPresetEntries.has(presetId)) {
     expandedPresetEntries.delete(presetId);
+    openPresetEntryId.delete(presetId);
     renderPresets();
     return;
   }
-  const data = await api(`/api/presets/${encodeURIComponent(presetId)}/entries`);
+  await refreshPresetEntries(presetId);
+}
+
+async function patchPresetEntry(presetId, patch) {
+  const data = await api(`/api/presets/${encodeURIComponent(presetId)}/entries`, {
+    method: "PATCH",
+    body: JSON.stringify({ entry: patch }),
+  });
   expandedPresetEntries.set(presetId, data);
+  const cardMeta = state.presets.find((p) => p.id === presetId);
+  if (cardMeta) {
+    cardMeta.enabledCount = data.enabledCount;
+    cardMeta.injectingCount = data.injectingCount;
+    cardMeta.entryCount = data.entries?.length;
+  }
   renderPresets();
+  const n = data.reloadedSessions ?? 0;
+  showToast(
+    n > 0
+      ? `已保存，并热更新 ${n} 个会话`
+      : "已保存（选用此预设后才会进入请求）",
+  );
+  return data;
 }
 
 async function loadAll() {
@@ -251,6 +326,11 @@ async function loadAll() {
   state.settings = data.settings;
   state.profiles = data.profiles;
   state.presets = data.presets;
+  if (contextTraceKeepEl) {
+    contextTraceKeepEl.value = String(
+      state.settings.contextTraceKeepLatest ?? 5,
+    );
+  }
   renderActiveBar();
   renderProfiles();
   renderPresets();
@@ -321,7 +401,7 @@ async function activatePreset(id) {
   showToast(`预设已生效${n > 0 ? `（${n} 个会话已更新）` : ""}`);
 }
 
-document.querySelectorAll(".sidebar-nav-item").forEach((btn) => {
+document.querySelectorAll(".st-rail-item").forEach((btn) => {
   btn.addEventListener("click", () => switchSection(btn.dataset.section));
 });
 
@@ -372,6 +452,22 @@ profilesListEl.addEventListener("click", async (e) => {
 });
 
 presetsListEl.addEventListener("click", async (e) => {
+  if (e.target.closest("[data-stop-expand]")) return;
+
+  const expandHead = e.target.closest('[data-action="expand-entry"]');
+  if (expandHead) {
+    const panel = expandHead.closest(".preset-entries-inner");
+    const presetId = panel?.dataset.presetId;
+    const entryId = expandHead.dataset.id;
+    if (!presetId || !entryId) return;
+    const cur = openPresetEntryId.get(presetId);
+    if (cur === entryId) openPresetEntryId.delete(presetId);
+    else openPresetEntryId.set(presetId, entryId);
+    const data = expandedPresetEntries.get(presetId);
+    if (data) renderPresetEntriesPanel(presetId, data);
+    return;
+  }
+
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
   const id = btn.dataset.id;
@@ -385,10 +481,52 @@ presetsListEl.addEventListener("click", async (e) => {
     } else if (action === "delete-preset") {
       if (!confirm("确定删除此预设？")) return;
       await api(`/api/presets/${id}`, { method: "DELETE" });
+      expandedPresetEntries.delete(id);
+      openPresetEntryId.delete(id);
       await loadAll();
       showToast("已删除");
+    } else if (action === "collapse-entry") {
+      const panel = btn.closest(".preset-entries-inner");
+      const presetId = panel?.dataset.presetId;
+      if (!presetId) return;
+      openPresetEntryId.delete(presetId);
+      const data = expandedPresetEntries.get(presetId);
+      if (data) renderPresetEntriesPanel(presetId, data);
+    } else if (action === "save-entry") {
+      const article = btn.closest(".preset-entry");
+      const panel = btn.closest(".preset-entries-inner");
+      const presetId = panel?.dataset.presetId;
+      if (!article || !presetId) return;
+      const name = article.querySelector('[data-field="name"]')?.value ?? "";
+      const content = article.querySelector('[data-field="content"]')?.value ?? "";
+      openPresetEntryId.set(presetId, id);
+      await patchPresetEntry(presetId, { id, name, content });
     }
   } catch (err) {
+    showToast(err.message, true);
+  }
+});
+
+presetsListEl.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const head = e.target.closest?.('[data-action="expand-entry"]');
+  if (!head) return;
+  e.preventDefault();
+  head.click();
+});
+
+presetsListEl.addEventListener("change", async (e) => {
+  const input = e.target.closest('input[data-action="toggle-entry"]');
+  if (!input) return;
+  const article = input.closest(".preset-entry");
+  const panel = input.closest(".preset-entries-inner");
+  const presetId = panel?.dataset.presetId;
+  const id = input.dataset.id;
+  if (!presetId || !id) return;
+  try {
+    await patchPresetEntry(presetId, { id, enabled: input.checked });
+  } catch (err) {
+    input.checked = !input.checked;
     showToast(err.message, true);
   }
 });
@@ -432,6 +570,46 @@ presetFileEl.addEventListener("change", async () => {
     showToast(err.message, true);
   } finally {
     presetFileEl.value = "";
+  }
+});
+
+document.getElementById("btn-save-context-keep")?.addEventListener("click", async () => {
+  try {
+    const n = Number(contextTraceKeepEl?.value ?? 5);
+    const data = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ contextTraceKeepLatest: n }),
+    });
+    state.settings = data.settings;
+    if (contextTraceKeepEl) {
+      contextTraceKeepEl.value = String(data.settings.contextTraceKeepLatest ?? 5);
+    }
+    showToast(`已保存：每个对话保留最新 ${data.settings.contextTraceKeepLatest} 条上下文`);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+});
+
+document.getElementById("btn-prune-context")?.addEventListener("click", async () => {
+  try {
+    const r = await api("/api/settings/context-traces/prune", { method: "POST" });
+    showToast(
+      `已修剪 ${r.sessions} 个会话：保留 ${r.kept} 条痕迹，清除 ${r.cleared} 条`,
+    );
+  } catch (err) {
+    showToast(err.message, true);
+  }
+});
+
+document.getElementById("btn-clear-context")?.addEventListener("click", async () => {
+  if (!confirm("清除所有已打开会话中保存的 LLM 请求上下文？消息正文不受影响。")) {
+    return;
+  }
+  try {
+    const r = await api("/api/settings/context-traces/clear", { method: "POST" });
+    showToast(`已清除 ${r.sessions} 个会话中的 ${r.cleared} 条上下文痕迹`);
+  } catch (err) {
+    showToast(err.message, true);
   }
 });
 

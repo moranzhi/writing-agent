@@ -1,0 +1,98 @@
+# 共用【能力】目录（modules）
+# 各【导演】与编排都从这里选型。
+# id = modules/{id}/ 文件夹
+# name = 固定中文名（流程 JSON 的 name；同能力可多次时靠 step.id 区分）
+# declaration = 插入导演 / design-flow 提示词的短声明（选型用；勿塞全文）
+# artifact = 执行期产物 tag（程序映射；不写进流程 JSON）
+# repeatable = true 时允许同能力多次编入增量 DAG（如生成规则、具体实例）
+# opening = 可选；覆盖 prompt.md 里 ```opening 默认问题（一般只写在 prompt.md）
+#
+# 标准范例：aesthetics-interaction（美学纲领与交互范式）
+# 后来写能力：同结构 prompt.md（含默认问题）+ 本表一行 declaration
+#
+# 世界模拟器常用能力见下「体验→世界→机制→呈现→收成」；编排按需选用，勿默认全选。
+# 流程是可变增量 DAG：勿一次排完全程；可反复调用标了 repeatable 的能力。
+
+modules:
+  # —— 体验契约 ——
+  - id: aesthetics-interaction
+    name: 美学纲领与交互范式
+    declaration: >-
+      钉清站位、正文呈现、核心体验与禁忌、何时等用户；
+      询问相近故合为一步，勿拆成「交互」「美学」两步
+    artifact: 设计.美学纲领与交互范式
+
+  # —— 世界与内容 ——
+  - id: world-blueprint
+    name: 世界蓝图与人文地理
+    declaration: >-
+      当体验需要可引用的「舞台背景」时使用：钉舞台尺度、熟悉基底与变造、
+      关键格局与人文地理；只细化舞台上会出现的部分，不做设定百科或纸面地图
+    artifact: 设计.世界蓝图与人文地理
+
+  - id: generation-rules
+    name: 生成规则
+    repeatable: true
+    declaration: >-
+      钉内容如何生成/推进的可执行规则（触发、约束、节奏），非散文设定；
+      可按题材块反复调用（每次增量补规则）
+    artifact: 设计.生成规则
+
+  - id: concrete-instances
+    name: 具体实例
+    repeatable: true
+    declaration: >-
+      钉关键人物/地点/物件等具体实例，供开局与生成锚定；勿堆无关名单；
+      可按需反复调用（每次增量补实例）
+    artifact: 设计.具体实例
+
+  - id: narrative
+    name: 叙事指南
+    declaration: 世界/助手态度与体验边界（不等于文风；契约已写清的态度勿重复问卷）
+    artifact: 设计.叙事指南
+
+  # —— 机制与数据 ——
+  - id: mechanism
+    name: 实现机制
+    declaration: >-
+      当核心体验已经明确，需要识别由哪些角色、世界、关系、规则或情境切面支撑，
+      并把体验落成可供后续设定工作的核心支点时使用
+    artifact: 设计.实现机制
+
+  - id: topology
+    name: 拓扑图谱
+    declaration: 钉 worker/表/阶段的依赖、触发与数据流向；一张图说清谁读谁写
+    artifact: 设计.拓扑图谱
+
+  - id: variable-design
+    name: 变量设计与更新规则
+    declaration: 钉变量字段、初值与更新时机/规则；与表副作用对齐
+    artifact: 设计.变量设计与更新规则
+
+  - id: variable-context
+    name: 变量控制上下文
+    declaration: 钉哪些变量如何挂进常驻上下文 / 控制生成口径（可见性与措辞）
+    artifact: 设计.变量控制上下文
+
+  # —— 呈现 ——
+  - id: status-bar
+    name: 设计状态栏
+    declaration: 钉用户可见状态栏：字段、刷新时机、与正文如何拼装
+    artifact: 设计.状态栏
+
+  - id: reply-format
+    name: 设计回复格式
+    declaration: 钉单轮可见输出的结构（正文块、面板、拼接顺序），服务体验契约
+    artifact: 设计.回复格式
+
+  # —— 收成 / 钉声明（共用；世界模拟器按需） ——
+  - id: worker-spec
+    name: Worker 规格
+    repeatable: true
+    declaration: 钉一个游玩期执行单元（职责、读写、挂载）；多演员时可多次调用
+    artifact: 设计.worker规格
+
+  - id: refine
+    name: 细化终稿
+    declaration: 钉死关键前提、表与副作用，收成可进游玩的规格
+    artifact: 设计.worker集

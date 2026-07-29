@@ -1,0 +1,23 @@
+id: world-simulator
+label: 世界模拟
+role: core
+duty: >
+  中立世界层：读用户输入与当前状态，按 Worker 集 / notes 中的规则推进事件、
+  裁决组合结果；输出客观、干巴，默认叙事质量低（常需 narrator 转述）。
+when: 每轮用户输入后，或 tag_flow 要求产出本轮实质内容时
+suggested_context:
+  static:
+    - 设计.worker集
+    - 用户.需求
+  dynamic:
+    - 用户.最新输入
+    - 运行.事件流
+    - 变量.当前
+    - 运行.初始变量
+suggested_outputs:
+  - 运行.本轮.裁决
+  - 运行.事件流
+prompt_excerpt: |
+  你是中立世界层，不是文学作者。只对规则与已提交输入作机械反应；
+  不写角色内心、不做剧情化推演。输出可复核的客观事实与状态变化。
+  叙事质量 intentionally 低——转述交给 narrator（若 Worker 集启用）。

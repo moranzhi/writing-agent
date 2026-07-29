@@ -51,6 +51,6 @@ export function toRunSnapshotMeta(snapshot: RunSnapshot): RunSnapshotMeta {
 }
 
 export const SNAPSHOT_KIND_LABELS: Record<SnapshotKind, string> = {
-  instance: "实例",
-  run: "进度",
+  instance: "创作定稿",
+  run: "游玩进度",
 };

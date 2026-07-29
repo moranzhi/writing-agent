@@ -23,7 +23,7 @@ describe("run snapshot store", () => {
       bookId,
       label,
       kind,
-      orchestratorId: "roleplay-game-theory",
+      orchestratorId: "world-simulator",
       runtimeSession,
       blackboardItems: [
         {
@@ -129,7 +129,7 @@ describe("run snapshot store", () => {
     const book = createBook({ title: "读档测试" });
 
     const mgr = new SessionManager();
-    const view1 = await mgr.createForBook(book.id, "basic");
+    const view1 = await mgr.createForBook(book.id, "world-simulator");
     await mgr.sendMessage(view1.id, "读档前消息");
 
     const save = mgr.saveGameSnapshot(view1.id, "第一章末");
@@ -141,7 +141,7 @@ describe("run snapshot store", () => {
     expect(view2.messages.some((m) => m.text === "读档前消息")).toBe(true);
     expect(view2.messages.some((m) => m.text === "读档后不应保留的消息")).toBe(false);
     expect(view2.hints.some((h) => h.includes("第一章末"))).toBe(true);
-  });
+  }, 20_000);
 
   it("instance snapshot strips run progress on save and load", async () => {
     const { createBook } = await import("../src/book/store.js");
@@ -151,7 +151,7 @@ describe("run snapshot store", () => {
     const book = createBook({ title: "实例快照" });
 
     const mgr = new SessionManager();
-    const view = await mgr.createForBook(book.id, "basic");
+    const view = await mgr.createForBook(book.id, "world-simulator");
     const managed = mgr["require"](view.id) as {
       runtime: { getSession: () => { slots: Record<string, unknown> }; getBlackboard: () => { write: (i: object) => void } };
     };

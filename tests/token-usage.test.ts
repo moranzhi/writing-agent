@@ -79,6 +79,7 @@ describe("TokenTrackingProvider", () => {
       caller: "worker:write-rules",
       model: "test-model",
     });
+    expect(ctx.pendingUsage?.at).toBeTruthy();
     expect(ctx.pendingUsage?.recordId).toBeTruthy();
   });
 

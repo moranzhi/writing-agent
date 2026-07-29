@@ -1,37 +1,32 @@
-# world-simulator（规划中）
+# world-simulator
 
-## 定位
+默认 skill 包。术语与作者清单：`docs/ui-glossary.md` §0、`docs/world-simulator-modules.md`。
 
-RP 代入式交互小说 · **世界模拟器**：用户扮演固定角色，在预先设定好的世界观里遇见不同的人、不同的事。  
-交互范式接近 SillyTavern，但本包专精为 **跑团式世界运转**。
-
-架构见 `docs/architecture.md`、`docs/skill-design-guide.md`、`docs/context-assembly.md`。
-
-## 工程结构
+## 目录
 
 ```text
-orchestrator.md               manifest：skill 注册表 + 验收 + readiness（待写）
-workers/                      各 instantiate / run skill（SKILL.md）
-shared-context.md             包级固定上下文上半（待写）
-instantiate-orchestrator.md   【遗留】Step1–14 管道草稿；将拆为 workers/ 能力库后废弃主流程地位
+orchestrator.md                 # 调度 manifest + uiPrompt
+recipes/
+  catalog.yaml                  # 导演选项列表
+  {id}/recipe.yaml              # 单份导演（建议 steps，可调味）
+modules/
+  catalog.yaml                  # 能力目录（id / 中文名 / declaration / artifact）
+  {id}/prompt.md                # 能力正文（design-step 注入）
+workers/
+  design-flow/SKILL.md          # 编排剧本骨架
+  design-step/SKILL.md          # 执行当前能力步
+  opening-generator/SKILL.md    # 可选开场白
+worker-templates/
+  {ref}.yaml                    # 游玩演员默认契约（写入 Worker 集时合并）
 ```
 
-**不注册到 `registry.yaml`**，直至 run manifest 与 readiness 定稿。
+## 运行
 
-## 实例化（design）
+```text
+选导演（recipes）→ design-flow → 验收近期 设计.创作流程（status=open）
+  → 反复 design-step（注入 modules/{id}/prompt.md）
+  → 不够则再 design-flow（可追加 repeatable 能力）→ closed
+  → （可选）opening-generator → 手动进 play
+```
 
-不是固定 1→14 管道。agent 在 design stage：
-
-1. 调 **交互范式** skill → `设计.run_skill清单`
-2. 按清单倒推，按需 invoke 其他 instantiate skill（世界蓝图、变量目录、叙事指南…）
-3. `declare_instance_ready` → play
-
-原 `instantiate-orchestrator.md` 中的 Step 表可迁移为 **workers/** 下独立 SKILL.md，供 agent 选用。
-
-## 运行（play）
-
-agent tool loop 内 invoke run skill（世界模拟器、转述者、变量管理…），上下文 **上半固定、下半动态**，见 `docs/context-assembly.md`。
-
-## 与 scene-roleplay
-
-`scene-roleplay` 为通用占位；本包是其 **世界层 + 固定 POV + 跑团式流向** 专精版。
+旧分步 `design-core` / `design-fixed` / `design-worker` / `design-refine` / `design-common.md` **已移除**，勿再添加。

@@ -79,8 +79,7 @@ type WaitingReason =
 ## 6. 典型转移（简化）
 
 ```text
-idle → skill_selection
-skill_selected → intake 或 input
+idle → intake（session_started + initialSkill）
 intake 完成 / confirm → running → agent burst
 running → run_worker → approve_step 或 worker 执行
 worker_completed → review_artifact（user_confirmed）

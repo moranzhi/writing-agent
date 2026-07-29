@@ -1,6 +1,20 @@
 import type { RuntimeSession } from "../types/runtime.js";
+import {
+  deriveDesignStageScope,
+  deriveRunWorkerScope,
+  instantiateMeta,
+  parseWorkerSetYaml,
+  runWorkerMeta,
+} from "../skills/worker-set-parse.js";
+import {
+  canEnterPlay,
+  hasAcceptedWorkerSet,
+  inferLifecycleStage,
+  type LifecycleStage,
+} from "../skills/worker-declaration.js";
 
-export type LifecycleStage = "design" | "play";
+export type { LifecycleStage };
+export { canEnterPlay, hasAcceptedWorkerSet, inferLifecycleStage };
 
 export type SkillCatalogEntry = {
   id: string;
@@ -9,6 +23,8 @@ export type SkillCatalogEntry = {
   /** 这一步要干嘛（占位说明，详细设计后续补充） */
   purpose: string;
   status: "pending" | "active" | "done" | "skipped";
+  /** 同一 skill 被 invoke 的次数（design 阶段 instantiate 可多次） */
+  runCount?: number;
 };
 
 type CatalogTemplate = {
@@ -18,242 +34,172 @@ type CatalogTemplate = {
   purpose: string;
 };
 
-const GENERIC_DESIGN: CatalogTemplate[] = [
-  {
-    id: "interaction-paradigm",
-    stage: "design",
-    label: "交互范式",
-    purpose: "弄清用户要什么体验，产出 run skill 清单（要哪些能力）。",
-  },
-  {
-    id: "intake",
-    stage: "design",
-    label: "启动收集",
-    purpose: "收集最小需求，写入用户.需求 / book.brief。",
-  },
-  {
-    id: "world-blueprint",
-    stage: "design",
-    label: "世界蓝图",
-    purpose: "定背景板与核心冲突，供后续 skill 引用。",
-  },
-  {
-    id: "narrative-guide",
-    stage: "design",
-    label: "叙事指南",
-    purpose: "定 POV、时态、文风（static 上下文上半）。",
-  },
-  {
+export type BuildSkillCatalogOptions = {
+  /** `设计.worker集` 或 `.草稿` 的 YAML 正文 */
+  workerSetYaml?: string;
+};
+
+function templatesFor(_skillPackId?: string): CatalogTemplate[] {
+  return [];
+}
+
+type ArtifactRunStats = {
+  total: number;
+  accepted: number;
+  pending: number;
+  rejected: number;
+};
+
+function collectArtifactRuns(session: RuntimeSession): Map<string, ArtifactRunStats> {
+  const map = new Map<string, ArtifactRunStats>();
+  for (const art of session.artifacts) {
+    if (!art.workerId) continue;
+    const prev = map.get(art.workerId) ?? {
+      total: 0,
+      accepted: 0,
+      pending: 0,
+      rejected: 0,
+    };
+    prev.total += 1;
+    if (art.status === "accepted") prev.accepted += 1;
+    else if (art.status === "rejected") prev.rejected += 1;
+    else prev.pending += 1;
+    map.set(art.workerId, prev);
+  }
+  return map;
+}
+
+function statusForWorkerId(
+  id: string,
+  session: RuntimeSession,
+  runs: Map<string, ArtifactRunStats>,
+  skipped: Set<string>,
+): SkillCatalogEntry["status"] {
+  if (skipped.has(id)) return "skipped";
+  const stats = runs.get(id);
+  if (stats?.accepted) return "done";
+  if (session.currentWorkerId === id) return "active";
+  if (stats?.pending) return "active";
+  return "pending";
+}
+
+function buildWorldSimulatorCatalog(
+  session: RuntimeSession,
+  lifecycle: LifecycleStage,
+  workerSetYaml?: string,
+): SkillCatalogEntry[] {
+  const workerSet = parseWorkerSetYaml(workerSetYaml);
+  const runs = collectArtifactRuns(session);
+  const skipped = new Set(workerSet?.instantiate_hints?.skip ?? []);
+
+  if (lifecycle === "play") {
+    const runIds = deriveRunWorkerScope(workerSet);
+    const entries: SkillCatalogEntry[] = [
+      {
+        id: "agent-burst",
+        stage: "run",
+        label: "总管调度",
+        purpose: "总管 tool loop：读黑板 → 选择下一步 Worker。",
+        status:
+          session.phase === "running" && !session.currentWorkerId
+            ? "active"
+            : "pending",
+      },
+    ];
+
+    for (const id of runIds) {
+      const meta = runWorkerMeta(id);
+      const stats = runs.get(id);
+      entries.push({
+        id,
+        stage: "run",
+        label: meta.label,
+        purpose: meta.purpose,
+        status: statusForWorkerId(id, session, runs, new Set()),
+        runCount: stats?.total || undefined,
+      });
+    }
+    return entries;
+  }
+
+  const designSteps: Array<{ id: string; label: string; purpose: string }> = [
+    {
+      id: "design-flow",
+      label: "创作 · 流程编排",
+      purpose: "编排/增量修订可变 DAG → 设计.创作流程（可反复编入同能力）。",
+    },
+    {
+      id: "design-step",
+      label: "创作 · 执行步骤",
+      purpose: "按已认可流程执行当前一步模块。",
+    },
+  ];
+
+  const entries: SkillCatalogEntry[] = designSteps.map((step) => ({
+    id: step.id,
+    stage: "design" as const,
+    label: step.label,
+    purpose: step.purpose,
+    status: statusForWorkerId(step.id, session, runs, skipped),
+    runCount: runs.get(step.id)?.total || undefined,
+  }));
+
+  const planned = deriveDesignStageScope(workerSet);
+  for (const id of planned) {
+    const meta = instantiateMeta(id);
+    const stats = runs.get(id);
+    entries.push({
+      id,
+      stage: "design",
+      label: meta.label,
+      purpose: meta.purpose,
+      status: statusForWorkerId(id, session, runs, skipped),
+      runCount: stats?.total || undefined,
+    });
+  }
+
+  const designIds = new Set(designSteps.map((s) => s.id));
+  for (const [id, stats] of runs) {
+    if (designIds.has(id) || id === "design-intake") continue;
+    if (planned.includes(id) || skipped.has(id)) continue;
+    const meta = instantiateMeta(id);
+    entries.push({
+      id,
+      stage: "design",
+      label: meta.label,
+      purpose: meta.purpose,
+      status: statusForWorkerId(id, session, runs, skipped),
+      runCount: stats.total || undefined,
+    });
+  }
+
+  entries.push({
     id: "declare-ready",
     stage: "design",
     label: "实例就绪",
-    purpose: "agent 确认设计够开跑，进入游玩阶段。",
-  },
-];
+    purpose: "Worker 集已 accept 即可进游玩；若声明了开局，建议先验收开场白（非强制锁定）。",
+    status: hasAcceptedWorkerSet(session) ? "done" : "pending",
+  });
 
-const GENERIC_RUN: CatalogTemplate[] = [
-  {
-    id: "agent-burst",
-    stage: "run",
-    label: "Agent 调度",
-    purpose: "总管 tool loop：读黑板 → 选择 invoke 哪个 run skill。",
-  },
-  {
-    id: "narrator",
-    stage: "run",
-    label: "转述 / 展示",
-    purpose: "把世界状态编排成给用户看的叙事回复。",
-  },
-  {
-    id: "world-simulator",
-    stage: "run",
-    label: "世界模拟",
-    purpose: "裁决规则、更新事件流与可见信息。",
-  },
-];
-
-const BY_SKILL_PACK: Record<string, CatalogTemplate[]> = {
-  basic: [
-    {
-      id: "intake",
-      stage: "design",
-      label: "创作简报",
-      purpose: "收集题材、篇幅、风格 → book.brief。",
-    },
-    {
-      id: "declare-ready",
-      stage: "design",
-      label: "进入运行",
-      purpose: "简报确认后 declare ready。",
-    },
-    {
-      id: "outline",
-      stage: "run",
-      label: "生成大纲",
-      purpose: "根据 brief 生成 outline 产物。",
-    },
-  ],
-  "weird-rules-short": [
-    {
-      id: "intake",
-      stage: "design",
-      label: "创作简报",
-      purpose: "收集规则怪谈情境与条数。",
-    },
-    {
-      id: "write-rules",
-      stage: "run",
-      label: "写规则",
-      purpose: "产出规则草稿与隐藏 core。",
-    },
-    {
-      id: "review-infer",
-      stage: "run",
-      label: "读者验收",
-      purpose: "盲读规则，不写 core。",
-    },
-    {
-      id: "review-author",
-      stage: "run",
-      label: "作者验收",
-      purpose: "对照 core 查一致性。",
-    },
-  ],
-  "roleplay-game-theory": [
-    {
-      id: "intake",
-      stage: "design",
-      label: "博弈需求",
-      purpose: "收集情境、角色、轮次 → 用户.博弈需求。",
-    },
-    {
-      id: "setup-scenario",
-      stage: "design",
-      label: "结构化设定",
-      purpose: "整理为情境、规则、角色设定 tag。",
-    },
-    {
-      id: "declare-ready",
-      stage: "design",
-      label: "开始模拟",
-      purpose: "setup 验收后进入 run。",
-    },
-    {
-      id: "world-engine",
-      stage: "run",
-      label: "世界机",
-      purpose: "发可见信息、收行动、裁决回合。",
-    },
-    {
-      id: "role-decide",
-      stage: "run",
-      label: "角色决策",
-      purpose: "各角色独立产出思考与行动。",
-    },
-    {
-      id: "present-round",
-      stage: "run",
-      label: "回合展示",
-      purpose: "编排给用户看的本轮摘要。",
-    },
-  ],
-  "world-simulator": [
-    {
-      id: "interaction-paradigm",
-      stage: "design",
-      label: "交互范式",
-      purpose: "定体验与 run skill 清单。",
-    },
-    {
-      id: "world-blueprint",
-      stage: "design",
-      label: "世界蓝图",
-      purpose: "背景板与核心设定。",
-    },
-    {
-      id: "topology",
-      stage: "design",
-      label: "拓扑 / 关系",
-      purpose: "地图、关系网或进阶路径（按需）。",
-    },
-    {
-      id: "generation-rules",
-      stage: "design",
-      label: "生成规则",
-      purpose: "元规则：如何生成实例内容。",
-    },
-    {
-      id: "narrative-guide",
-      stage: "design",
-      label: "叙事指南",
-      purpose: "正文气质与禁忌（static 上）。",
-    },
-    {
-      id: "variable-catalog",
-      stage: "design",
-      label: "变量目录",
-      purpose: "要跟踪的状态与更新格式。",
-    },
-    {
-      id: "declare-ready",
-      stage: "design",
-      label: "实例就绪",
-      purpose: "agent 声明可开跑。",
-    },
-    {
-      id: "world-simulator",
-      stage: "run",
-      label: "世界模拟器",
-      purpose: "每轮推进世界状态与事件流。",
-    },
-    {
-      id: "narrator",
-      stage: "run",
-      label: "转述者",
-      purpose: "把状态写成用户可见叙事。",
-    },
-  ],
-};
-
-function templatesFor(skillPackId?: string): CatalogTemplate[] {
-  if (skillPackId && BY_SKILL_PACK[skillPackId]) {
-    return BY_SKILL_PACK[skillPackId];
-  }
-  return [...GENERIC_DESIGN, ...GENERIC_RUN];
-}
-
-export function inferLifecycleStage(session: RuntimeSession): LifecycleStage {
-  const override = session.slots.uiLifecycleStage;
-  if (override === "design" || override === "play") {
-    return override;
-  }
-  if (!session.slots.startupCompleted) return "design";
-  if (session.phase === "done") return "play";
-  return "play";
-}
-
-export function canEnterPlay(session: RuntimeSession): boolean {
-  return Boolean(session.slots.startupCompleted);
+  return entries;
 }
 
 export function buildSkillCatalog(
   session: RuntimeSession,
   skillPackId?: string,
   lifecycle: LifecycleStage = inferLifecycleStage(session),
+  options?: BuildSkillCatalogOptions,
 ): SkillCatalogEntry[] {
+  if (skillPackId === "world-simulator") {
+    return buildWorldSimulatorCatalog(session, lifecycle, options?.workerSetYaml);
+  }
+
   const templates = templatesFor(skillPackId);
   const filtered = templates.filter((t) =>
     lifecycle === "design" ? t.stage === "design" : t.stage === "run",
   );
 
-  const workerIds = new Set(
-    session.artifacts.map((a) => a.workerId).filter(Boolean),
-  );
-  const acceptedWorkers = new Set(
-    session.artifacts
-      .filter((a) => a.status === "accepted")
-      .map((a) => a.workerId),
-  );
+  const runs = collectArtifactRuns(session);
 
   return filtered.map((t) => {
     let status: SkillCatalogEntry["status"] = "pending";
@@ -267,18 +213,25 @@ export function buildSkillCatalog(
         status = "active";
       }
     } else if (t.id === "declare-ready") {
-      if (session.slots.startupCompleted) status = "done";
+      if (session.slots.startupCompleted || hasAcceptedWorkerSet(session)) {
+        status = "done";
+      }
     } else if (t.id === "agent-burst") {
       if (session.phase === "running" && !session.currentWorkerId) {
         status = "active";
       }
-    } else if (workerIds.has(t.id)) {
-      status = acceptedWorkers.has(t.id) ? "done" : "active";
+    } else if (runs.has(t.id)) {
+      status = statusForWorkerId(t.id, session, runs, new Set());
     } else if (session.currentWorkerId === t.id) {
       status = "active";
     }
 
-    return { ...t, status };
+    const runCount = runs.get(t.id)?.total;
+    return {
+      ...t,
+      status,
+      runCount: runCount || undefined,
+    };
   });
 }
 

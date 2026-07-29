@@ -10,8 +10,10 @@ export class Blackboard {
   private items = new Map<string, BlackboardItem>();
   private writeSeq = 0;
 
-  listTagIndex(): BlackboardTagIndex[] {
-    return [...this.items.values()]
+  listTagIndex(options?: { includeArchived?: boolean }): BlackboardTagIndex[] {
+    const includeArchived = options?.includeArchived === true;
+    return latestItemsByTag([...this.items.values()])
+      .filter((item) => includeArchived || item.metadata?.role !== "archived")
       .map(({ id, tag, source, scope, updatedAt }) => ({
         id,
         tag,
@@ -43,34 +45,38 @@ export class Blackboard {
   queryByPatterns(
     patterns: string[],
     merge: "latest" | "concat" = "latest",
+    options?: { includeArchived?: boolean },
   ): BlackboardItem[] {
+    const includeArchived = options?.includeArchived === true;
+    const allItems = [...this.items.values()];
+
     if (patterns.some(isFullAccessPattern)) {
-      return [...this.items.values()].sort((a, b) =>
-        a.updatedAt.localeCompare(b.updatedAt),
-      );
+      const latestByTag = latestItemsByTag(allItems);
+      return latestByTag
+        .filter((item) => includeArchived || item.metadata?.role !== "archived")
+        .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     }
 
     const result: BlackboardItem[] = [];
 
     for (const pattern of patterns) {
-      const matched = [...this.items.values()]
-        .filter((item) => tagMatchesPattern(item.tag, pattern))
-        .sort(compareItemsByRecency);
+      const matchedLatest = latestItemsByTag(
+        allItems.filter((item) => tagMatchesPattern(item.tag, pattern)),
+      ).filter((item) => includeArchived || item.metadata?.role !== "archived");
 
-      if (matched.length === 0) continue;
+      if (matchedLatest.length === 0) continue;
 
-      if (merge === "concat" && matched.length > 1) {
+      if (merge === "concat" && matchedLatest.length > 1) {
+        const ordered = matchedLatest.sort((a, b) =>
+          a.updatedAt.localeCompare(b.updatedAt),
+        );
         result.push({
-          ...matched[0],
+          ...ordered[ordered.length - 1],
           id: `merged:${pattern}`,
-          content: matched
-            .slice()
-            .reverse()
-            .map((m) => m.content)
-            .join("\n\n---\n\n"),
+          content: ordered.map((m) => m.content).join("\n\n---\n\n"),
         });
       } else {
-        result.push(matched[0]);
+        result.push(matchedLatest.sort(compareItemsByRecency)[0]);
       }
     }
 
@@ -114,4 +120,14 @@ export class Blackboard {
 
 function compareItemsByRecency(a: BlackboardItem, b: BlackboardItem): number {
   return b.updatedAt.localeCompare(a.updatedAt);
+}
+
+/** 每个 tag 只保留最新一条 */
+function latestItemsByTag(items: BlackboardItem[]): BlackboardItem[] {
+  const byTag = new Map<string, BlackboardItem>();
+  for (const item of items) {
+    const prev = byTag.get(item.tag);
+    if (!prev || item.updatedAt > prev.updatedAt) byTag.set(item.tag, item);
+  }
+  return [...byTag.values()];
 }

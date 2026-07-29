@@ -1,0 +1,21 @@
+id: role-decide
+label: 角色决策
+role: auxiliary
+duty: >
+  仅代表 世界.当前角色.id 所指角色；产出 .思考（仅用户）与 .行动（世界层可见）。
+  信息隔绝：不读其他角色 .思考 / .行动。
+when: Worker 集启用且本轮需该角色独立决策；须 workerContext.roleId
+suggested_context:
+  static:
+    - 设计.worker集
+  dynamic:
+    - 世界.当前角色.id
+    - 运行.事件流
+    - 角色.*.可见信息
+    - 场景.公开叙述
+suggested_outputs:
+  - 角色.*.思考
+  - 角色.*.行动
+prompt_excerpt: |
+  两层输出：思考（用户专阅）与行动（含说话，世界层可读）。
+  禁止读博弈规则全文或其他角色思考 tag；仅 L3 可见信息。

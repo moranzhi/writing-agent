@@ -1,5 +1,6 @@
 import type { LlmConfig } from "../config/env.js";
 import type { GenerationParameters } from "../types/preset.js";
+import { consumeOpenAiToolStream } from "./stream-complete.js";
 
 export type ToolCallPayload = {
   id: string;
@@ -71,21 +72,36 @@ export type CompleteWithToolsResult = {
   model?: string;
 };
 
+export type StreamCallbacks = {
+  onReasoningDelta?: (delta: string) => void;
+  onContentDelta?: (delta: string) => void;
+};
+
 export type LlmProvider = {
   complete(
     messages: ChatMessage[],
     options?: CompleteOptions,
   ): Promise<CompleteResult>;
+  completeStream?(
+    messages: ChatMessage[],
+    options?: CompleteOptions,
+    callbacks?: StreamCallbacks,
+  ): Promise<CompleteResult>;
   completeWithTools(
     messages: ChatMessage[],
     options: CompleteWithToolsOptions,
+  ): Promise<CompleteWithToolsResult>;
+  completeWithToolsStream?(
+    messages: ChatMessage[],
+    options: CompleteWithToolsOptions,
+    callbacks: StreamCallbacks,
   ): Promise<CompleteWithToolsResult>;
 };
 
 function buildRequestBody(
   config: LlmConfig,
   messages: ChatMessage[],
-  options?: CompleteOptions & { tools?: ToolDefinition[] },
+  options?: CompleteOptions & { tools?: ToolDefinition[]; stream?: boolean },
 ): Record<string, unknown> {
   const gen = options?.generation ?? {};
   const body: Record<string, unknown> = {
@@ -123,6 +139,11 @@ function buildRequestBody(
 
   if (options?.responseFormat === "json_object") {
     body.response_format = { type: "json_object" };
+  }
+
+  if (options?.stream) {
+    body.stream = true;
+    body.stream_options = { include_usage: true };
   }
 
   return body;
@@ -255,6 +276,44 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     };
   }
 
+  async completeStream(
+    messages: ChatMessage[],
+    options?: CompleteOptions,
+    callbacks: StreamCallbacks = {},
+  ): Promise<CompleteResult> {
+    const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify(
+        buildRequestBody(this.config, messages, { ...options, stream: true }),
+      ),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`LLM request failed (${response.status}): ${body}`);
+    }
+
+    if (!response.body) {
+      throw new Error("LLM stream response has no body");
+    }
+
+    const parts = await consumeOpenAiToolStream(response.body, callbacks);
+    if (!parts.content && !parts.reasoning) {
+      throw new Error("LLM stream returned empty content");
+    }
+    return {
+      content: parts.content ?? parts.reasoning ?? "",
+      reasoning: parts.reasoning || undefined,
+      usage: parts.usage,
+      model: parts.model ?? this.config.model,
+    };
+  }
+
   async completeWithTools(
     messages: ChatMessage[],
     options: CompleteWithToolsOptions,
@@ -294,6 +353,49 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       reasoning: parts.reasoning,
       usage: parseUsage(data.usage),
       model: data.model ?? this.config.model,
+    };
+  }
+
+  async completeWithToolsStream(
+    messages: ChatMessage[],
+    options: CompleteWithToolsOptions,
+    callbacks: StreamCallbacks,
+  ): Promise<CompleteWithToolsResult> {
+    const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify(
+        buildRequestBody(this.config, messages, {
+          ...options,
+          tools: options.tools,
+          stream: true,
+        }),
+      ),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`LLM request failed (${response.status}): ${body}`);
+    }
+
+    if (!response.body) {
+      throw new Error("LLM stream response has no body");
+    }
+
+    const parts = await consumeOpenAiToolStream(response.body, callbacks);
+    if (!parts.content && parts.toolCalls.length === 0 && !parts.reasoning) {
+      throw new Error("LLM stream returned empty content and no tool calls");
+    }
+    return {
+      content: parts.content,
+      toolCalls: parts.toolCalls,
+      reasoning: parts.reasoning || undefined,
+      usage: parts.usage,
+      model: parts.model ?? this.config.model,
     };
   }
 }
@@ -341,6 +443,39 @@ export class MockLlmProvider implements LlmProvider {
     };
   }
 
+  async completeStream(
+    _messages: ChatMessage[],
+    options?: CompleteOptions,
+    callbacks: StreamCallbacks = {},
+  ): Promise<CompleteResult> {
+    const step = this.nextStep();
+    const response =
+      typeof step === "string"
+        ? step
+        : (step.content ?? JSON.stringify({ action: "ask_user", reason: "mock" }));
+    const reasoning = "用户需要明确分工 → 调用 design-intake 产出 worker 集。";
+    for (const ch of reasoning) {
+      callbacks.onReasoningDelta?.(ch);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    for (const ch of response) {
+      callbacks.onContentDelta?.(ch);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const approx = Math.max(1, Math.ceil(response.length / 4));
+    return {
+      content: response,
+      reasoning,
+      usage: {
+        promptTokens: approx,
+        completionTokens: approx,
+        totalTokens: approx * 2,
+      },
+      model: "mock",
+      ...(options?.caller ? {} : {}),
+    };
+  }
+
   async completeWithTools(
     _messages: ChatMessage[],
     _options: CompleteWithToolsOptions,
@@ -365,6 +500,20 @@ export class MockLlmProvider implements LlmProvider {
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
       model: "mock",
     };
+  }
+
+  async completeWithToolsStream(
+    _messages: ChatMessage[],
+    _options: CompleteWithToolsOptions,
+    callbacks: StreamCallbacks,
+  ): Promise<CompleteWithToolsResult> {
+    const reasoning =
+      "用户需要明确 Worker 分工 → 先读取黑板与 worker 列表 → 调用 design-intake 产出 worker 集。";
+    for (const ch of reasoning) {
+      callbacks.onReasoningDelta?.(ch);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    return this.completeWithTools(_messages, _options);
   }
 }
 

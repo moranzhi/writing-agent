@@ -37,7 +37,7 @@ LLM 通过 **tool call** 表达意图；Runtime 校验后执行 tool 或转为 *
 | name | 行为 |
 |------|------|
 | `run_worker` | 执行 skill；`requiresApproval` → `approve_step` |
-| `ask_user` | `waiting_user(input)` |
+| `ask_user` | `waiting_user(input)`；`assessment` → 内容评价（主内容）；`questions` → 挂载询问卡（可 Skip） |
 | `review_blackboard` | 向用户展示概况 → `input` |
 | `finish` | `done` |
 
@@ -72,7 +72,7 @@ running 内每轮 LLM+tool 使 burst+1；超过 maxBurst（默认 12，可配置
 
 | name | 行为 |
 |------|------|
-| `ask_user` | `worker_questions` + resumeContext |
+| `ask_user` | 无产物 → `worker_questions`；有产物 → 仍 `worker_completed`，追问挂到 `review_artifact.questions`（可直接 Accept） |
 | `submit` | 校验 tag ⊆ outputTags → 写黑板 → `worker_completed` |
 
 Phase A 仍用 JSON `outputs` + `askUser`，语义等价。
@@ -83,11 +83,11 @@ Phase A 仍用 JSON `outputs` + `askUser`，语义等价。
 
 | waitingReason | 用户动作 |
 |---------------|----------|
-| `skill_selection` | 选包 |
+| `skill_selection` | 选包（**legacy**，新作品不再进入） |
 | `intake` / `input` | 输入 |
 | `approve_step` | approve / reject |
-| `review_artifact` | accept / reject |
-| `worker_questions` | 输入 |
+| `review_artifact` | accept / reject；可选 `questions` 随 Accept 一并收起（表示无需再完善） |
+| `worker_questions` | 作答 / Skip（无产物时的阻塞追问） |
 | `revision` | 输入修改说明 |
 
 ---

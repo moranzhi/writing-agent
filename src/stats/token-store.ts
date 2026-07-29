@@ -30,6 +30,8 @@ export type MessageTokenUsage = {
   caller: string;
   model?: string;
   recordId?: string;
+  /** ISO 时间戳，便于按时间段汇总 */
+  at?: string;
 };
 
 export type CallerTokenBreakdown = {
@@ -243,5 +245,6 @@ export function toMessageTokenUsage(record: TokenUsageRecord): MessageTokenUsage
     caller: record.caller,
     model: record.model,
     recordId: record.id,
+    at: record.at,
   };
 }

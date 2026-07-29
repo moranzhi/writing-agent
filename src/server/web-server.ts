@@ -65,6 +65,8 @@ const server = createServer(async (req, res) => {
           "GET /api/presets",
           "GET /api/books",
           "GET /api/skills",
+          "GET /api/directors",
+          "GET /api/modules",
           "GET /api/stats/tokens",
         ],
       });
@@ -130,6 +132,104 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/answers") {
+        const body = JSON.parse(await readBody(req)) as {
+          answers?: Array<{
+            questionId?: string;
+            optionId?: string;
+            text?: string;
+          }>;
+          note?: string;
+        };
+        const answers = (body.answers ?? [])
+          .filter(
+            (a) =>
+              typeof a?.questionId === "string" &&
+              a.questionId.trim() &&
+              typeof a?.text === "string" &&
+              a.text.trim(),
+          )
+          .map((a) => ({
+            questionId: a.questionId!.trim(),
+            optionId:
+              typeof a.optionId === "string" && a.optionId.trim()
+                ? a.optionId.trim()
+                : undefined,
+            text: a.text!.trim(),
+          }));
+        if (!answers.length) {
+          json(res, 400, { error: "answers 不能为空" });
+          return;
+        }
+        const note =
+          typeof body.note === "string" && body.note.trim()
+            ? body.note.trim()
+            : undefined;
+        try {
+          const view = await sessionManager.answerQuestions(
+            sessionId,
+            answers,
+            note,
+          );
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "提交失败",
+          });
+        }
+        return;
+      }
+
+      const messageActionMatch = sub.match(
+        /^\/messages\/([^/]+)\/(edit|refresh|variant|delete)$/,
+      );
+      if (req.method === "POST" && messageActionMatch) {
+        const messageId = decodeURIComponent(messageActionMatch[1]);
+        const action = messageActionMatch[2];
+        const body = JSON.parse(await readBody(req).catch(() => "{}")) as {
+          text?: string;
+          direction?: string;
+        };
+        let view;
+        try {
+          if (action === "edit") {
+            if (!body.text?.trim()) {
+              json(res, 400, { error: "text 不能为空" });
+              return;
+            }
+            view = await sessionManager.editMessage(
+              sessionId,
+              messageId,
+              body.text.trim(),
+            );
+          } else if (action === "refresh") {
+            view = await sessionManager.refreshMessage(sessionId, messageId);
+          } else if (action === "variant") {
+            if (body.direction !== "prev" && body.direction !== "next") {
+              json(res, 400, { error: "direction 须为 prev 或 next" });
+              return;
+            }
+            view = await sessionManager.switchMessageVariant(
+              sessionId,
+              messageId,
+              body.direction,
+            );
+          } else if (action === "delete") {
+            view = await sessionManager.deleteMessage(sessionId, messageId);
+          } else {
+            json(res, 400, { error: "未知 action" });
+            return;
+          }
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "操作失败",
+          });
+          return;
+        }
+        json(res, 200, view);
+        return;
+      }
+
       if (req.method === "POST" && sub === "/lifecycle") {
         const body = JSON.parse(await readBody(req)) as { stage?: string };
         if (body.stage !== "design" && body.stage !== "play") {
@@ -147,6 +247,74 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/recipe") {
+        const body = JSON.parse(await readBody(req)) as { recipeId?: string };
+        if (!body.recipeId?.trim()) {
+          json(res, 400, { error: "缺少 recipeId" });
+          return;
+        }
+        try {
+          const view = await sessionManager.setSelectedRecipe(
+            sessionId,
+            body.recipeId.trim(),
+          );
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "选定配方失败",
+          });
+        }
+        return;
+      }
+
+      if (req.method === "POST" && sub === "/board") {
+        const body = JSON.parse(await readBody(req)) as {
+          tag?: string;
+          content?: string;
+        };
+        if (!body.tag?.trim()) {
+          json(res, 400, { error: "缺少 tag" });
+          return;
+        }
+        try {
+          const view = sessionManager.writeUserBoardTag(
+            sessionId,
+            body.tag,
+            body.content ?? "",
+          );
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "写入失败",
+          });
+        }
+        return;
+      }
+
+      if (req.method === "POST" && sub === "/context-traces/prune") {
+        try {
+          const result = sessionManager.pruneSessionContextTraces(sessionId);
+          json(res, 200, { ...result, session: sessionManager.get(sessionId) });
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "修剪失败",
+          });
+        }
+        return;
+      }
+
+      if (req.method === "POST" && sub === "/context-traces/clear") {
+        try {
+          const result = sessionManager.clearSessionContextTraces(sessionId);
+          json(res, 200, { ...result, session: sessionManager.get(sessionId) });
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "清除失败",
+          });
+        }
+        return;
+      }
+
       if (req.method === "POST" && sub === "/actions") {
         const body = JSON.parse(await readBody(req)) as { action?: string };
         let view;
@@ -159,6 +327,9 @@ const server = createServer(async (req, res) => {
             break;
           case "accept":
             view = await sessionManager.accept(sessionId);
+            break;
+          case "skip_questions":
+            view = await sessionManager.skipQuestions(sessionId);
             break;
           case "reject":
             view = await sessionManager.reject(sessionId);

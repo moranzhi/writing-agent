@@ -19,20 +19,54 @@ import type {
   WaitingReason,
 } from "../types/runtime.js";
 import type { ActiveSkillSnapshot } from "../types/runtime.js";
+import { effectiveStartupMode } from "../config/default-orchestrator.js";
 import {
   buildIntakeProgress,
   buildIntakeFollowUpMessage,
   readIntakeValues,
   synthesizeDemandText,
 } from "../intake/intake.js";
+import { normalizeQuestions } from "../skills/question-protocol.js";
+import type { QuestionItem } from "../types/questions.js";
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** 挂在产物下的追问一律可选（required=false），用户可直接 Accept */
+function asOptionalSidecarQuestions(
+  raw: QuestionItem[] | string[] | undefined,
+): QuestionItem[] | undefined {
+  const normalized = normalizeQuestions(raw ?? []);
+  if (!normalized.length) return undefined;
+  return normalized.map((q) => ({ ...q, required: false }));
+}
+
 /** 更新 updatedAt 时间戳 */
 function touch(session: RuntimeSession): RuntimeSession {
   return { ...session, updatedAt: nowIso() };
+}
+
+/** 用户每条输入写入 用户.最新输入；首句同时写入需求 tag */
+function applyUserTextToSlots(
+  slots: Record<string, unknown>,
+  text: string,
+  demandKey: string,
+  opts: { initial?: boolean },
+): void {
+  if (!text) return;
+  slots["用户.最新输入"] = text;
+  if (opts.initial) {
+    slots[demandKey] = text;
+    slots.startupCompleted = true;
+    return;
+  }
+  if (!slots.startupCompleted) {
+    slots[demandKey] = text;
+    slots.startupCompleted = true;
+    return;
+  }
+  mergeSlotText(slots, demandKey, text);
 }
 
 /** 将用户补充文本追加到 slot（用于合并多轮 ask_user / worker 答复到需求 tag） */
@@ -136,6 +170,7 @@ export function getAllowedEvents(
         "user_accepted_artifact",
         "user_rejected_artifact",
         "user_requested_revision",
+        "user_resolved_sidecar_questions",
         "main_agent_decision_created",
         "runtime_failed",
       ];
@@ -179,6 +214,11 @@ export function canApplyEvent(
     case "user_accepted_artifact":
     case "user_rejected_artifact":
       return reason?.kind === "review_artifact";
+    case "user_resolved_sidecar_questions":
+      return (
+        reason?.kind === "review_artifact" &&
+        Boolean(reason.questions?.length)
+      );
     case "user_requested_revision":
       return (
         reason?.kind === "review_artifact" || reason?.kind === "approve_step"
@@ -272,7 +312,7 @@ export function applyEvent(
   }
 
   switch (event.type) {
-    // ── 启动：选 skill ──
+    // ── 启动：默认 orchestrator 或 legacy 选包 ──
     case "session_started": {
       const next = appendHistory(
         {
@@ -283,40 +323,22 @@ export function applyEvent(
         event,
       );
       const skills = event.payload.availableSkills;
+      const initialSkill = event.payload.initialSkill;
+      if (initialSkill) {
+        return applySkillBinding(next, initialSkill, event);
+      }
       return {
         session: waiting(next, {
           kind: "skill_selection",
           availableSkills: skills,
         }),
-        effects: [
-          {
-            type: "emit_message",
-            message: formatSkillSelectionPrompt(skills),
-          },
-        ],
+        effects: [{ type: "emit_message", message: formatSkillSelectionPrompt(skills) }],
       };
     }
 
     case "skill_selected": {
       const { skill } = event.payload;
-      const next = appendHistory(
-        {
-          ...session,
-          flowId: skill.defaultFlowId ?? session.flowId,
-          slots: {
-            ...session.slots,
-            activeSkill: skill,
-          },
-        },
-        event,
-      );
-      return {
-        session: waiting(next, {
-          kind: "intake",
-          prompt: skill.startupPrompt,
-        }),
-        effects: [{ type: "emit_message", message: skill.startupPrompt }],
-      };
+      return applySkillBinding(session, skill, event);
     }
 
     case "user_confirmed_intake": {
@@ -366,6 +388,21 @@ export function applyEvent(
 
       if (session.waitingReason?.kind === "intake") {
         const skill = activeSkill as ActiveSkillSnapshot | undefined;
+
+        if (skill && effectiveStartupMode(skill) === "agent-first" && text) {
+          const key = skill.startupTargetKey || "用户.需求";
+          applyUserTextToSlots(slots, text, key, { initial: true });
+          slots.lastUserInput = text;
+          const next = appendHistory(
+            { ...session, slots, resumeContext: undefined },
+            event,
+          );
+          return {
+            session: touch(running(next)),
+            effects: [{ type: "invoke_main_agent" }],
+          };
+        }
+
         const intakeValues =
           event.payload.intakeValues ??
           readIntakeValues(session.slots);
@@ -419,16 +456,17 @@ export function applyEvent(
 
       if (session.waitingReason?.kind === "worker_questions") {
         slots["用户.worker答复"] = text;
+        if (text) slots["用户.最新输入"] = text;
         if (demandKey && text) {
           mergeSlotText(slots, demandKey, text);
         }
-      } else if (demandKey && session.waitingReason?.kind === "input" && text) {
-        if (!session.slots.startupCompleted) {
-          slots[demandKey] = text;
-          slots.startupCompleted = true;
-        } else {
-          mergeSlotText(slots, demandKey, text);
-        }
+      } else if (session.waitingReason?.kind === "input" && text) {
+        const key = demandKey || "用户.需求";
+        applyUserTextToSlots(slots, text, key, {
+          initial: !session.slots.startupCompleted,
+        });
+      } else if (text) {
+        slots["用户.最新输入"] = text;
       }
       const next = appendHistory(
         {
@@ -465,14 +503,44 @@ export function applyEvent(
 
       switch (decision.action) {
         case "ask_user":
-        case "review_blackboard":
+        case "review_blackboard": {
+          const questions = decision.questions?.length
+            ? decision.questions.map((q) => ({ ...q, required: false }))
+            : undefined;
+          const assessment =
+            decision.action === "ask_user"
+              ? decision.assessment?.trim() || undefined
+              : undefined;
+          const effects: PhaseEffect[] = [];
+          if (assessment) {
+            effects.push({
+              type: "emit_message",
+              message: `[Agent] 内容评价：\n${assessment}`,
+            });
+          }
+          if (questions?.length) {
+            effects.push({
+              type: "emit_message",
+              message: `[Agent] 可选追问（可跳过）：\n${questions.map((q) => `- ${q.prompt}`).join("\n")}`,
+            });
+          }
+          const inputMessage = assessment
+            ? assessment
+            : decision.action === "review_blackboard" || !questions?.length
+              ? decision.reason
+              : undefined;
           return {
             session: waiting(
               { ...next, pendingDecision: undefined },
-              { kind: "input", message: decision.reason },
+              {
+                kind: "input",
+                message: inputMessage,
+                questions,
+              },
             ),
-            effects: [],
+            effects,
           };
+        }
         case "finish":
           return {
             session: touch({
@@ -580,13 +648,12 @@ export function applyEvent(
     }
 
     case "worker_needs_input": {
-      const questions = event.payload.questions
-        .map((q) => q.trim())
-        .filter(Boolean);
-      const normalized =
-        questions.length > 0
-          ? questions
-          : ["请补充当前步骤所需的信息（情境、参数或你的具体设想）。"];
+      let normalized = normalizeQuestions(event.payload.questions);
+      if (normalized.length === 0) {
+        normalized = normalizeQuestions([
+          "请补充当前步骤所需的信息（情境、参数或你的具体设想）。",
+        ]);
+      }
       const ctx: ResumeContext = {
         workerId: event.payload.workerId,
         stepId: event.payload.stepId ?? session.currentStepId,
@@ -608,7 +675,7 @@ export function applyEvent(
         effects: [
           {
             type: "emit_message",
-            message: `[Worker] ${event.payload.workerId} 提问：\n${normalized.map((q) => `- ${q}`).join("\n")}`,
+            message: `[Worker] ${event.payload.workerId} 提问：\n${normalized.map((q) => `- ${q.prompt}`).join("\n")}`,
           },
         ],
       };
@@ -618,15 +685,51 @@ export function applyEvent(
       const result = handleWorkerCompleted(session, event);
       const mode = session.acceptanceMode ?? "user_confirmed";
       if (mode === "user_confirmed" && result.session.pendingArtifactId) {
+        const sidecar = asOptionalSidecarQuestions(event.payload.questions);
+        const effects = [...result.effects];
+        if (sidecar?.length) {
+          effects.push({
+            type: "emit_message",
+            message: `[Worker] 可选追问（可跳过，直接接受目前产物）：\n${sidecar.map((q) => `- ${q.prompt}`).join("\n")}`,
+          });
+        }
         return {
           ...result,
+          effects,
           session: waiting(result.session, {
             kind: "review_artifact",
             artifactId: result.session.pendingArtifactId,
+            questions: sidecar,
           }),
         };
       }
       return result;
+    }
+
+    case "user_resolved_sidecar_questions": {
+      const reason = session.waitingReason;
+      if (reason?.kind !== "review_artifact") {
+        return fail(session, "sidecar questions require review_artifact");
+      }
+      const answersText = event.payload.answersText?.trim();
+      const slots: Record<string, unknown> = { ...session.slots };
+      const effects: PhaseEffect[] = [];
+      if (answersText) {
+        slots["用户.worker答复"] = answersText;
+        slots["用户.最新输入"] = answersText;
+        effects.push({
+          type: "emit_message",
+          message: `[用户] 已补充可选追问（产物仍待验收）`,
+        });
+      }
+      const next = appendHistory({ ...session, slots }, event);
+      return {
+        session: waiting(touch(next), {
+          kind: "review_artifact",
+          artifactId: reason.artifactId,
+        }),
+        effects,
+      };
     }
 
     // ── 产物验收 ──
@@ -634,6 +737,11 @@ export function applyEvent(
       const artifact = findArtifact(session, event.payload.artifactId);
       if (!artifact) {
         return fail(session, `Artifact not found: ${event.payload.artifactId}`);
+      }
+      const slots: Record<string, unknown> = { ...session.slots };
+      // 仅终稿 tag「设计.worker集」表示完整 Worker 集验收；草稿单位验收不得开 play
+      if (artifact.outputTags.some((tag) => tag === "设计.worker集")) {
+        slots.designInstanceReady = true;
       }
       const next = appendHistory(
         updateArtifact(session, artifact.id, { status: "accepted" }),
@@ -643,6 +751,7 @@ export function applyEvent(
         session: touch(
           running({
             ...next,
+            slots,
             pendingArtifactId: undefined,
             pendingDecision: undefined,
           }),
@@ -790,4 +899,63 @@ function formatSkillSelectionPrompt(
 ): string {
   const lines = skills.map((s, i) => `  ${i + 1}. ${s.name} — ${s.description}`);
   return ["请选择创作 skill（输入 name 或编号）：", ...lines].join("\n");
+}
+
+/** agent-first：仅 UI 引导，等用户首句后再 invoke 总管 */
+function enterAwaitFirstInput(
+  session: RuntimeSession,
+  skill: ActiveSkillSnapshot,
+  event: RuntimeEvent,
+): ApplyEventResult {
+  const next = appendHistory(
+    {
+      ...session,
+      flowId: skill.defaultFlowId ?? session.flowId,
+      slots: {
+        ...session.slots,
+        activeSkill: skill,
+      },
+    },
+    event,
+  );
+  return {
+    session: waiting(next, { kind: "input" }),
+    effects: [],
+  };
+}
+
+function enterIntakeWaiting(
+  session: RuntimeSession,
+  skill: ActiveSkillSnapshot,
+  event: RuntimeEvent,
+): ApplyEventResult {
+  const next = appendHistory(
+    {
+      ...session,
+      flowId: skill.defaultFlowId ?? session.flowId,
+      slots: {
+        ...session.slots,
+        activeSkill: skill,
+      },
+    },
+    event,
+  );
+  return {
+    session: waiting(next, {
+      kind: "intake",
+      prompt: skill.startupPrompt,
+    }),
+    effects: [{ type: "emit_message", message: skill.startupPrompt }],
+  };
+}
+
+function applySkillBinding(
+  session: RuntimeSession,
+  skill: ActiveSkillSnapshot,
+  event: RuntimeEvent,
+): ApplyEventResult {
+  if (effectiveStartupMode(skill) === "agent-first") {
+    return enterAwaitFirstInput(session, skill, event);
+  }
+  return enterIntakeWaiting(session, skill, event);
 }

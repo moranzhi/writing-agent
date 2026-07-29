@@ -8,9 +8,15 @@ export type AppSettings = {
   version: 1;
   activeProfileId: string | null;
   activePresetId: string | null;
+  /**
+   * 每个会话保留带全量上下文痕迹的消息条数（最新 N 条）。
+   * 更早的消息仍保留，但去掉 contextTrace 正文。默认 5；0 表示不存痕迹。
+   */
+  contextTraceKeepLatest?: number;
 };
 
 const FILE_NAME = "settings.json";
+const DEFAULT_CONTEXT_TRACE_KEEP = 5;
 
 function settingsPath(): string {
   return path.join(getUserDataDir(), FILE_NAME);
@@ -21,7 +27,14 @@ function defaultSettings(): AppSettings {
     version: 1,
     activeProfileId: null,
     activePresetId: null,
+    contextTraceKeepLatest: DEFAULT_CONTEXT_TRACE_KEEP,
   };
+}
+
+export function normalizeContextTraceKeepLatest(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_CONTEXT_TRACE_KEEP;
+  return Math.min(50, Math.floor(n));
 }
 
 export function loadAppSettings(): AppSettings {
@@ -34,6 +47,9 @@ export function loadAppSettings(): AppSettings {
       version: 1,
       activeProfileId: parsed.activeProfileId ?? null,
       activePresetId: parsed.activePresetId ?? null,
+      contextTraceKeepLatest: normalizeContextTraceKeepLatest(
+        parsed.contextTraceKeepLatest ?? DEFAULT_CONTEXT_TRACE_KEEP,
+      ),
     };
   } catch {
     return defaultSettings();

@@ -11,9 +11,13 @@
       <aside class="panel panel-books" id="panel-books">
         <header class="panel-head">
           <strong>作品</strong>
-          <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
+          <div class="panel-head-actions">
+            <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
+          </div>
         </header>
+        <nav class="path-bar" id="book-path-bar" aria-label="作品路径"></nav>
         <div class="book-list" id="book-list"></div>
+        <div id="book-box-overlay" class="book-box-overlay" hidden aria-hidden="true"></div>
       </aside>
 
       <main class="panel panel-main">
@@ -29,10 +33,12 @@
             </div>
           </div>
           <div class="main-head-right">
+            <a class="link" href="/modules.html">能力</a>
+            <a class="link" href="/stats.html">Token</a>
             <a class="link" href="/settings.html">设置</a>
-            <button type="button" class="btn-sm" id="btn-saves" hidden>存档</button>
+            <button type="button" class="btn-sm" id="btn-save-instance" hidden>保存定稿</button>
+            <button type="button" class="btn-sm" id="btn-save-play" hidden>保存游玩</button>
             <button type="button" class="btn-sm" id="btn-export" disabled>导出</button>
-            <button type="button" class="btn-sm btn-danger" id="btn-delete" hidden>删除</button>
             <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
           </div>
         </header>
@@ -43,10 +49,7 @@
             <div id="message-feed" class="message-feed">
               <p class="empty">点击左侧 + 新建作品</p>
             </div>
-            <div id="skill-guide" class="skill-guide" hidden>
-              <header class="skill-guide-head">计划中的 skill（占位）</header>
-              <div id="skill-guide-list"></div>
-            </div>
+            <div id="questions-card-host" class="questions-card-host" hidden></div>
           </section>
 
           <aside class="panel-agent" id="panel-agent">
@@ -56,7 +59,25 @@
             </header>
             <div id="agent-focus" class="agent-focus"></div>
             <div id="tool-trace" class="tool-trace" hidden></div>
-            <div id="agent-timeline" class="agent-timeline"></div>
+            <nav class="agent-tabs" id="agent-tabs" role="tablist">
+              <button type="button" class="agent-tab active" data-tab="timeline" role="tab">历史</button>
+              <button type="button" class="agent-tab" data-tab="review" role="tab" id="agent-tab-btn-review" hidden>验收</button>
+              <button type="button" class="agent-tab" data-tab="progress" role="tab" id="agent-tab-btn-progress" hidden>设计</button>
+              <button type="button" class="agent-tab" data-tab="board" role="tab" id="agent-tab-btn-board">上下文</button>
+            </nav>
+            <div class="agent-tab-panel active" id="agent-panel-timeline" role="tabpanel">
+              <div id="agent-timeline" class="agent-timeline"></div>
+            </div>
+            <div class="agent-tab-panel" id="agent-panel-review" role="tabpanel" hidden>
+              <div id="review-artifact-panel" class="review-artifact-panel"></div>
+            </div>
+            <div class="agent-tab-panel" id="agent-panel-progress" role="tabpanel" hidden>
+              <div id="worker-set-user-panel" class="worker-set-user-panel"></div>
+              <div id="skill-guide-list" class="skill-guide-list"></div>
+            </div>
+            <div class="agent-tab-panel" id="agent-panel-board" role="tabpanel" hidden>
+              <div id="board-panel" class="board-panel"></div>
+            </div>
           </aside>
         </div>
 
@@ -67,7 +88,14 @@
     <dialog id="dialog-new-book" class="dialog">
       <form method="dialog" id="form-new-book">
         <h2>新建作品</h2>
-        <p class="dialog-desc">只需起名。打开后由 Agent 引导你选择 skill 包并开始实例化。</p>
+        <p class="dialog-desc">选择导演，再起名。导演是本局方法起点，之后按对话谈成剧本（可调味）。</p>
+        <label class="field">
+          导演
+          <select id="select-director" required>
+            <option value="">加载中…</option>
+          </select>
+        </label>
+        <p class="dialog-desc" id="director-desc" hidden></p>
         <label class="field">
           名称
           <input id="input-book-title" type="text" placeholder="未命名作品" maxlength="80" autofocus />
@@ -79,19 +107,31 @@
       </form>
     </dialog>
 
-    <dialog id="dialog-saves" class="dialog dialog-wide">
-      <header class="dialog-head-row">
-        <h2>存档</h2>
-        <button type="button" class="btn-sm" id="btn-close-saves">关闭</button>
-      </header>
-      <p class="dialog-desc">实例 = 设计完成后的设定；进度 = 含运行状态的完整快照。</p>
-      <div class="saves-new">
-        <input id="input-save-label" type="text" placeholder="存档名称" maxlength="60" />
-        <label><input type="radio" name="save-kind" value="instance" /> 实例</label>
-        <label><input type="radio" name="save-kind" value="run" checked /> 进度</label>
-        <button type="button" class="btn btn-primary" id="btn-save-create">保存</button>
-      </div>
-      <div id="saves-list" class="saves-list"></div>
+    <menu id="book-action-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" id="book-menu-open" data-action="open">打开</button>
+      <button type="button" class="context-menu-item" id="book-menu-rename" data-action="rename">重命名</button>
+      <button type="button" class="context-menu-item" id="book-menu-duplicate" data-action="duplicate">复制备份</button>
+      <button type="button" class="context-menu-item" id="book-menu-select" data-action="select-mode">多选</button>
+      <button type="button" class="context-menu-item context-menu-danger" id="book-menu-delete" data-action="delete">删除</button>
+    </menu>
+
+    <menu id="msg-action-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" id="msg-menu-context" data-msg-menu-action="view-context" hidden>查看上下文</button>
+      <button type="button" class="context-menu-item" id="msg-menu-edit" data-msg-menu-action="edit">编辑</button>
+      <button type="button" class="context-menu-item" id="msg-menu-copy" data-msg-menu-action="copy">复制</button>
+      <button type="button" class="context-menu-item context-menu-danger" id="msg-menu-delete" data-msg-menu-action="delete">删除</button>
+    </menu>
+
+    <dialog id="dialog-context-trace" class="dialog dialog-wide">
+      <form method="dialog" class="context-trace-form">
+        <h2>请求上下文</h2>
+        <p class="dialog-desc" id="context-trace-meta"></p>
+        <pre id="context-trace-body" class="context-trace-body"></pre>
+        <div class="dialog-actions">
+          <button type="button" class="btn" id="btn-copy-context">复制全文</button>
+          <button type="submit" class="btn btn-primary" value="close">关闭</button>
+        </div>
+      </form>
     </dialog>
 
     <script type="module" src="/app.js"></script>

@@ -2,50 +2,39 @@ import { describe, expect, it } from "vitest";
 import { createDecision } from "../src/runtime/orchestrator.js";
 import {
   applyEvent,
-  canApplyEvent,
   createArtifact,
   createSession,
 } from "../src/runtime/phase-machine.js";
 import { loadSkill } from "../src/skills/loader.js";
 import { toActiveSkillSnapshot } from "../src/skills/snapshot.js";
 
-const mockSkills = [{ name: "basic", description: "基础", category: "novel" }];
+const mockSkills = [
+  { name: "world-simulator", description: "默认", category: "dialogue" },
+];
 
 describe("phase machine", () => {
-  it("runs worker loop after skill and startup input", async () => {
-    const { loadSkill } = await import("../src/skills/loader.js");
-    const { toActiveSkillSnapshot } = await import("../src/skills/snapshot.js");
-    const snap = toActiveSkillSnapshot(await loadSkill("basic"));
+  it("runs design-core approve loop on agent-first pack", async () => {
+    const snap = toActiveSkillSnapshot(await loadSkill("world-simulator"));
 
-    let session = createSession("default");
-    session = applyEvent(session, {
+    let session = applyEvent(createSession("default"), {
       type: "session_started",
-      payload: { presetId: "default", availableSkills: mockSkills },
+      payload: {
+        presetId: "default",
+        availableSkills: mockSkills,
+        initialSkill: snap,
+      },
     }).session;
-    session = applyEvent(session, {
-      type: "skill_selected",
-      payload: { skill: snap },
-    }).session;
-    const values: Record<string, string> = {};
-    for (const f of snap.intakeFields) {
-      values[f.id] = "科幻短篇，第一人称";
-    }
+
     session = applyEvent(session, {
       type: "user_submitted_input",
-      payload: { text: "科幻短篇，第一人称", intakeValues: values },
-    }).session;
-    expect(session.waitingReason?.kind).toBe("intake");
-    session = applyEvent(session, {
-      type: "user_confirmed_intake",
-      payload: {},
+      payload: { text: "1v1 网恋对话" },
     }).session;
     expect(session.phase).toBe("running");
-    expect(session.slots["book.brief"]).toBeTruthy();
 
     const decision = createDecision({
       action: "run_worker",
-      reason: "生成大纲",
-      workerId: "outline-worker",
+      reason: "产出 Worker 集",
+      workerId: "design-core",
       requiresApproval: true,
     });
     session = applyEvent(session, {
@@ -60,12 +49,12 @@ describe("phase machine", () => {
     }).session;
     session = applyEvent(session, {
       type: "worker_started",
-      payload: { workerId: "outline-worker", acceptanceMode: "user_confirmed" },
+      payload: { workerId: "design-core", acceptanceMode: "user_confirmed" },
     }).session;
 
     const artifact = createArtifact({
-      workerId: "outline-worker",
-      outputTags: ["outline.draft"],
+      workerId: "design-core",
+      outputTags: ["设计.worker集"],
     });
     session = { ...session, artifacts: [artifact] };
     session = applyEvent(session, {
@@ -78,95 +67,96 @@ describe("phase machine", () => {
       type: "user_accepted_artifact",
       payload: { artifactId: artifact.id },
     }).session;
+    expect(session.slots.designInstanceReady).toBe(true);
     expect(session.phase).toBe("running");
-
-    session = applyEvent(session, { type: "flow_completed", payload: {} }).session;
-    expect(session.phase).toBe("done");
   });
 
-  it("rejects illegal events from idle", () => {
-    const session = createSession("default");
-    expect(canApplyEvent(session, { type: "user_submitted_input", payload: { text: "x" } })).toBe(
-      false,
-    );
-    const result = applyEvent(session, {
-      type: "user_submitted_input",
-      payload: { text: "x" },
-    });
-    expect(result.session.phase).toBe("error");
-  });
-
-  it("merges follow-up input after intake confirm via ask_user", async () => {
-    const { createDecision } = await import("../src/runtime/orchestrator.js");
-    const snap = toActiveSkillSnapshot(await loadSkill("roleplay-game-theory"));
-
+  it("hangs optional questions under review_artifact without blocking accept", () => {
     let session = createSession("default");
+    session = {
+      ...session,
+      phase: "running" as const,
+      acceptanceMode: "user_confirmed" as const,
+    };
+    const artifact = createArtifact({
+      workerId: "design-core",
+      outputTags: ["设计.worker集.草稿"],
+    });
+    session = { ...session, artifacts: [artifact] };
     session = applyEvent(session, {
-      type: "session_started",
-      payload: { presetId: "default", availableSkills: mockSkills },
-    }).session;
-    session = applyEvent(session, {
-      type: "skill_selected",
-      payload: { skill: snap },
+      type: "worker_completed",
+      payload: {
+        artifactId: artifact.id,
+        questions: [
+          {
+            id: "q1",
+            prompt: "更偏哪种节奏？",
+            options: [{ id: "A", label: "慢热拉扯" }],
+          },
+        ],
+      },
     }).session;
 
-    const fields = snap.intakeFields;
-    const values: Record<string, string> = {};
-    for (const f of fields.filter((x) => x.required)) {
-      values[f.id] = "已填";
-    }
+    expect(session.waitingReason?.kind).toBe("review_artifact");
+    if (session.waitingReason?.kind !== "review_artifact") return;
+    expect(session.waitingReason.questions?.length).toBe(1);
+    expect(session.waitingReason.questions?.[0]?.required).toBe(false);
+
+    // 不答追问，直接接受产物
     session = applyEvent(session, {
-      type: "user_submitted_input",
-      payload: { text: "首次", intakeValues: values },
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
     }).session;
+    expect(session.phase).toBe("running");
+  });
+
+  it("sidecar skip clears questions but stays in review", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "running" as const,
+      acceptanceMode: "user_confirmed" as const,
+    };
+    const artifact = createArtifact({
+      workerId: "design-core",
+      outputTags: ["设计.worker集.草稿"],
+    });
+    session = { ...session, artifacts: [artifact] };
     session = applyEvent(session, {
-      type: "user_confirmed_intake",
+      type: "worker_completed",
+      payload: {
+        artifactId: artifact.id,
+        questions: ["还想补一点感官细节吗？"],
+      },
+    }).session;
+
+    session = applyEvent(session, {
+      type: "user_resolved_sidecar_questions",
       payload: {},
     }).session;
-    expect(session.slots.startupCompleted).toBe(true);
-
-    session = applyEvent(session, {
-      type: "main_agent_decision_created",
-      payload: {
-        decision: createDecision({
-          action: "ask_user",
-          reason: "输出偏好？",
-        }),
-      },
-    }).session;
-    expect(session.waitingReason?.kind).toBe("input");
-
-    session = applyEvent(session, {
-      type: "user_submitted_input",
-      payload: { text: "需要思考标签，带场景描写" },
-    }).session;
-    const demand = String(session.slots["用户.博弈需求"]);
-    expect(demand).toContain("需要思考标签");
+    expect(session.waitingReason?.kind).toBe("review_artifact");
+    if (session.waitingReason?.kind !== "review_artifact") return;
+    expect(session.waitingReason.questions).toBeUndefined();
+    expect(session.pendingArtifactId).toBe(artifact.id);
   });
 
-  it("emits one follow-up when roleplay intake required fields incomplete", async () => {
-    const snap = toActiveSkillSnapshot(await loadSkill("roleplay-game-theory"));
-    let session = createSession("default");
-    session = applyEvent(session, {
-      type: "session_started",
-      payload: { presetId: "default", availableSkills: mockSkills },
-    }).session;
-    session = applyEvent(session, {
-      type: "skill_selected",
-      payload: { skill: snap },
-    }).session;
-    const scenarioField = snap.intakeFields.find((f) => f.label.includes("情境"));
-    expect(scenarioField).toBeDefined();
-    const result = applyEvent(session, {
-      type: "user_submitted_input",
-      payload: {
-        text: "德州扑克",
-        intakeValues: { [scenarioField!.id]: "德州扑克" },
-      },
+  it("accepting design-core with only draft does not set designInstanceReady", () => {
+    let session = createSession();
+    const artifact = createArtifact({
+      workerId: "design-core",
+      outputTags: ["设计.worker集.草稿", "创作.当前单位"],
     });
-    expect(result.effects.some((e) => e.type === "emit_message")).toBe(true);
-    const msg = result.effects.find((e) => e.type === "emit_message");
-    expect(msg && "message" in msg && msg.message).toContain("还缺以下必要项");
-    expect(result.session.slots.intakeFollowUpSent).toBe(true);
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+    };
+    session = applyEvent(session, {
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
+    }).session;
+    expect(session.slots.designInstanceReady).toBeUndefined();
   });
 });

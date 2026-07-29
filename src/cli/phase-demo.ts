@@ -22,10 +22,11 @@ function printHelp(): void {
   console.log(`阶段机 + Skill 演示
 
 启动流程：
-  1. /start → 列出 skills/ 下的 SKILL.md
-  2. 输入 skill name 或编号（如 basic 或 1）
-  3. 按 SKILL.md「启动询问」回答
-  4. /decide worker outline-worker approve → /approve → …
+  1. /start → 自动进入默认 orchestrator（world-simulator）
+  2. 按启动询问描述创作需求
+  3. /decide worker design-intake approve → /approve → …
+
+Legacy：/start-with world-simulator（显式指定包）
 
 命令：
   /start              开始会话

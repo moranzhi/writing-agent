@@ -1,5 +1,8 @@
 # Skill 格式与存储
 
+> **文档层级：Skill 包格式（非系统架构）。**  
+> 系统级模块与调度边界见 [`architecture.md`](./architecture.md)。
+
 ## 1. 定位：两层 Skill
 
 本项目有 **两种 Skill 文档**，不要混在一个文件里：
@@ -355,72 +358,63 @@ skills:
 
 ---
 
-## 5. 会话启动：第一个询问是选 Skill
+## 5. 会话启动：描述需求，而非选包
 
-Skill 选择发生在**任何创作逻辑之前**。
+新建作品 **不再** 让用户输入 skill name 或列表编号。Runtime 自动加载默认 orchestrator（`world-simulator`，见 `src/config/default-orchestrator.ts`），直接进入 intake。
 
 ### 5.1 启动转移
 
 ```text
 idle
-  session_started
-    → waiting_user(skill_selection)
+  session_started { initialSkill }
+    → waiting_user(intake)
 ```
 
-新增 `waitingReason`：
+`session_started` 携带 `initialSkill` 时跳过 `skill_selection`。  
+registry 中其它包仅供 `startWithOrchestrator` / 旧作品读档兼容。
+
+**Legacy（旧会话恢复）：**
+
+```text
+session_started（无 initialSkill）
+  → waiting_user(skill_selection)   # 仅旧快照可能出现
+```
 
 ```ts
-| { kind: "skill_selection"; availableSkills: SkillIndexEntry[] }
+| { kind: "skill_selection"; availableSkills: SkillIndexEntry[] }  // legacy
+| { kind: "intake"; prompt: string }
 ```
 
 ### 5.2 向用户展示
 
+来自 orchestrator `## 启动询问`，例如 world-simulator：
+
 ```text
-请选择创作类型：
+请用你自己的话描述想做什么，例如：
 
-【小说】（Book 形态：卷 / 章）
-  1. novel-standard — 标准长篇：大纲 → 事件 → 正文
-  2. weird-rules-short — 短篇规则怪谈：核心 → 规则 → 成章
-  3. basic — 最小演示
+- 西幻升级、长篇 AI 交互、世界推着走
+- 部分代入：() 是指令，"" 是角色话，【】 是行动
+- 或：仿写/扩写、规则怪谈、快节奏爽文……
 
-【对话】（Book 形态：回合 / 多角色）
-  4. theater-roleplay — 剧场式角色扮演
-
-也可直接描述你想写什么，我会帮你匹配 skill name。
+Agent 会根据你的描述推理需要哪些 Worker，并产出 Worker 集。
 ```
 
 ### 5.3 用户回答方式
 
 ```text
-输入编号或 name：novel-standard
-输入自然语言：我想写一个剧场扮演
-输入自定义：用 novel-standard，但是偏悬疑
+直接描述创作目标（一句话即可）
 ```
 
-Runtime 解析为 `skill_selected` 事件：
+Runtime 写入 `用户.需求`（或 skill 指定的 startupTargetKey），确认后进入 design stage。
 
-```ts
-{ type: "skill_selected"; payload: { skillId: string; userHint?: string } }
-```
-
-然后：
+### 5.4 两阶段启动（现行）
 
 ```text
-加载 skills/{skillId}/SKILL.md
-解析 ## 启动询问 → session.slots.activeSkill
-  → waiting_user(input)
-     message 来自 SKILL.md「启动询问·向用户展示」
-     必收集项 / 写入目标 同样来自该节
+阶段 1（系统）  自动绑定默认 orchestrator
+阶段 2（intake） 启动询问 → 用户描述需求 → confirm → agent burst
 ```
 
-### 5.4 两阶段启动
-
-```text
-询问 1（系统）  skill_selection   「用哪个 skill？」→ registry / description
-询问 2（skill）  input             「启动询问」章节   → 每类内容问的不同
-```
-
-**只有询问 1 是系统固定的。询问 2 及之后所有创作逻辑，都在 SKILL.md 里。**
+**Agent 根据需求推理 worker 集**（`design-intake`），不再让用户在 registry 里四选一。
 
 ---
 
@@ -495,10 +489,10 @@ Creation Playbook（概念）
 ## 11. 第一版范围
 
 ```text
-skills/ 目录 + 2 个示例 SKILL.md（novel、theater）
-启动 → skill_selection → 用户选择 → 加载 skill
+skills/ 目录 + 示例 orchestrator 包
+启动 → 自动绑定默认 orchestrator → intake（描述需求）
 总管 prompt 注入 skill 摘要
-registry.yaml 可选
+registry.yaml 可选（legacy 包 / 读档兼容）
 ```
 
 不做：

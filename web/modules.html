@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>能力池 · Writing Agent</title>
+    <link rel="stylesheet" href="/settings.css" />
+    <link rel="stylesheet" href="/modules.css" />
+  </head>
+  <body class="settings-page modules-page">
+    <header class="st-top">
+      <a class="st-brand" href="/">Writing Agent</a>
+      <nav class="st-nav" aria-label="主导航">
+        <a href="/">对话</a>
+        <a href="/modules.html" aria-current="page">能力</a>
+        <a href="/stats.html">Token</a>
+        <a href="/settings.html">设置</a>
+      </nav>
+    </header>
+
+    <div class="st-shell mod-shell">
+      <aside class="st-rail mod-rail" aria-label="能力列表">
+        <p class="st-rail-label">备选能力</p>
+        <p class="mod-pack" id="pack-label">加载中…</p>
+        <div class="mod-filter">
+          <input
+            type="search"
+            id="mod-search"
+            placeholder="搜索名称 / 声明…"
+            autocomplete="off"
+          />
+        </div>
+        <div class="mod-status-filters" id="status-filters" role="group" aria-label="按状态筛选">
+          <button type="button" class="mod-chip active" data-status="">全部</button>
+          <button type="button" class="mod-chip" data-status="ready">已写</button>
+          <button type="button" class="mod-chip" data-status="partial">部分</button>
+          <button type="button" class="mod-chip" data-status="skeleton">骨架</button>
+        </div>
+        <nav class="mod-list" id="mod-list"></nav>
+        <p class="st-rail-note">
+          导演编排剧本时从这里选型；本页只读浏览方法正文。
+        </p>
+      </aside>
+
+      <main class="st-main mod-main">
+        <header class="st-main-head">
+          <div>
+            <h1 id="panel-title">能力池</h1>
+            <p class="st-sub" id="panel-subtitle">选择左侧一项查看方法块</p>
+          </div>
+          <div class="st-main-actions">
+            <span class="mod-badge" id="status-badge" hidden></span>
+          </div>
+        </header>
+
+        <div class="st-status" id="meta-bar" hidden></div>
+        <p class="mod-error" id="mod-error" hidden></p>
+
+        <div class="st-body mod-body" id="mod-detail">
+          <p class="mod-empty">从左侧选择一项能力</p>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/modules.js"></script>
+  </body>
+</html>

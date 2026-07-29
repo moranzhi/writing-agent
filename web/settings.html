@@ -4,80 +4,85 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>设置 · Writing Agent</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/settings.css" />
   </head>
-  <body>
-    <div class="app-shell">
-      <header class="site-header">
-        <div class="header-left">
-          <a href="/" class="brand" aria-label="Writing Agent 首页">
-            <span class="brand-logo" aria-hidden="true"></span>
-            <span class="brand-name">Writing Agent</span>
-          </a>
-          <nav class="header-nav" aria-label="主导航">
-            <a class="header-nav-link" href="/">对话</a>
-            <a class="header-nav-link active" href="/settings.html" aria-current="page">设置</a>
-          </nav>
+  <body class="settings-page">
+    <header class="st-top">
+      <a class="st-brand" href="/">Writing Agent</a>
+      <nav class="st-nav" aria-label="主导航">
+        <a href="/">对话</a>
+        <a href="/modules.html">能力</a>
+        <a href="/stats.html">Token</a>
+        <a href="/settings.html" aria-current="page">设置</a>
+      </nav>
+    </header>
+
+    <div class="st-shell">
+      <aside class="st-rail" aria-label="设置分类">
+        <p class="st-rail-label">设置</p>
+        <button type="button" class="st-rail-item active" data-section="api">API</button>
+        <button type="button" class="st-rail-item" data-section="preset">预设</button>
+        <button type="button" class="st-rail-item" data-section="storage">上下文</button>
+        <p class="st-rail-note">保存在本机 <code>~/.writing-agent/</code>，明文、不同步。</p>
+      </aside>
+
+      <main class="st-main">
+        <header class="st-main-head">
+          <div>
+            <h1 id="panel-title">API</h1>
+            <p class="st-sub" id="panel-subtitle">管理 LLM 连接</p>
+          </div>
+          <div class="st-main-actions" id="panel-actions"></div>
+        </header>
+
+        <div class="st-status" id="active-settings-bar"></div>
+        <div class="settings-toast" id="settings-toast" hidden></div>
+
+        <div class="st-body">
+          <section class="settings-section" id="section-api">
+            <div id="profiles-list" class="card-list"></div>
+          </section>
+
+          <section class="settings-section hidden" id="section-preset">
+            <div id="presets-list" class="card-list"></div>
+            <pre id="import-report" class="import-report" hidden></pre>
+          </section>
+
+          <section class="settings-section hidden" id="section-storage">
+            <div class="settings-card storage-card">
+              <h3>LLM 请求上下文</h3>
+              <p class="settings-help">
+                每次模型调用可保存完整 prompt。默认每个对话只保留最新若干条；更早消息仍在，但去掉上下文痕迹。可在对话里查看上下文。
+              </p>
+              <label class="field">
+                每个对话保留最新条数
+                <input
+                  type="number"
+                  id="context-trace-keep"
+                  min="0"
+                  max="50"
+                  step="1"
+                  value="5"
+                />
+              </label>
+              <p class="settings-help muted">0 = 不保存；最大 50。保存后对新回复立即生效。</p>
+              <div class="storage-actions">
+                <button type="button" class="btn-primary" id="btn-save-context-keep">保存</button>
+                <button type="button" class="btn-secondary" id="btn-prune-context">修剪已打开会话</button>
+                <button type="button" class="btn-secondary danger-outline" id="btn-clear-context">清除全部痕迹</button>
+              </div>
+            </div>
+          </section>
         </div>
-      </header>
-
-      <div class="app-body">
-        <aside class="sidebar settings-sidebar">
-          <div class="sidebar-head">
-            <h2>设置</h2>
-          </div>
-          <button type="button" class="sidebar-nav-item active" data-section="api">
-            <span class="sidebar-nav-icon">⚡</span> API 配置
-          </button>
-          <button type="button" class="sidebar-nav-item" data-section="preset">
-            <span class="sidebar-nav-icon">📋</span> 预设 Preset
-          </button>
-          <p class="sidebar-note">
-            保存在本地 <code>~/.writing-agent/</code><br />明文存储，不同步
-          </p>
-        </aside>
-
-        <main class="settings-panel">
-          <header class="panel-header">
-            <div>
-              <h1 id="panel-title">API 配置</h1>
-              <span class="panel-subtitle" id="panel-subtitle">管理 LLM 连接</span>
-            </div>
-            <div class="panel-header-actions" id="panel-actions"></div>
-          </header>
-
-          <div class="active-settings-bar" id="active-settings-bar"></div>
-          <div class="settings-toast" id="settings-toast" hidden></div>
-
-          <div class="panel-body">
-            <div class="settings-content">
-              <section class="settings-section" id="section-api">
-                <div id="profiles-list" class="card-list"></div>
-              </section>
-
-              <section class="settings-section hidden" id="section-preset">
-                <div id="presets-list" class="card-list"></div>
-                <pre id="import-report" class="import-report" hidden></pre>
-              </section>
-            </div>
-          </div>
-        </main>
-      </div>
+      </main>
     </div>
 
     <dialog id="profile-dialog" class="profile-dialog">
       <form id="profile-form" method="dialog">
-        <h3 id="profile-dialog-title">新增 API 配置</h3>
+        <h3 id="profile-dialog-title">新增 API</h3>
         <label>
           名称
-          <input name="name" required placeholder="例如：DeepSeek" />
+          <input name="name" required placeholder="例如 DeepSeek" autocomplete="off" />
         </label>
         <label>
           Base URL
@@ -85,11 +90,11 @@
         </label>
         <label>
           API Key
-          <input name="apiKey" type="password" placeholder="sk-..." />
+          <input name="apiKey" type="password" placeholder="sk-…" autocomplete="off" />
         </label>
         <label>
           Model
-          <input name="model" required placeholder="deepseek-v4-pro" />
+          <input name="model" required placeholder="deepseek-chat" />
         </label>
         <div class="dialog-actions">
           <button type="button" id="profile-cancel" class="btn-secondary">取消</button>

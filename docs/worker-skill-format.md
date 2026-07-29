@@ -1,279 +1,106 @@
 # Worker Skill 格式
 
-## 1. 定位
+> **文档层级：Worker / 声明契约格式（非系统架构）。**  
+> 上下文编译原则见 [`architecture.md`](./architecture.md)、[`context-assembly.md`](./context-assembly.md)。
 
-**Worker Skill** 服务 **Worker Agent**：规定 **读哪些 tag、写哪些 tag、怎么做** 本阶段产出。
+## 1. 定位（现行：声明驱动）
 
-Worker **从属于某一个总管 Skill 包**，不与其它 skill 共享。
+**默认包 `world-simulator`：**
 
 ```text
-总管：run_worker(write-rules)
-  → Runtime 读 workers/write-rules/SKILL.md 的 inputTags / outputTags
-  → 从黑板取匹配条目 → Worker 执行 → 写回 outputTags
+play 时执行契约 = accept 后的 设计.worker集 某条 workers[]（实例 Worker 声明）
+可选模板       = worker-templates/{ref}.yaml（design-intake 合并默认值）
+磁盘 SKILL.md  = 仅创建阶段必要 worker（现：design-intake）
 ```
 
-规格背景见 `docs/tag-blackboard.md`、`docs/context-assembly.md`。
+总管 `run_worker(id)` → Runtime 校验 id ∈ Worker 声明 → 从 **Worker 集条目**（+ 可选模板合并）拼 prompt → 写声明的 `outputs`。
+
+**不要**为每个 play ref 预置 `workers/narrator/SKILL.md`；实例差异写在 Worker 集里。
+
+规格见 `docs/tag-blackboard.md`、`docs/context-assembly.md`、`skills/dialogue/world-simulator/worker-templates/`。
 
 ---
 
-## 2. 存储位置
+## 2. 创作阶段 Worker（磁盘 SKILL.md）
+
+仅包内 **design 专用** worker 用磁盘文件：
 
 ```text
-skills/novel/weird-rules-short/
+skills/dialogue/world-simulator/
 ├── orchestrator.md
+├── worker-templates/          # 可选模板，非执行文件
 └── workers/
-    ├── write-rules/SKILL.md
-    └── review-infer/SKILL.md
+    └── design-intake/SKILL.md
 ```
 
-- 目录名 = 包内 **worker id**。
-- 文件统一 **`SKILL.md`**。
-- **没有** 全局共享 worker 目录。
+- 目录名 = worker id。
+- 文件名固定 **`SKILL.md`**。
 
 ---
 
-## 3. Frontmatter
+## 3. Design Worker Frontmatter（示例）
 
 ```yaml
 ---
-id: write-rules
-skill: weird-rules-short
-name: 规则与解析创作
-description: >-
-  从 需求.核心要点 推演内部核心，产出规则与说明。
-version: 1
+id: design-intake
+skill: world-simulator
+name: 实例设计 · Worker 集
+stage: design
 inputTags:
-  - "需求.核心要点"
-  - "验收.读者视角.记录"
-  - "验收.作者视角.记录"
-  - "用户.修改说明"
+  - "用户.需求"
 outputTags:
-  - "核心.危险.隐藏"
-  - "规则.草稿"
-  - "规则.说明.草稿"
+  - "设计.worker集"
+  - "设计.worker集.草稿"
 inputMerge: latest
 ---
 ```
 
 | 字段 | 用途 |
 |------|------|
-| `id` | 包内 skill id，与 manifest 注册表一致 |
-| `skill` | 所属 orchestrator 包 name |
-| `inputTags` | Runtime 从黑板取数的 tag（精确或 `前缀.*`） |
-| `outputTags` | 允许写回的 tag；Runtime 校验 |
-| `inputMerge` | 可选，`latest`（默认）或 `concat` |
-| `contextSegments` | 可选，上下文拼接：上半 static、下半 dynamic（见 §3.1） |
-| `contextIsolation` | 可选：`none` \| `role_pov` \| `blind_review` |
+| `id` | worker id |
+| `skill` | 所属包 name |
+| `inputTags` / `outputTags` | 黑板读写白名单 |
+| `contextSegments` | 可选；上下拼接 |
 
-### 3.1 contextSegments（上下文拼接）
+### 3.1 contextSegments
 
-见 `docs/context-assembly.md`。示例：
-
-```yaml
-contextSegments:
-  - id: brief
-    tier: static
-    tags: ["book.brief"]
-    label: "## 创作需求"
-  - id: history
-    tier: dynamic
-    tags: ["运行.事件流"]
-    policy: tail_lines_80
-  - id: turn
-    tier: dynamic
-    tags: ["可见信息", "用户.最新输入"]
-    label: "## 本轮"
-```
-
-未声明时 Runtime 回退为 JSON `inputs`（当前实现）。
-
-**review-infer 示例**（不得读隐藏核心）：
-
-```yaml
-inputTags:
-  - "需求.核心要点"
-  - "规则.草稿"
-  - "规则.说明.草稿"
-outputTags:
-  - "验收.读者视角.记录"
-```
-
-**review-author 示例**（可读隐藏核心）：
-
-```yaml
-inputTags:
-  - "需求.核心要点"
-  - "核心.危险.隐藏"
-  - "规则.草稿"
-  - "规则.说明.草稿"
-outputTags:
-  - "验收.作者视角.记录"
-```
+见 `docs/context-assembly.md`。
 
 ---
 
-## 4. 正文章节
+## 4. 实例声明字段（写入 `设计.worker集`）
 
-```markdown
-# 标题
-
-## 角色与口吻
-## 能力范围            # 能做什么 / 不能做什么
-## 思维链与自检
-## 上下文用法          # 各 inputTag 如何使用（不重复 frontmatter 列表）
-## 输出格式            # 各 outputTag 的 content 格式
-## 示例                # 可选
-```
-
-正文中用 **tag 名** 指代上下文，例如「读 `需求.核心要点`」而非旧 key `book.brief`。
-
-### 评估类 Worker
-
-总管 orchestrator 只写：`rules 确认后 → run review-infer`。
-
-本 SKILL 写 **评估怎么做**、verdict 写入 `验收.*.记录` 的 JSON 形状等。
-
-### 用户回合 worker（user-turn）
-
-**用途：** 该环节 **完全由用户输入** 组成，LLM 不替用户选行动（21 点玩家、线下人类一方等）。
-
-**与 role-decide 的区别：**
-
-| | role-decide | user-turn |
-|--|-------------|-----------|
-| 决策 | LLM 产出 `.思考` + `.行动` | 用户经 ask_user 提供；worker **只**写 `.行动` |
-| LLM | 需要 | 仅需展示/校验/格式化（可无生成模型） |
-
-**frontmatter 示例：**
+design-intake 产出的每条 worker：
 
 ```yaml
-id: user-turn
-skill: blackjack-roleplay
-name: 用户回合
-description: 展示局面，收集用户合法行动，写入角色.用户.行动
-inputTags:
-  - "角色.用户.可见信息"
-  - "场景.公开叙述"
-outputTags:
-  - "角色.用户.行动"
-```
-
-**SKILL 正文要点：**
-
-```markdown
-## 角色
-你是 **用户操作的采集器**，不是玩家 AI。禁止替用户选择行动。
-
-## 执行
-1. 读可见信息与合法行动集
-2. ask_user：简短展示局面 + 列出可选行动
-3. 校验用户输入是否在合法集内；不合法则再问
-4. 写 `角色.用户.行动`（行动选择 + 可选说话）
-
-## 禁止
-- 调用 LLM 模拟用户策略
-- 写入 `.思考`（用户无内心 tag，或仅 UI 留空）
-```
-
-编排：总管在轮到用户时 `run_worker(user-turn)`；world-engine 与 role-decide **同一套** 读 `.行动` 规则。
-
----
-
-## 5. 运行时输出协议
-
-Worker LLM 返回 JSON（Phase A）；Phase B 改为 tool call。语义不变：
-
-```json
-{
-  "outputs": {
-    "规则.草稿": "...",
-    "规则.说明.草稿": "..."
-  },
-  "summary": "50字以内摘要",
-  "askUser": null
-}
-```
-
-- `outputs` 的 key 必须是 **outputTags 中的 tag**（或与 tag 一一映射的别名，由 Runtime 归一化）。
-- 缺信息时 `askUser` 提问，不臆造。
-
-Runtime 写黑板：
-
-```ts
-{
-  id: "...",
-  tag: "规则.草稿",
-  content: "...",
-  source: "write-rules",
-}
-```
-
----
-
-## 6. ask_user
-
-任何 worker 可中途提问。Runtime 暂停并保存 `resumeContext`（workerId 等）；恢复时 **重新** 从 SKILL 读 inputTags，不依赖总管。
-
----
-
-## 7. 命名原则
-
-Worker id 按 **本包流程职责** 命名，包内唯一：
-
-| 包 | worker id | 职责 |
-|----|-----------|------|
-| weird-rules-short | write-rules | 写规则 |
-| weird-rules-short | review-infer | 读者视角验收 |
-| novel-standard | outline | 大纲 |
-
-不要设计全局共享 worker id。
-
----
-
-## 8. 与代码的关系
-
-| 文档 | 代码 |
-|------|------|
-| frontmatter inputTags / outputTags | `src/skills/loader.ts` → `ParsedWorkerSkill` |
-| 运行时取数 | `src/worker/executor.ts` |
-| 角色 worker 独立 LLM | `llmProfileId` / `llm-bindings.yaml` | `src/skills/worker-llm.ts` |
-
-当前代码仍为旧 `inputKeys` / `outputKeys` 模型；迁移以 `tag-blackboard.md` 为准。
-
----
-
-## 9. Worker 独立 LLM（可选，预留多 AI 博弈）
-
-默认：worker 与会话 **同一 ApiProfile**（设置页当前选中的 profile）。
-
-### 9.1 Worker SKILL frontmatter
-
-```yaml
-llmProfileId: "<profiles.json 中的 ApiProfile.id>"
-```
-
-省略 = 走 skill 包 `llm-bindings.yaml` 或会话默认。
-
-### 9.2 Skill 包 llm-bindings.yaml
-
-```yaml
-defaultProfileId: null   # null = 会话默认
-
 workers:
-  world-engine: {}
-  role-decide:
-    byRole:
-      A: "<profile-id-1>"
-      B: "<profile-id-2>"
+  - ref: narrator          # 能力库 id；null = gap
+    role: transcription
+    duty: …
+    when: …
+    rationale: …
+    context:
+      static: [设计.worker集]
+      dynamic: [运行.本轮.裁决]
+    outputs: [输出.用户展示]
+    presentation:
+      tone: …
 ```
 
-Runtime 解析顺序见 `src/skills/worker-llm.ts`。  
-`role-decide` 按 `slots.世界.当前角色.id` 匹配 `byRole`。
-
-### 9.3 设计意图
-
-- 配置仍在 **profiles.json**（或 .env），不在 SKILL 里写密钥
-- 同一 skill 可让不同角色用不同模型/API，实现真实多 agent 博弈
-- 总管 LLM 不受 worker 绑定影响（始终会话默认）
+未写全的 `context`/`outputs` 可由 `worker-templates/{ref}.yaml` 合并。
 
 ---
+
+## 5. 执行要点
+
+- Agent **不**指定 inputTags；读 Worker 声明 / 模板。
+- `ref: null` + `gap`：声明了职责但无模板 / SKILL，需补声明或 temp worker。
+- 验收：`design-intake` 默认 `user_confirmed`；play 中间 worker 可 `no_confirmation`。
+
+## 相关
+
+| 文档 | 关系 |
+|------|------|
+| `creation-playbook.md` | 创作流 |
+| `worker-declaration.ts` | Runtime 声明校验 |
+| `worker-templates/README.md` | 可选模板 |

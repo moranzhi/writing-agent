@@ -41,7 +41,17 @@ export type ListArtifactsParams = Record<string, never>;
 
 export type AskUserParams = {
   reason: string;
+  /** 给用户看的内容完备度评价（Markdown）；优先于 message */
+  assessment?: string;
+  /** @deprecated 兼容旧调用，等同 assessment */
   message?: string;
+  questions?: Array<{
+    id?: string;
+    prompt: string;
+    options?: Array<{ id?: string; label: string; editable?: boolean } | string>;
+    allowOther?: boolean;
+    required?: boolean;
+  }>;
 };
 
 export type RunWorkerParams = {

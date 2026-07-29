@@ -1,0 +1,22 @@
+id: outline
+label: 大纲 / 细纲
+role: planning
+duty: >
+  根据用户意图与已定设定，产出或更新可执行大纲（卷/章/节或情节点）；
+  写进约定 tag，供 chapter-writer 与展示层引用。不直接写长章正文。
+when: 写手/分段模式下尚无可用大纲，或用户要求改大纲
+suggested_context:
+  static:
+    - 设计.worker集
+    - 用户.需求
+  dynamic:
+    - 大纲.当前
+    - 用户.最新输入
+suggested_outputs:
+  - 大纲.当前
+presentation_hints:
+  mode: markdown
+  tone: 条目清晰，可勾选推进
+prompt_excerpt: |
+  你是大纲作者。按用户爽点与篇幅产出可执行大纲（章标题 + 一句话节拍即可）。
+  不要写成长篇正文；修改时保留用户已锁定的章，只改其点名部分。

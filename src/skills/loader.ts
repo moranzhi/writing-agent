@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import type { BookKind } from "../types/runtime.js";
+import type { BookKind, SkillStartupMode } from "../types/runtime.js";
 import type {
   ParsedSkill,
   ParsedWorkerSkill,
@@ -10,13 +10,17 @@ import type {
   SkillWorkerLlmBindings,
   StartupInquiry,
 } from "./types.js";
+import { parseContextSegments } from "./context-segments.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SKILLS_ROOT = path.resolve(__dirname, "../../skills");
 
 export const ORCHESTRATOR_FILENAME = "orchestrator.md";
 export const WORKER_SKILL_FILENAME = "SKILL.md";
+/** 部分环境写 SKILL.md 会损坏非 ASCII；允许同目录 body.md 作为回退 */
+export const WORKER_SKILL_FALLBACK_FILENAME = "body.md";
 export const DEFAULT_SHARED_CONTEXT_FILENAME = "shared-context.md";
+export const DESIGN_COMMON_FILENAME = "design-common.md";
 export const LLM_BINDINGS_FILENAME = "llm-bindings.yaml";
 
 /** 按 Book 形态分文件夹；skill 可为平铺 .md 或 {name}/orchestrator.md 包 */
@@ -28,11 +32,10 @@ type RegistryDoc = {
   >;
 };
 
-/** 解析 YAML frontmatter（仅支持本项目用到的简单字段） */
-function parseFrontmatter(raw: string): {
-  meta: Record<string, string | string[] | number>;
-  body: string;
-} {
+type FrontmatterMeta = Record<string, unknown>;
+
+/** 解析 YAML frontmatter（使用 yaml 包，支持折叠标量与列表） */
+function parseFrontmatter(raw: string): { meta: FrontmatterMeta; body: string } {
   if (!raw.startsWith("---")) {
     return { meta: {}, body: raw };
   }
@@ -40,44 +43,17 @@ function parseFrontmatter(raw: string): {
   if (end === -1) {
     return { meta: {}, body: raw };
   }
-  const yaml = raw.slice(3, end).trim();
+  const yamlText = raw.slice(3, end).trim();
   const body = raw.slice(end + 4).trim();
-  const meta: Record<string, string | string[] | number> = {};
-
-  let currentKey = "";
-  let listItems: string[] = [];
-  let inList = false;
-
-  const flushList = () => {
-    if (inList && currentKey) {
-      meta[currentKey] = listItems;
-      listItems = [];
-      inList = false;
+  let meta: FrontmatterMeta = {};
+  try {
+    const parsed = parseYaml(yamlText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      meta = parsed as FrontmatterMeta;
     }
-  };
-
-  for (const line of yaml.split("\n")) {
-    const listMatch = line.match(/^\s+-\s+(.+)$/);
-    if (listMatch && inList) {
-      listItems.push(listMatch[1].trim());
-      continue;
-    }
-    flushList();
-    const kv = line.match(/^([\w-]+):\s*(.*)$/);
-    if (!kv) continue;
-    const [, key, value] = kv;
-    currentKey = key;
-    if (value === "" || value === ">-" || value === "|") {
-      inList = true;
-      listItems = [];
-    } else if (value === ">-" || value.startsWith(">")) {
-      meta[key] = value;
-    } else {
-      meta[key] = value.trim();
-      inList = false;
-    }
+  } catch {
+    meta = {};
   }
-  flushList();
   return { meta, body };
 }
 
@@ -119,14 +95,17 @@ function parseStartupInquiry(section: string): StartupInquiry {
   return { prompt, targetKey, requiredFields: required, optionalFields: optional };
 }
 
-function metaString(meta: Record<string, string | string[] | number>, key: string): string {
+function metaString(meta: FrontmatterMeta, key: string): string {
   const v = meta[key];
-  return typeof v === "string" ? v : "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  return "";
 }
 
-function metaStringArray(meta: Record<string, string | string[] | number>, key: string): string[] {
+function metaStringArray(meta: FrontmatterMeta, key: string): string[] {
   const v = meta[key];
-  return Array.isArray(v) ? v : [];
+  if (!Array.isArray(v)) return [];
+  return v.map((item) => String(item));
 }
 
 function parseBookKind(value: string): BookKind | undefined {
@@ -147,7 +126,7 @@ function skillPackRootFromPath(relativePath: string): string | undefined {
   return undefined;
 }
 
-function workerIdsFromMeta(meta: Record<string, string | string[] | number>): string[] {
+function workerIdsFromMeta(meta: FrontmatterMeta): string[] {
   const workers = metaStringArray(meta, "workers");
   if (workers.length > 0) return workers;
   return metaStringArray(meta, "suggestedWorkers");
@@ -227,7 +206,10 @@ async function parseSkillFile(
   const fullPath = path.join(skillsRoot, relativePath);
   const raw = await readFile(fullPath, "utf8");
   const { meta, body } = parseFrontmatter(raw);
-  const startupSection = extractSection(body, "启动询问");
+  const startupSection =
+    extractSection(body, "启动询问") ||
+    extractSection(body, "启动（agent-first）") ||
+    extractSection(body, "启动");
   const folderBookKind = bookKindFromRelativePath(relativePath);
   const category = metaString(meta, "category") || folderBookKind || "custom";
   const bookKind =
@@ -248,19 +230,35 @@ async function parseSkillFile(
     bookKind,
     path: normalizedPath,
     skillPackRoot: packRoot,
-    version: typeof meta.version === "number" ? meta.version : Number(meta.version) || 1,
+    version:
+      typeof meta.version === "number"
+        ? meta.version
+        : Number(metaString(meta, "version")) || 1,
     defaultFlowId: metaString(meta, "defaultFlowId") || undefined,
     suggestedWorkers: workerIdsFromMeta(meta),
     tags: metaStringArray(meta, "tags"),
     sharedContextPath: resolveSharedContextPath(meta, packRoot),
     workerLlmBindings,
-    startupInquiry: parseStartupInquiry(startupSection),
+    startupInquiry: {
+      ...parseStartupInquiry(startupSection),
+      targetKey:
+        metaString(meta, "demandTag") ||
+        parseStartupInquiry(startupSection).targetKey,
+    },
+    startupMode: parseStartupMode(metaString(meta, "startupMode")),
+    uiPrompt: metaString(meta, "uiPrompt") || undefined,
     body,
   };
 }
 
+function parseStartupMode(raw: string): SkillStartupMode | undefined {
+  if (raw === "agent-first" || raw === "design-intake") return "agent-first";
+  if (raw === "intake") return "intake";
+  return undefined;
+}
+
 function resolveSharedContextPath(
-  meta: Record<string, string | string[] | number>,
+  meta: FrontmatterMeta,
   packRoot: string | undefined,
 ): string | undefined {
   if (!packRoot) return undefined;
@@ -291,17 +289,22 @@ async function parseWorkerSkillFile(
       ? inputMergeRaw
       : undefined;
   const llmProfileId = metaString(meta, "llmProfileId") || undefined;
+  const contextSegments = parseContextSegments(meta.contextSegments);
 
   return {
     id: metaString(meta, "id") || idFromPath,
     skill: metaString(meta, "skill"),
     name: metaString(meta, "name") || idFromPath,
     description: metaString(meta, "description"),
-    version: typeof meta.version === "number" ? meta.version : Number(meta.version) || 1,
+    version:
+      typeof meta.version === "number"
+        ? meta.version
+        : Number(metaString(meta, "version")) || 1,
     inputTags,
     outputTags,
     inputMerge,
     llmProfileId,
+    contextSegments: contextSegments.length ? contextSegments : undefined,
     path: normalizedPath,
     body,
   };
@@ -394,7 +397,7 @@ export async function loadSkill(
   return parseSkillFile(relativePath, skillsRoot);
 }
 
-/** 解析 skill 包内 worker 的 SKILL.md 相对路径 */
+/** 解析 skill 包内 worker 的 SKILL.md（或 body.md 回退）相对路径 */
 export async function resolveWorkerSkillPath(
   skillIdOrName: string,
   workerId: string,
@@ -404,13 +407,25 @@ export async function resolveWorkerSkillPath(
   if (!skill.skillPackRoot) {
     return null;
   }
-  const relativePath = `${skill.skillPackRoot}/workers/${workerId}/${WORKER_SKILL_FILENAME}`;
-  try {
-    await readFile(path.join(skillsRoot, relativePath), "utf8");
-    return relativePath;
-  } catch {
-    return null;
+  const base = `${skill.skillPackRoot}/workers/${workerId}`;
+  for (const filename of [WORKER_SKILL_FILENAME, WORKER_SKILL_FALLBACK_FILENAME]) {
+    const relativePath = `${base}/${filename}`;
+    try {
+      const raw = await readFile(path.join(skillsRoot, relativePath), "utf8");
+      // 损坏的 SKILL.md（中文变 ?）时跳过，改用 body.md
+      if (
+        filename === WORKER_SKILL_FILENAME &&
+        /\?\?/.test(raw) &&
+        !/[\u4e00-\u9fff]/.test(raw)
+      ) {
+        continue;
+      }
+      return relativePath;
+    } catch {
+      /* try next */
+    }
   }
+  return null;
 }
 
 /** 加载 skill 包固定上下文（注入所有 worker prompt 开头） */
@@ -428,18 +443,146 @@ export async function loadSkillSharedContext(
   }
 }
 
-/** 加载 worker skill 正文，可选拼接 skill 包固定上下文 */
+/** 创作分步 skill 的共同开头（仅 design-*） */
+export async function loadDesignCommon(
+  skillIdOrName: string,
+  skillsRoot = SKILLS_ROOT,
+): Promise<string | null> {
+  const skill = await loadSkill(skillIdOrName, skillsRoot);
+  if (!skill.skillPackRoot) return null;
+  const fullPath = path.join(
+    skillsRoot,
+    skill.skillPackRoot,
+    DESIGN_COMMON_FILENAME,
+  );
+  try {
+    return await readFile(fullPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** 加载 worker skill 正文；design-flow 注入目录；design-step 注入模块 prompt + 动态 tag */
 export async function loadWorkerSkillWithContext(
   skillIdOrName: string,
   workerId: string,
   skillsRoot = SKILLS_ROOT,
+  opts?: {
+    flowRaw?: string | null;
+    currentStepName?: string | null;
+    acceptedStepNames?: readonly string[];
+    /** 用户手动选定的配方 id / 名 */
+    selectedRecipeRef?: string | null;
+  },
 ): Promise<{ worker: ParsedWorkerSkill; sharedContext: string | null; promptBody: string }> {
   const worker = await loadWorkerSkill(skillIdOrName, workerId, skillsRoot);
   const sharedContext = await loadSkillSharedContext(skillIdOrName, skillsRoot);
-  const promptBody = sharedContext
-    ? `# 固定创作上下文\n\n${sharedContext}\n\n---\n\n${worker.body}`
-    : worker.body;
-  return { worker, sharedContext, promptBody };
+  const skill = await loadSkill(skillIdOrName, skillsRoot);
+
+  let moduleCatalogBlock: string | null = null;
+  let modulePromptBlock: string | null = null;
+  let patchedWorker = worker;
+
+  if (workerId.trim() === "design-flow" && skill.skillPackRoot) {
+    const {
+      loadModuleCatalog,
+      resolveSelectedRecipeDetail,
+      formatDesignFlowContentBlocks,
+    } = await import("./creation-flow.js");
+    const modules = await loadModuleCatalog(skill.skillPackRoot, skillsRoot);
+    const selectedRecipe = await resolveSelectedRecipeDetail({
+      skillPackRoot: skill.skillPackRoot,
+      selectedRecipeRef: opts?.selectedRecipeRef,
+      skillsRoot,
+    });
+    const blocks = formatDesignFlowContentBlocks({
+      selectedRecipe,
+      modules,
+      missingSelection: !selectedRecipe,
+    });
+    if (blocks.length) {
+      moduleCatalogBlock = blocks.join("\n\n");
+    }
+  }
+
+  if (workerId.trim() === "design-step" && skill.skillPackRoot) {
+    const {
+      resolveDesignStepBinding,
+      CREATION_CURRENT_STEP_TAG,
+      CREATION_MODULE_OPENING_TAG,
+    } = await import("./creation-flow.js");
+    const binding = await resolveDesignStepBinding({
+      skillPackRoot: skill.skillPackRoot,
+      flowRaw: opts?.flowRaw,
+      currentStepName: opts?.currentStepName,
+      acceptedStepNames: opts?.acceptedStepNames,
+      skillsRoot,
+    });
+    if (binding) {
+      const openingNote = binding.opening
+        ? `\n\n【程序开场】若黑板有「${CREATION_MODULE_OPENING_TAG}」，该默认问题已由程序发给用户（不经 LLM）；用户首答在「用户.worker答复」。勿重复同一开场白，在其答复与提示词基础上继续追问或产出。`
+        : "";
+      modulePromptBlock = `## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}`;
+      const baseInputs = [
+        "用户.需求",
+        "book.brief",
+        "用户.最新输入",
+        "用户.worker答复",
+        "用户.修订说明",
+        "设计.创作流程",
+        CREATION_CURRENT_STEP_TAG,
+        CREATION_MODULE_OPENING_TAG,
+        ...binding.depTags,
+      ];
+      const inputTags = [...new Set(baseInputs)];
+      const outputTags = [
+        binding.module.artifact,
+        CREATION_CURRENT_STEP_TAG,
+      ];
+      const depSegments = binding.depTags.map((tag, i) => ({
+        id: `dep-${i}`,
+        tier: "static" as const,
+        tags: [tag],
+        label: `## 【依赖产物 · ${tag}】只读`,
+      }));
+      const openingSegment = binding.opening
+        ? [
+            {
+              id: "module-opening",
+              tier: "static" as const,
+              tags: [CREATION_MODULE_OPENING_TAG],
+              label: "## 【本步默认问题 · 程序已发出】只读",
+            },
+          ]
+        : [];
+      patchedWorker = {
+        ...worker,
+        name: `创作 · ${binding.module.name}`,
+        description: binding.module.declaration,
+        inputTags,
+        outputTags,
+        contextSegments: [
+          ...(worker.contextSegments ?? []),
+          ...openingSegment,
+          ...depSegments,
+        ],
+      };
+    }
+  }
+
+  const parts: string[] = [];
+  if (sharedContext?.trim()) {
+    parts.push(`# 固定创作上下文\n\n${sharedContext.trim()}`);
+  }
+  if (moduleCatalogBlock?.trim()) {
+    parts.push(moduleCatalogBlock.trim());
+  }
+  if (modulePromptBlock?.trim()) {
+    parts.push(modulePromptBlock.trim());
+  }
+  parts.push(patchedWorker.body);
+  const promptBody = parts.join("\n\n---\n\n");
+  return { worker: patchedWorker, sharedContext, promptBody };
 }
 
 /** 加载 skill 包内专属 worker skill */
@@ -473,9 +616,10 @@ export async function listWorkerSkills(
   }
   const workers: ParsedWorkerSkill[] = [];
   for (const entry of entries.sort()) {
-    const skillPath = `${skill.skillPackRoot}/workers/${entry}/${WORKER_SKILL_FILENAME}`;
+    const relativePath = await resolveWorkerSkillPath(skillIdOrName, entry, skillsRoot);
+    if (!relativePath) continue;
     try {
-      workers.push(await parseWorkerSkillFile(skillPath, skillsRoot));
+      workers.push(await parseWorkerSkillFile(relativePath, skillsRoot));
     } catch {
       // skip
     }

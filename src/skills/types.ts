@@ -1,5 +1,6 @@
 import type { BlackboardInputMerge } from "../types/blackboard.js";
-import type { AdvancePolicy } from "../types/runtime.js";
+import type { AdvancePolicy, SkillStartupMode } from "../types/runtime.js";
+import type { ContextSegmentDef } from "./context-segments.js";
 
 export type WorkerLlmBinding = {
   /** 固定 ApiProfile.id；省略 = 会话默认 */
@@ -53,6 +54,10 @@ export type ParsedSkill = {
   /** llm-bindings.yaml（可选）；见 docs/worker-skill-format.md §9 */
   workerLlmBindings?: SkillWorkerLlmBindings;
   startupInquiry: StartupInquiry;
+  /** intake（legacy 包）或 agent-first（默认：UI 引导后 Agent 调度） */
+  startupMode?: SkillStartupMode;
+  /** agent-first 首屏固定引导文案 */
+  uiPrompt?: string;
   /** 推进策略（预留）。loader 第一版不解析 orchestrator ## 推进策略 */
   advancePolicy?: AdvancePolicy;
   body: string;
@@ -70,6 +75,8 @@ export type ParsedWorkerSkill = {
   inputMerge?: BlackboardInputMerge;
   /** ApiProfile.id；省略 = 走 llm-bindings 或会话默认 */
   llmProfileId?: string;
+  /** 上下半拼装；缺省则 executor 回退 JSON inputs */
+  contextSegments?: ContextSegmentDef[];
   /** 相对 skills/ 的路径 */
   path: string;
   body: string;

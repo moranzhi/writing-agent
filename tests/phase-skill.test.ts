@@ -1,137 +1,91 @@
 import { describe, expect, it } from "vitest";
-import { loadSkill, listSkills } from "../src/skills/loader.js";
-import { toActiveSkillSnapshot } from "../src/skills/snapshot.js";
-import { createDecision } from "../src/runtime/phase-runtime.js";
 import {
   applyEvent,
   canApplyEvent,
   createSession,
 } from "../src/runtime/phase-machine.js";
+import { toActiveSkillSnapshot } from "../src/skills/snapshot.js";
+import { loadSkill, listSkills, listWorkerSkills, loadWorkerSkill } from "../src/skills/loader.js";
 
 const mockSkills = [
-  { name: "basic", description: "基础小说", category: "novel" },
+  { name: "world-simulator", description: "默认能力库", category: "dialogue" },
 ];
 
 describe("skill loader", () => {
-  it("lists basic skill", async () => {
+  it("lists only world-simulator", async () => {
     const skills = await listSkills();
-    expect(skills.some((s) => s.name === "basic")).toBe(true);
+    expect(skills.map((s) => s.name)).toEqual(["world-simulator"]);
   });
 
-  it("loads startup inquiry from SKILL.md", async () => {
-    const skill = await loadSkill("basic");
-    expect(skill.startupInquiry.targetKey).toBe("book.brief");
-    expect(skill.startupInquiry.prompt).toContain("基础小说创作");
-    const snap = toActiveSkillSnapshot(skill);
-    expect(snap.startupPrompt).toBe(skill.startupInquiry.prompt);
-  });
+  it("loads world-simulator pack and design step skills", async () => {
+    const skill = await loadSkill("world-simulator");
+    expect(skill.name).toBe("world-simulator");
+    expect(skill.path).toBe("dialogue/world-simulator/orchestrator.md");
+    expect(skill.skillPackRoot).toBe("dialogue/world-simulator");
 
-  it("loads weird-rules-short skill pack", async () => {
-    const skill = await loadSkill("weird-rules-short");
-    expect(skill.name).toBe("weird-rules-short");
-    expect(skill.path).toBe("novel/weird-rules-short/orchestrator.md");
-    expect(skill.skillPackRoot).toBe("novel/weird-rules-short");
-    expect(skill.bookKind).toBe("novel");
-    expect(skill.tags).toContain("weird_rules");
-    expect(skill.suggestedWorkers).toEqual(["write-rules", "review-infer", "review-author"]);
-    expect(skill.sharedContextPath).toBe("shared-context.md");
-    expect(skill.startupInquiry.prompt).toContain("规则怪谈");
-    expect(skill.startupInquiry.prompt).not.toContain("叙事人称");
-  });
-
-  it("loads roleplay-game-theory skill pack (instantiate)", async () => {
-    const skill = await loadSkill("roleplay-game-theory");
-    expect(skill.name).toBe("roleplay-game-theory");
-    expect(skill.path).toBe("dialogue/roleplay-game-theory/orchestrator.md");
-    expect(skill.bookKind).toBe("dialogue");
-    expect(skill.suggestedWorkers).toEqual(["setup-scenario", "world-engine", "role-decide", "present-round"]);
-    expect(skill.startupInquiry.targetKey).toBe("用户.博弈需求");
-    expect(skill.startupInquiry.prompt).toContain("角色扮演博弈");
-  });
-
-  it("loads worker skills from skill pack", async () => {
-    const {
-      loadWorkerSkill,
-      loadWorkerSkillWithContext,
-      loadSkillSharedContext,
-      listWorkerSkills,
-    } = await import("../src/skills/loader.js");
-    const workers = await listWorkerSkills("weird-rules-short");
+    const workers = await listWorkerSkills("world-simulator");
     expect(workers.map((w) => w.id).sort()).toEqual([
-      "review-author",
-      "review-infer",
-      "write-rules",
+      "design-flow",
+      "design-step",
+      "opening-generator",
     ]);
+    const flow = await loadWorkerSkill("world-simulator", "design-flow");
+    expect(flow.outputTags).toContain("设计.创作流程");
+    expect(flow.name).toContain("流程");
 
-    const writeRules = await loadWorkerSkill("weird-rules-short", "write-rules");
-    expect(writeRules.outputTags).toContain("rules.draft");
-    expect(writeRules.body).toContain("shared-context");
+    const step = await loadWorkerSkill("world-simulator", "design-step");
+    expect(step.id).toBe("design-step");
 
-    const reviewInfer = await loadWorkerSkill("weird-rules-short", "review-infer");
-    expect(reviewInfer.outputTags).toContain("review.infer.notes");
-    expect(reviewInfer.body).toContain("verdict:");
-
-    const reviewAuthor = await loadWorkerSkill("weird-rules-short", "review-author");
-    expect(reviewAuthor.outputTags).toContain("review.author.notes");
-    expect(reviewAuthor.body).toContain("表面矛盾");
-
-    const shared = await loadSkillSharedContext("weird-rules-short");
-    expect(shared).toContain("表面矛盾 ≠ 逻辑矛盾");
-
-    const withCtx = await loadWorkerSkillWithContext("weird-rules-short", "write-rules");
-    expect(withCtx.sharedContext).toContain("盲人摸象");
-    expect(withCtx.promptBody).toContain("固定创作上下文");
-  });
-
-  it("loads roleplay role-decide with thinking/action output tags", async () => {
-    const { loadWorkerSkill } = await import("../src/skills/loader.js");
-    const roleDecide = await loadWorkerSkill("roleplay-game-theory", "role-decide");
-    expect(roleDecide.outputTags).toContain("角色.*.思考");
-    expect(roleDecide.outputTags).toContain("角色.*.行动");
-    expect(roleDecide.body).toContain("仅用户可见");
-  });
-
-  it("loads basic skill pack", async () => {
-    const skill = await loadSkill("basic");
-    expect(skill.path).toBe("novel/basic/orchestrator.md");
-    expect(skill.skillPackRoot).toBe("novel/basic");
-    expect(skill.suggestedWorkers).toEqual(["outline"]);
-  });
-
-  it("lists only registered skills", async () => {
-    const skills = await listSkills();
-    const names = skills.map((s) => s.name).sort();
-    expect(names).toEqual(["basic", "roleplay-game-theory", "weird-rules-short"]);
+    const opening = await loadWorkerSkill("world-simulator", "opening-generator");
+    expect(opening.outputTags[0]).toBe("输出.开场白");
+    expect(opening.body).toContain("开场白");
+    expect(opening.body).toContain("填表工具");
+    expect(opening.body).toContain("普通大学生");
   });
 });
 
-describe("phase machine with skill", () => {
-  it("starts with skill_selection", () => {
-    let session = createSession("default");
-    const result = applyEvent(session, {
+describe("phase machine with world-simulator", () => {
+  it("session_started agent-first awaits user input", async () => {
+    const skill = await loadSkill("world-simulator");
+    const snap = toActiveSkillSnapshot(skill);
+    expect(snap.startupMode).toBe("agent-first");
+
+    const result = applyEvent(createSession("default"), {
       type: "session_started",
-      payload: { presetId: "default", availableSkills: mockSkills },
+      payload: {
+        presetId: "default",
+        availableSkills: mockSkills,
+        initialSkill: snap,
+      },
     });
     expect(result.session.phase).toBe("waiting_user");
-    expect(result.session.waitingReason?.kind).toBe("skill_selection");
+    expect(result.session.waitingReason?.kind).toBe("input");
   });
 
-  it("skill_selected shows startup prompt from skill", async () => {
-    const skill = await loadSkill("basic");
+  it("first user input invokes main agent", async () => {
+    const skill = await loadSkill("world-simulator");
     const snap = toActiveSkillSnapshot(skill);
 
-    let session = applyEvent(createSession("default"), {
+    const session = applyEvent(createSession("default"), {
       type: "session_started",
-      payload: { presetId: "default", availableSkills: mockSkills },
+      payload: { presetId: "default", availableSkills: mockSkills, initialSkill: snap },
     }).session;
 
-    const selected = applyEvent(session, {
-      type: "skill_selected",
-      payload: { skill: snap },
+    const result = applyEvent(session, {
+      type: "user_submitted_input",
+      payload: { text: "我要你塑造一个网恋对象和我对话" },
     });
-    expect(selected.session.waitingReason?.kind).toBe("input");
-    expect(selected.session.slots.activeSkill).toBeDefined();
-    expect((selected.session.slots.activeSkill as { name: string }).name).toBe("basic");
+    expect(result.session.phase).toBe("running");
+    expect(result.session.slots["用户.需求"]).toContain("网恋");
+    expect(result.effects.some((e) => e.type === "invoke_main_agent")).toBe(true);
+  });
+
+  it("legacy session_started without initialSkill enters skill_selection", () => {
+    const result = applyEvent(createSession("default"), {
+      type: "session_started",
+      payload: { presetId: "default", availableSkills: mockSkills },
+    });
+    expect(result.session.waitingReason?.kind).toBe("skill_selection");
   });
 
   it("rejects input before skill selected", () => {
@@ -145,12 +99,21 @@ describe("phase machine with skill", () => {
   });
 });
 
-describe("phase runtime with skill", () => {
-  it("runs full loop with basic skill", async () => {
-    const { PhaseRuntime, runMinimalClosedLoop } = await import("../src/runtime/phase-runtime.js");
-    const session = await runMinimalClosedLoop(new PhaseRuntime({ autoStubWorker: true }));
-    expect(session.phase).toBe("done");
-    expect(session.slots.startupCompleted).toBe(true);
-    expect(session.slots["book.brief"]).toContain("科幻");
+describe("phase runtime with world-simulator", () => {
+  it("starts default orchestrator and accepts stub design-flow", async () => {
+    const { PhaseRuntime, createDecision } = await import("../src/runtime/phase-runtime.js");
+    const runtime = new PhaseRuntime({ autoStubWorker: true });
+    await runtime.start();
+    expect(runtime.getActiveSkill()?.name).toBe("world-simulator");
+
+    await runtime.submitInput("西幻升级交互，世界推着走");
+    const decision = createDecision({
+      action: "run_worker",
+      reason: "编排创作流程",
+      workerId: "design-flow",
+      requiresApproval: false,
+    });
+    await runtime.submitDecision(decision);
+    expect(runtime.getSession().artifacts.length).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ParsedToolCall } from "../llm/client.js";
 import type { MainAgentDecision } from "../types/runtime.js";
+import { normalizeQuestions } from "../skills/question-protocol.js";
 import {
   isMainAgentLoopTool,
   isMainAgentTerminalTool,
@@ -60,11 +61,15 @@ export function toolCallToDecision(call: ParsedToolCall): MainAgentDecision {
   switch (name as MainAgentToolName) {
     case "ask_user": {
       const reason = requireString(args, "reason");
-      const message = optionalString(args, "message");
+      const assessment =
+        optionalString(args, "assessment") ?? optionalString(args, "message");
+      const questions = normalizeQuestions(args.questions);
       return {
         id: randomUUID(),
         action: "ask_user",
-        reason: message ? `${reason}\n${message}` : reason,
+        reason,
+        assessment: assessment || undefined,
+        questions: questions.length ? questions : undefined,
         requiresApproval: false,
         statePatchAllowed: false,
       };

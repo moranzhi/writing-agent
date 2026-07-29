@@ -60,7 +60,7 @@ export class RuntimeOrchestrator {
       payload: {
         presetId: this.session.presetId,
         flowId: this.session.flowId,
-        availableSkills: [{ name: "basic", description: "fallback", category: "novel" }],
+        availableSkills: [{ name: "world-simulator", description: "fallback", category: "dialogue" }],
       },
     });
     return this.session;

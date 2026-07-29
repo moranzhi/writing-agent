@@ -52,7 +52,7 @@ describe("resolveWorkerLlmProvider", () => {
   it("returns fallback when no binding", () => {
     const worker: ParsedWorkerSkill = {
       id: "role-decide",
-      skill: "roleplay-game-theory",
+      skill: "world-simulator",
       name: "x",
       description: "",
       version: 1,
@@ -73,7 +73,7 @@ describe("resolveWorkerLlmProvider", () => {
   it("uses byRole when bindings match", () => {
     const worker: ParsedWorkerSkill = {
       id: "role-decide",
-      skill: "roleplay-game-theory",
+      skill: "world-simulator",
       name: "x",
       description: "",
       version: 1,

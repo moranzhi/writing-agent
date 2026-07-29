@@ -4,74 +4,47 @@ import {
   createMockToolCall,
   MockLlmProvider,
 } from "../src/llm/client.js";
-import { buildIntakeProgress, readIntakeValues } from "../src/intake/intake.js";
-import { PhaseRuntime } from "../src/runtime/phase-runtime.js";
+import { PhaseRuntime, createDecision } from "../src/runtime/phase-runtime.js";
 
 describe("phase runtime", () => {
-  it("selects basic skill and shows startup inquiry", async () => {
+  it("auto-loads default orchestrator and awaits first user input", async () => {
     const runtime = new PhaseRuntime();
     await runtime.start();
-    expect(runtime.getSession().waitingReason?.kind).toBe("skill_selection");
-
-    await runtime.selectSkill("basic");
-    expect(runtime.getSession().waitingReason?.kind).toBe("intake");
-    expect(runtime.getActiveSkill()?.name).toBe("basic");
+    expect(runtime.getActiveSkill()?.name).toBe("world-simulator");
+    expect(runtime.getActiveSkill()?.startupMode).toBe("agent-first");
+    expect(runtime.getSession().waitingReason?.kind).toBe("input");
   });
 
-  it("writes book.brief after intake confirm", async () => {
-    const runtime = new PhaseRuntime();
-    await runtime.start();
-    await runtime.selectSkill("basic");
-    await runtime.submitInput("科幻中篇，第三人称");
-    await runtime.confirmIntake();
-    expect(runtime.getSession().slots["book.brief"]).toContain("科幻");
-    expect(runtime.getSession().slots.startupCompleted).toBe(true);
-  });
-
-  it("syncs demand tag to blackboard after intake confirm", async () => {
-    const runtime = new PhaseRuntime();
-    await runtime.start();
-    await runtime.selectSkill("roleplay-game-theory");
-    const fields = runtime.getActiveSkill()?.intakeFields ?? [];
-    await runtime.submitInput("德州扑克，经典博弈情境");
-    await runtime.submitInput("玩家A算计型，玩家B怕吃亏");
-    await runtime.submitInput("单轮定胜负，需要思考标签与场景描写");
-    const progress = buildIntakeProgress(
-      fields,
-      readIntakeValues(runtime.getSession().slots),
-    );
-    if (!progress.ready) {
-      const values = readIntakeValues(runtime.getSession().slots);
-      for (const f of fields.filter((x) => x.required && !values[x.id])) {
-        values[f.id] = "补充";
-      }
-      await runtime.dispatch({
-        type: "user_submitted_input",
-        payload: { text: "补充", intakeValues: values },
-      });
-    }
-    await runtime.confirmIntake();
-    const demand = runtime.getBlackboard().getContentByTag("用户.博弈需求") ?? "";
-    expect(demand).toContain("德州扑克");
-    expect(runtime.getSession().slots.startupCompleted).toBe(true);
-  });
-
-  it("mock main agent tool loop reads blackboard then proposes worker", async () => {
-    const runtime = new PhaseRuntime({
-      llm: new MockLlmProvider([
-        createMockToolCall("read_blackboard", { tags: ["book.brief"] }),
-        createMockToolCall("run_worker", {
-          workerId: "outline",
-          reason: "已读需求，生成大纲",
-          requiresApproval: true,
+  it("writes 用户.需求 and invokes main agent after first input", async () => {
+    const llm = new MockLlmProvider([
+      createMockMainAgentResponse([
+        createMockToolCall("ask_user", {
+          question: "还需要补充吗？",
+          reason: "确认交互细节",
         }),
       ]),
-    });
+    ]);
+    const runtime = new PhaseRuntime({ llm });
     await runtime.start();
-    await runtime.selectSkill("basic");
-    await runtime.submitInput("科幻中篇，第三人称");
-    await runtime.confirmIntake();
-    expect(runtime.getSession().waitingReason?.kind).toBe("approve_step");
-    expect(runtime.getSession().pendingDecision?.workerId).toBe("outline");
+    await runtime.submitInput("西幻升级交互，世界推着走");
+    expect(runtime.getSession().slots["用户.需求"]).toContain("西幻");
+    expect(runtime.getSession().slots.startupCompleted).toBe(true);
+  });
+
+  it("stub run_worker design-flow is allowed before worker set accept", async () => {
+    const runtime = new PhaseRuntime({ autoStubWorker: true });
+    await runtime.start();
+    await runtime.submitInput("网恋对象对话");
+    await runtime.submitDecision(
+      createDecision({
+        action: "run_worker",
+        reason: "编排创作流程",
+        workerId: "design-flow",
+        requiresApproval: false,
+      }),
+    );
+    expect(runtime.getSession().artifacts.some((a) => a.workerId === "design-flow")).toBe(
+      true,
+    );
   });
 });

@@ -16,28 +16,57 @@
 
 ## 2. 文档地图
 
-| 文档 | 管什么 |
-|---|---|
-| `tag-blackboard.md` | **★ 主规格**：标签黑板、skill 分工 |
-| `context-assembly.md` | **★ 上下文拼接**：上半固定、下半动态 |
-| `architecture.md` | 总览、agent tool loop、模块边界 |
-| `runtime-state-machine.md` | 5 相位、tool 边界、burst |
-| `tool-contracts.md` | 总管 / worker tool |
-| `orchestrator-skill-format.md` | manifest 写法（非编排表） |
-| `worker-skill-format.md` | SKILL.md、contextSegments |
-| `skill-format.md` | 包存储、registry |
-| `skill-design-guide.md` | 新包设计方法 |
-| `creation-playbook.md` | 创作流程概念 |
-| `book-storage.md` | Book、CardAsset、PlayBook、过程存储 |
-| `run-snapshot.md` | 手动存档 |
-| `preset-format.md` | 预设导入 |
-| `implementation-guide.md` | 本文件：文件顺序与职责 |
+| 层级 | 文档 | 管什么 |
+|---|---|---|
+| **系统架构** | **`architecture.md`** | 模块边界、定义/实例、调度、上下文、持久化原则、风险 |
+| 运行内核 | `runtime-state-machine.md` | 5 相位、tool 边界、burst |
+| 运行内核 | `tool-contracts.md` | 总管 / worker tool |
+| 运行内核 | `context-assembly.md` | 上下文拼接：上半固定、下半动态 |
+| 运行内核 | `tag-blackboard.md` | 标签黑板 |
+| 持久化 | `book-storage.md` | Book、CardAsset、PlayBook、过程存储 |
+| 持久化 | `run-snapshot.md` | 手动存档 |
+| UI | `ui-design.md` | 工作台布局、检查器、composer |
+| UI | **`ui-glossary.md`** | 用户可见中文口径；禁止裸露内部 id |
+| 外部参考 | `references.md` | 按层借鉴的 GitHub 仓库 |
+| 本文件 | `implementation-guide.md` | 文件顺序与职责；在现有内核上补齐 |
+| **产品体验路线** | **`px-roadmap.md`** | PX0–PX5 交付、DoD、明确不做 |
+| **日常 → P0** | **`daily-use-p0.md`** | 日常场景、功能映射、P0 详细工作包 |
+| **剧本 / 方法（非系统架构）** | `design-orchestrator-guide.md` | 创作三大步、表/副作用、自检 |
+| **剧本 / 方法（非系统架构）** | `creation-playbook.md` | 创作流程概念（指向指导） |
+| **Skill 格式（非系统架构）** | `orchestrator-skill-format.md` | manifest 写法（非编排表） |
+| **Skill 格式（非系统架构）** | `worker-skill-format.md` | SKILL.md、contextSegments |
+| **Skill 格式（非系统架构）** | `skill-format.md` | 包存储、registry |
+| **Skill 格式（非系统架构）** | `skill-design-guide.md` | 包格式薄层 |
+| **Skill 格式（非系统架构）** | `preset-format.md` | 预设导入 |
+
+许可证占位：仓库根 `THIRD_PARTY_NOTICES.md`。
 
 ---
 
-## 3. 实现分期
+## 3. 在现有内核上补齐（当前优先）
 
-### Phase A0 — 可运行阶段机（当前优先）
+相位机、Agent tool loop、Skill loader、Worker 声明、上下文拼装、表 rev、Web UI、快照 API **已具备**。  
+**不要**按绿场「领域库 → Mastra → …」重开；增量挂在现有 `phase-runtime` / Book 存储上。系统边界见 `architecture.md` §11。
+
+**权威执行顺序与验收 DoD → [`px-roadmap.md`](./px-roadmap.md)**（当前焦点 **PX0**）。  
+**日常场景与 P0 工作包 → [`daily-use-p0.md`](./daily-use-p0.md)**。
+
+| 路线阶段 | 目标 | 备注 |
+|----------|------|------|
+| **PX0（当前）** | 导演 UI + 双线主路径 + 存档硬稳定 | 详见 `daily-use-p0.md` / `px-roadmap.md` |
+| PX1–PX2 | 创作/游玩体验打磨；副作用 | UI 仍可抄 |
+| PX3 | Trace、预算、规格版本、E2E | — |
+| PX4 | 长文加深（P0 已含最小闭环） | — |
+| PX5 | 隔离 + 调试；必要时新导演包 | — |
+| 延后 | SQLite / 事件溯源 / Mastra·Next | — |
+
+历史分期 A0–E 见下节（多数已 done，作文件职责索引，不再当作「当前从零启动」路线）。
+
+---
+
+## 3b. 历史实现分期（索引）
+
+### Phase A0 — 可运行阶段机
 
 目标：**不依赖 LLM**，阶段机整体可运行、可手动驱动、可脚本跑通最小闭环。
 

@@ -1,0 +1,25 @@
+id: opening-generator
+label: 开局 · 开场白
+stage: design-end
+duty: >
+  创作末尾：结合已定世界/故事设定与表结构，写出开场白（主产物）；
+  初值表与开场同一真相，能推断则推断。不是填表工具。
+when: Worker 集 accept 后、进 play 前；design_end 或 workers 声明启用时
+suggested_context:
+  static:
+    - 设计.worker集
+    - 用户.需求
+    - 上下文.定稿摘要
+  dynamic:
+    - 用户.最新输入
+    - 用户.worker答复
+    - 运行.初始变量
+    - 输出.开场白
+suggested_outputs:
+  - 输出.开场白
+  - 运行.初始变量
+  - 变量.当前
+prompt_excerpt: |
+  主产物是开场白：扎根已有世界与故事，把玩家放进可行动的第一拍。
+  表是配套：与开场事实一致；普通大学生等可推出的别问。
+  禁止先问卷填表再糊开场；禁止开场与表打架。

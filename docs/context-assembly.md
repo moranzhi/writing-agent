@@ -11,14 +11,19 @@ Worker / skill 执行时，Runtime 将黑板 tag 与固定体裁说明拼成 LLM
 
 ## 2. 上半固定、下半动态
 
-每条 worker prompt 分为两段：
+每条 worker prompt 自上而下拼接（**一段式 stack，越稳定越靠上**）：
 
 ```text
+┌─ Preset（会话 presetId）────────────────────────────┐
+│  生成参数、prompt 条目（system / 文风片段等）       │
+│  见 preset-format.md；与 skill 包正交               │
+└────────────────────────────────────────────────────┘
 ┌─ 上半：固定上下文（Static）────────────────────────┐
 │  shared-context.md（包级体裁约束）                  │
 │  worker SKILL.md 正文（能力说明、自检）             │
 │  contextSegments 中 tier=static 的 tag              │
-│    例：角色卡.确认稿、世界.蓝图、设计.交互范式       │
+│    例：角色卡.确认稿、世界.蓝图、设计.worker集 切片  │
+│    （含 narrator 的 presentation，无单独美学纲领 tag）│
 └────────────────────────────────────────────────────┘
 ┌─ 下半：动态上下文（Dynamic）────────────────────────┐
 │  contextSegments 中 tier=dynamic 的 tag             │
@@ -30,7 +35,7 @@ Worker / skill 执行时，Runtime 将黑板 tag 与固定体裁说明拼成 LLM
 原则：
 
 ```text
-越稳定、越少改 → 越靠上（static）
+越稳定、越少改 → 越靠上（preset / static）
 越增量、每轮变 → 越靠下（dynamic）
 ```
 
@@ -80,7 +85,11 @@ contextSegments:
 | `label` | 拼进 prompt 的 Markdown 标题（可选） |
 | `policy` | 动态段裁剪，见 §5 |
 
-未声明 `contextSegments` 时，Runtime 回退：按 `inputTags` 顺序输出 JSON `inputs`（当前实现）。
+未声明 `contextSegments` 时，Runtime 回退：按 `inputTags` 顺序输出 JSON `inputs`。
+
+有 `contextSegments` 时：按 static → dynamic 顺序拼 Markdown（含 `label` 标题）；实现见 `src/skills/context-segments.ts` → `assembleWorkerContext()`。
+
+创作前情：`创作.已验收内容` 存各单位**最后一次验收**的内容切片，拼装时格式化为只读前情提要。
 
 ---
 
@@ -93,17 +102,20 @@ contextSegments:
 | `tail_lines_N` | 事件流等取最后 N 行 |
 | `tail_tokens_N` | 按估算 token 截断（预留） |
 
-上下文过长时：
+上下文过长时（**本节管 Run worker 拼装**；创作会话见 `design-orchestrator-guide.md` §7.2）：
 
 1. 优先靠 policy 裁剪动态段  
-2. 实例 manifest 可覆盖 variant（如 `historyPolicy: last_10_turns`）  
-3. agent 可 invoke 显式 **compress-history** skill 写摘要 tag（调度 skill，不是随手删 prompt）
+2. **Run 验收后压缩**：过程 tag 归档，仅终产物 + `上下文.定稿摘要` 进入下一 worker（`compress-after-worker.ts`）  
+3. 实例 manifest 可覆盖 variant（如 `historyPolicy: last_10_turns`）  
+4. 长线再考虑显式 compress-history / RAG，禁止「完整历史喂一个 LLM 再筛给另一个」
+
+**创作**不走本拼装栈：讨论放 session `messages`；单位验收后 **删交互、留产物**。Worker 执行仍始终按契约从黑板重装。
 
 ---
 
 ## 6. contextProfile（实例 manifest）
 
-实例化阶段产出（写入 `设计.run_skill清单` 或 Book manifest），agent **只选预置档位**，不列 tag：
+实例化阶段产出（写入 `设计.worker集` 或 Book manifest），agent **只选预置档位**，不列 tag：
 
 ```json
 {
@@ -161,7 +173,7 @@ user:
   {按 segment 顺序格式化的 Markdown 或结构化块}
 ```
 
-实现：`src/worker/executor.ts` → `assembleWorkerContext()`（待从纯 JSON inputs 升级）。
+实现：`src/skills/context-segments.ts` → `assembleWorkerContext()`；由 `src/worker/executor.ts` 调用。
 
 ---
 

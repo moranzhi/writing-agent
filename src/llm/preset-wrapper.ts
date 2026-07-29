@@ -7,6 +7,7 @@ import type {
   CompleteWithToolsOptions,
   CompleteWithToolsResult,
   LlmProvider,
+  StreamCallbacks,
 } from "./client.js";
 
 /**
@@ -54,5 +55,24 @@ export class PresetLlmProvider implements LlmProvider {
       ...options,
       generation,
     });
+  }
+
+  async completeWithToolsStream(
+    messages: ChatMessage[],
+    options: CompleteWithToolsOptions,
+    callbacks: StreamCallbacks,
+  ): Promise<CompleteWithToolsResult> {
+    const preset = this.getPreset();
+    if (!this.inner.completeWithToolsStream) {
+      return this.completeWithTools(messages, options);
+    }
+    const presetMessages = preset ? assemblePresetMessages(preset) : [];
+    const merged = preset ? mergeMessages(presetMessages, messages) : messages;
+    const generation = options.generation ?? preset?.generation;
+
+    return this.inner.completeWithToolsStream(merged, {
+      ...options,
+      generation,
+    }, callbacks);
   }
 }
