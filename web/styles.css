@@ -722,8 +722,8 @@ body[data-lifecycle="play"] .panel-agent { background: #f7fef9; }
   min-height: 0;
 }
 .questions-card-host[hidden] { display: none !important; }
-/* 开启时占 feed 剩余高度的上限，不把整页撑出视口 */
-.questions-card-host.is-open {
+/* 开启时占 feed 剩余高度的上限，不把整页撑出视口；勿与 [hidden] 并存抢 display */
+.questions-card-host.is-open:not([hidden]) {
   display: flex;
   flex-direction: column;
   max-height: 48%;

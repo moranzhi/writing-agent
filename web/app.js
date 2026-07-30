@@ -866,10 +866,14 @@ async function sendText(text) {
   const qHost = $("questions-card-host");
   const activeQs = getActiveQuestions(lastView);
   const reviewing = lastView?.waitingReason?.kind === "review_artifact";
+  const cardOpen = Boolean(
+    activeQs?.questions?.length && qHost?.classList.contains("is-open"),
+  );
 
   // 产物验收：底栏有字 ⇒ 按修改意见重做；接受走「接受目前产物」
   if (reviewing && trimmed) {
     try {
+      clearQuestionCardState(qHost, lastView);
       renderSession(lastView, true);
       const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: "POST",
@@ -878,17 +882,18 @@ async function sendText(text) {
       clearQuestionCardState(qHost);
       renderSession(view, false);
     } catch (err) {
+      if (qHost) qHost._qDismissed = null;
       if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
     }
     return;
   }
 
-  if (activeQs?.questions?.length && qHost?.classList.contains("is-open")) {
+  if (cardOpen) {
     const collected = collectQuestionAnswers(qHost, lastView);
     const answered = collected.ok
       ? collected.answers.filter((a) => a.text && a.text !== "（未答）")
       : [];
-    // 可选追问：未选任何选项时，允许直接发自由文本（或空操作交给下方逻辑）
+    // 必答题未选：拦住发送
     if (!collected.ok && !activeQs.optional) {
       if (typeof collected.page === "number" && qHost._qState) {
         qHost._qState.page = collected.page;
@@ -899,8 +904,10 @@ async function sendText(text) {
       alert(collected.error);
       return;
     }
+    // 有选中 → 问+答拼接发送，并收起卡
     if (collected.ok && answered.length) {
       try {
+        clearQuestionCardState(qHost, lastView);
         renderSession(lastView, true);
         const body = { answers: collected.answers };
         if (trimmed) body.note = trimmed;
@@ -911,10 +918,18 @@ async function sendText(text) {
         clearQuestionCardState(qHost);
         renderSession(view, false);
       } catch (err) {
+        if (qHost) qHost._qDismissed = null;
         if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
       }
       return;
     }
+    // 未选中：不带问；点发送仍算答复 → 收起卡
+    if (!trimmed) {
+      clearQuestionCardState(qHost, lastView);
+      await runAction("skip_questions");
+      return;
+    }
+    clearQuestionCardState(qHost, lastView);
   }
 
   if (!trimmed) return;
@@ -924,26 +939,38 @@ async function sendText(text) {
       method: "POST",
       body: JSON.stringify({ text: trimmed }),
     });
+    clearQuestionCardState(qHost);
     renderSession(view, false);
   } catch (err) {
+    if (cardOpen && qHost) qHost._qDismissed = null;
     if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
   }
 }
 
 async function runAction(action) {
   if (!sessionId) return;
+  const qHost = $("questions-card-host");
   try {
+    // 接受 / 跳过：先收起询问卡，避免 loading 用旧 waitingReason 再画出来
+    if (action === "accept" || action === "skip_questions") {
+      clearQuestionCardState(qHost, lastView);
+    }
     renderSession(lastView, true);
     const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/actions`, {
       method: "POST",
       body: JSON.stringify({ action }),
     });
-    // 接受产物 = 不再完善 → 收起询问卡；跳过追问同理
     if (action === "accept" || action === "skip_questions") {
-      clearQuestionCardState($("questions-card-host"));
+      clearQuestionCardState(qHost);
     }
     renderSession(view, false);
   } catch (err) {
+    if (
+      (action === "accept" || action === "skip_questions") &&
+      qHost
+    ) {
+      qHost._qDismissed = null;
+    }
     if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
   }
 }

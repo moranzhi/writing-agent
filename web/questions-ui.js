@@ -1,6 +1,7 @@
 /**
  * 结构化询问卡：点字母选中，点文案编辑；左右分页。
- * 普通提问：提交走底栏 composer（问+答拼进上下文），卡上无独立发送钮。
+ * 询问是对同一次发送的可选增强：有选中则问+答拼接；未选中则不带问。
+ * 点发送即答复 → 收起本轮卡（卡上无独立发送钮）。
  * 产物验收挂载题：底栏有字优先按「改产物」发送；无字时才提交所选答案。
  * 分页 / 跳过为悬浮控件，不占独立 header/footer 行。
  */
@@ -196,8 +197,29 @@ export function collectQuestionAnswers(host, view) {
   return { ok: true, answers };
 }
 
-export function clearQuestionCardState(host) {
-  if (host) host._qState = null;
+/**
+ * 收起询问卡。传入 view 时标记本轮题已答复，避免 loading 用旧 waitingReason 把卡又画回来。
+ * @param {HTMLElement | null | undefined} host
+ * @param {object} [view]
+ */
+export function clearQuestionCardState(host, view) {
+  if (!host) return;
+  const active = view ? getActiveQuestions(view) : null;
+  if (active?.questions?.length && view?.id) {
+    host._qDismissed = {
+      sessionId: view.id,
+      key: JSON.stringify(active.questions.map((q) => q.id)),
+    };
+  } else if (host._qState?.sessionId && host._qState?.key) {
+    host._qDismissed = {
+      sessionId: host._qState.sessionId,
+      key: host._qState.key,
+    };
+  }
+  host._qState = null;
+  host.hidden = true;
+  host.innerHTML = "";
+  host.classList.remove("is-open");
 }
 
 /**
@@ -212,17 +234,30 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
     host.hidden = true;
     host.innerHTML = "";
     host.classList.remove("is-open");
+    host._qDismissed = null;
+    return false;
+  }
+
+  const qKey = JSON.stringify(active.questions.map((q) => q.id));
+  // 本轮已通过发送/跳过答复 → 在 waitingReason 清掉前也不再打开
+  if (
+    host._qDismissed?.sessionId === view.id &&
+    host._qDismissed?.key === qKey
+  ) {
+    host.hidden = true;
+    host.innerHTML = "";
+    host.classList.remove("is-open");
     return false;
   }
 
   host.hidden = false;
   host.classList.add("is-open");
 
-  const state = host._qState?.sessionId === view.id && host._qState?.key === JSON.stringify(active.questions.map((q) => q.id))
+  const state = host._qState?.sessionId === view.id && host._qState?.key === qKey
     ? host._qState
     : {
         sessionId: view.id,
-        key: JSON.stringify(active.questions.map((q) => q.id)),
+        key: qKey,
         page: 0,
         // questionId -> { optionId?, text, otherText? }
         answers: {},
