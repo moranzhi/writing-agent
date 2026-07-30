@@ -569,9 +569,15 @@ body[data-lifecycle="play"] .panel-agent { background: #f7fef9; }
 .flow-name {
   font-weight: 600;
 }
+.flow-params,
+.flow-params-missing,
 .flow-deps {
+  grid-column: 2;
   font-size: 12px;
   color: var(--muted, #666);
+}
+.flow-params-missing {
+  color: var(--danger, #b42318);
 }
 
 .board-panel {

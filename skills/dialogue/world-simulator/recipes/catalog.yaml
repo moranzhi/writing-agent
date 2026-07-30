@@ -1,16 +1,17 @@
-# 导演选项目录（用户在新建作品时手动选择；对用户称「导演」）
+# 导演选项目录（用户在新建作品时手动选择；对用户称「导演」/「配方」）
 # id = recipes/{id}/ 文件夹
 # name = 固定中文名（下拉展示）
 # declaration = 给人看的短说明
 # 内部仍叫 recipe；勿对用户再说「配方」作第二层选项
+# recipe.yaml 写方法论：when / core / process / principles + 近期 steps
 # 步骤 name 必须 ∈ modules/catalog.yaml（【能力】）
 # 选定后写入黑板 tag 创作.选用配方
 
 recipes:
   - id: world-simulator
     name: 世界模拟器
-    declaration: 回合互动、世界推进、角色扮演类体验的初始编排参考
+    declaration: 回合互动、世界推进、角色扮演类体验的设计方法
 
   - id: expand-assistant
     name: 扩写助手
-    declaration: 大纲/分段写作、写手统筹、成稿向助手类体验的初始编排参考
+    declaration: 大纲/分段写作、写手统筹、成稿向助手类体验的设计方法

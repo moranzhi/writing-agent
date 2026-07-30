@@ -1,6 +1,6 @@
-# 创作设计指导（总管 / 分步 design skills）
+# 创作设计指导（编排器 / 分步 design skills）
 
-> **文档层级：剧本 / 创作方法（非系统架构）。**  
+> **文档层级：工作流计划 / 创作方法（非系统架构）。**  
 > 运行内核边界见 [`architecture.md`](./architecture.md)；本文不定义相位机、持久化或 Context Compiler。
 
 权威说明：如何从用户意图收成 **实例规格（`设计.worker集` JSON）**，并指导 play 期声明调度。  
@@ -8,18 +8,20 @@
 
 相关：`context-assembly.md`（拼装）、`preset-format.md`（全局预设）、`tag-blackboard.md`（黑板）、`run-snapshot.md`（快照）。
 
-包内落地：
+包内落地（现行 `skills/dialogue/world-simulator/`）：
 
 | 文件 | 角色 |
 |------|------|
-| `orchestrator.md` | 总管调度 |
-| `design-common.md` | 创作共同开头（注入各 design-*） |
-| `workers/design-core/` | A 核心（开放，不拆 A1→A2→A3 管道） |
-| `workers/design-worker/` | 一次一个 worker |
-| `workers/design-fixed/` | 一次一块固定上下文 |
-| `workers/design-refine/` | C 细化 / 终稿 |
+| `orchestrator.md` | 编排器调度 |
+| `recipes/` | 配方选项（新建 UI 选一层） |
+| `modules/{id}/prompt.md` | 技能正文（design-step 注入） |
+| `workers/design-flow/` | 编排近期 `设计.创作流程` |
+| `workers/design-step/` | 执行当前能力步 |
+| `workers/opening-generator/` | 可选开场白 |
+| `worker-templates/` | play 执行单元默认契约 |
 
-**运行时以各 SKILL + design-common 为准**；本文是方法长文，改方法时与 skill 切片一起改。
+旧 `design-core` / `design-fixed` / `design-worker` / `design-refine` / `design-common.md` / `design-intake` **已移除**。  
+**运行时以包内 SKILL + modules 为准**；本文是方法长文，改方法时与 skill / 能力切片一起改。清单见 `world-simulator-modules.md`。
 
 ---
 
@@ -42,7 +44,7 @@
 - 把「世界模拟」当成开场默认答案
 - 固定 instantiate 管道（world-blueprint 等）
 
-**预设**：凡 LLM 请求（总管 / agent / worker）均插入用户预设。  
+**预设**：凡 LLM 请求（编排器 / agent / worker）均插入用户预设。  
 **进 play**：用户手动满意后进入（程序不强制开局锁定）。  
 **Play 回合**：用户新输入 = 认可上一轮最终展示；否则重 roll / 编辑后重 roll。表维护可延后。
 
@@ -89,7 +91,7 @@
 对当前理解与「现有 worker/上下文草案」打分或文字判定。
 
 **对内**：可只在思维链里过一遍。  
-**对外**（总管 `ask_user.assessment`，或关键分叉复述）：写成用户可读的完备度评价，再据此出题。
+**对外**（编排器 `ask_user.assessment`，或关键分叉复述）：写成用户可读的完备度评价，再据此出题。
 
 **首要（必须检）**
 
@@ -304,7 +306,7 @@ value, rev, updatedAt, source  # source: user | worker:<id> | system
 
 ### 6.1 用法（重要：不是填空）
 
-§6.2 里的名称 **只是示例话题**：告诉 design / 总管——**可以向用户询问类似内容**，再收成固定上下文。
+§6.2 里的名称 **只是示例话题**：告诉 design / 编排器——**可以向用户询问类似内容**，再收成固定上下文。
 
 ```text
 不是：按表逐项填空、默认必谈、谈完才算过关
@@ -478,7 +480,7 @@ Worker 规格应回答：职责是什么、读哪些已有 tag、写哪些 tag�
 | 交互 / RP | 产出用户可见终稿的转述（如 narrator）→ `review`；世界裁决等中间层 → `continue` |
 
 创作期按 **§7.2 创作单位** 分块验收（worker 与固定上下文同级），与上表正交。  
-design-intake / 创作调度必须为 **每个** run worker 写出 `acceptance`；缺省时不得假设「全都不用验收」——面向用户的可读输出默认倾向 `review`，纯中间层倾向 `continue`，吃不准就 ask_user。
+design-flow / design-step / 创作调度必须为 **每个** run worker 写出 `acceptance`；缺省时不得假设「全都不用验收」——面向用户的可读输出默认倾向 `review`，纯中间层倾向 `continue`，吃不准就 ask_user。
 
 ---
 
@@ -502,7 +504,7 @@ design-intake / 创作调度必须为 **每个** run worker 写出 `acceptance`�
 
 ---
 
-## 8. Play / Run 边界（给总管；运行时按声明执行）
+## 8. Play / Run 边界（给编排器；运行时按声明执行）
 
 - 只 `run_worker` 声明内的 ref
 - 遇 `acceptance: review` → 停、给人看、接受后压缩再继续

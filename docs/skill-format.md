@@ -1,7 +1,11 @@
 # Skill 格式与存储
 
 > **文档层级：Skill 包格式（非系统架构）。**  
-> 系统级模块与调度边界见 [`architecture.md`](./architecture.md)。
+> 系统级模块与调度边界见 [`architecture.md`](./architecture.md)。  
+>  
+> **现行唯一落地包**：`skills/dialogue/world-simulator/`（见该包 README、`world-simulator-modules.md`）。  
+> 下文部分示例仍保留历史 `novel/` / `weird-rules-short` 树形说明，**仓库内已不存在**；写新内容请以 world-simulator 为准。  
+> 创作流水线现行名：`design-flow` + `design-step`（旧称 `design-intake` 已废弃）。
 
 ## 1. 定位：两层 Skill
 
@@ -9,50 +13,50 @@
 
 | 类型 | 路径 | 消费者 | 写什么 |
 |------|------|--------|--------|
-| **总管 Skill** | `skills/{bookKind}/{name}/orchestrator.md` | Main Agent | **何时**调哪个 worker、验收方式、启动询问 |
+| **编排器 Skill** | `skills/{bookKind}/{name}/orchestrator.md` | Main Agent | **何时**调哪个 worker、验收方式、启动询问 |
 | **Worker Skill** | `workers/{workerId}/SKILL.md` | Worker Agent | **inputTags/outputTags**、怎么做 |
 
 ```text
-选 weird-rules-short（总管 Skill）
-  → 总管：brief 齐了 → run ruleset-worker，input=[project.brief]
+选 weird-rules-short（编排器 Skill）
+  → 编排器：brief 齐了 → run ruleset-worker，input=[project.brief]
   → Worker：读 workers/ruleset-worker/SKILL.md → 写 core / rules / commentary
-  → 总管：rules accepted → run review-worker
+  → 编排器：rules accepted → run review-worker
   → Worker：读 workers/review-worker/SKILL.md → 评估怎么做
 ```
 
-**何时评估** = 总管 Skill 的 Worker 编排表。  
+**何时评估** = 编排器 Skill 的 Worker 编排表。  
 **如何评估** = review-worker 的 Worker Skill。
 
 详细规范：
 
-- 总管 Skill → `docs/orchestrator-skill-format.md`
+- 编排器 Skill → `docs/orchestrator-skill-format.md`
 - Worker Skill → `docs/worker-skill-format.md`
 
-旧称「Skill = 创作说明书」仍成立，但说明书 **拆成编排（总管）与执行（worker）两份**。
+旧称「Skill = 创作说明书」仍成立，但说明书 **拆成编排（编排器）与执行（worker）两份**。
 
 ```text
 会话开始
-  → 询问 1：选哪个总管 Skill（skills/{bookKind}/{name}/orchestrator.md）
-  → 加载总管 Skill
-  → 询问 2：读总管 Skill「## 启动询问」
-  → 之后总管按「Worker 编排」调度；Worker 读本 skill 包内 workers/{id}/SKILL.md
+  → 询问 1：选哪个编排器 Skill（skills/{bookKind}/{name}/orchestrator.md）
+  → 加载编排器 Skill
+  → 询问 2：读编排器 Skill「## 启动询问」
+  → 之后编排器按「Worker 编排」调度；Worker 读本 skill 包内 workers/{id}/SKILL.md
 ```
 
 ---
 
 ## 2. 存储位置
 
-Skill 以 **Skill 包（skill pack）** 为单位：一个总管 + 其专属 workers，**同包绑定，不跨包复用 worker**。
+Skill 以 **Skill 包（skill pack）** 为单位：一个编排器 + 其专属 workers，**同包绑定，不跨包复用 worker**。
 
 ```text
 skills/
 ├── registry.yaml
 ├── novel/                                    # Book 形态
 │   ├── basic/
-│   │   └── orchestrator.md                   # 总管 Skill
+│   │   └── orchestrator.md                   # 编排器 Skill
 │   ├── weird-rules-short/
-│   │   ├── orchestrator.md                   # 总管：何时调谁、黑板 key
-│   │   └── workers/                          # 本总管专属，不与其他 skill 共享
+│   │   ├── orchestrator.md                   # 编排器：何时调谁、黑板 key
+│   │   └── workers/                          # 本编排器专属，不与其他 skill 共享
 │   │       ├── write-rules/
 │   │       │   └── SKILL.md                  # 规则怪谈：怎么写规则+解析
 │   │       └── review/
@@ -74,13 +78,13 @@ skills/
 ```text
 第一层文件夹 = bookKind（novel | dialogue），决定 Book 存储结构
 第二层文件夹 = 一个 skill 包，名与 frontmatter.name 一致
-  orchestrator.md   总管 Skill（编排、启动询问、验收）
+  orchestrator.md   编排器 Skill（编排、启动询问、验收）
   workers/{id}/     本包专属 worker；id 在包内唯一即可
 Worker 不复用：novel-standard 的 outline worker ≠ weird-rules-short 的任何 worker
 registry.yaml 的 path 指向 orchestrator.md，如 novel/weird-rules-short/orchestrator.md
 ```
 
-**为何不复用 worker：** 同一「产出形状」（如规则表）在不同总管下的写法、Rubric、自检完全不同；共享 worker 会把体裁细节塞进总管或搞混上下文。需要相似流程时 **复制 worker 包再改**，而不是引用全局 worker。
+**为何不复用 worker：** 同一「产出形状」（如规则表）在不同编排器下的写法、Rubric、自检完全不同；共享 worker 会把体裁细节塞进编排器或搞混上下文。需要相似流程时 **复制 worker 包再改**，而不是引用全局 worker。
 
 与 Cursor skill 的区别：
 
@@ -89,7 +93,7 @@ registry.yaml 的 path 指向 orchestrator.md，如 novel/weird-rules-short/orch
 | 位置 | `.cursor/skills/` | `skills/` |
 | 触发 | Agent 自动或显式引用 | **会话开始必须选一个** |
 | 内容 | 通用任务指南 | **创作流程 + 思维链 + 询问策略** |
-| 消费者 | Cursor Agent | 总管 LLM |
+| 消费者 | Cursor Agent | 编排器 LLM |
 
 ---
 
@@ -163,9 +167,9 @@ tags: [novel, outline, draft]
 
 ## 创作总纲
 
-（给总管：这类内容是什么、总体顺序、禁忌）
+（给编排器：这类内容是什么、总体顺序、禁忌）
 
-## 总管思维链
+## 编排器思维链
 
 （每轮决策前先检查什么、如何选 worker）
 
@@ -175,7 +179,7 @@ tags: [novel, outline, draft]
 
 ## 询问策略
 
-### 总管应先问
+### 编排器应先问
 ### 交给 Worker 问
 
 ## 推荐 Worker
@@ -188,7 +192,7 @@ tags: [novel, outline, draft]
 ```yaml
 ---
 name: novel-standard                    # 必需，唯一 id，[a-z0-9-]
-description: >                          # 必需，供启动时向用户展示、供总管匹配
+description: >                          # 必需，供启动时向用户展示、供编排器匹配
   第三人称描述 WHAT + WHEN。
 category: novel                         # 必需：Book 形态，见 §3.0
 bookKind: novel                         # 建议与 category 对齐；选定后 Book 结构固定
@@ -206,13 +210,13 @@ suggestedWorkers:                       # 可选，本 skill 常用 worker
 | 字段 | 必需 | 用途 |
 |---|---|---|
 | `name` | ✅ | skill id；通常与文件名一致（不含 .md） |
-| `description` | ✅ | 启动选择列表展示；总管判断用户描述是否匹配 |
+| `description` | ✅ | 启动选择列表展示；编排器判断用户描述是否匹配 |
 | `category` | ✅ | 与 `bookKind` 一致：`novel` \| `dialogue` |
 | `bookKind` | 建议 | 选定后 Book 结构固定；缺省时由所在文件夹推断 |
 | `tags` | | 体裁细分：`weird_rules`、`standard` 等 |
 | `path` | registry | 相对路径，如 `novel/weird-rules-short.md` |
 | `defaultFlowId` | | 选中后默认 execution flow |
-| `suggestedWorkers` | | 总管选 worker 时的白名单提示 |
+| `suggestedWorkers` | | 编排器选 worker 时的白名单提示 |
 
 ### 3.2 撰写标准：写作生命周期（推荐）
 
@@ -237,7 +241,7 @@ Skill 文件本质上是**给 LLM 与 Runtime 读的字符串规格**。下面�
 | **写作中 · 分步引导** | `## 推荐阶段` + `## 示例` + `## 禁用行为` | 阶段链、每步约束、好/坏示例；对应 worker 与产出 key |
 | **写作后 · 自检润色** | `## 自检清单` + `## 验收策略` | 产出前检查点；LLM 自审 vs 人工 vs 程序验收 |
 | **质量评估** | `## 质量评估标准` | 可量化维度 + 各 stage 的 acceptanceMode |
-| **编排** | `## 总管思维链` + `## 询问策略` + `## 推荐 Worker` | 总管如何调度；谁向用户提问 |
+| **编排** | `## 编排器思维链` + `## 询问策略` + `## 推荐 Worker` | 编排器如何调度；谁向用户提问 |
 
 不必每个 skill 都写独立 `# 写作前` 大标题；**用统一章节名即可**，内容覆盖上表即可。
 
@@ -266,7 +270,7 @@ Skill 文件本质上是**给 LLM 与 Runtime 读的字符串规格**。下面�
 
 #### `## 自检清单`（必需）
 
-写作后、提交验收前，worker 或总管应过的检查点（字符串列表即可）：
+写作后、提交验收前，worker 或编排器应过的检查点（字符串列表即可）：
 
 ```markdown
 ## 自检清单
@@ -298,7 +302,7 @@ suggestedWorkers: …
 
 ## 启动询问              # 写作前 · 需求分析
 ## 创作总纲
-## 总管思维链
+## 编排器思维链
 ## 推荐阶段              # 写作中 · 分步引导
 ## 询问策略
 ## 推荐 Worker
@@ -310,7 +314,7 @@ suggestedWorkers: …
 ## Book 结构             # 可选，novel / dialogue 形态说明
 ```
 
-代码当前**结构化解析**的仍主要是 `## 启动询问`；其余章节整段注入总管 prompt（待 `buildSkillContext`）。**全部是 Markdown 字符串，不矛盾。**
+代码当前**结构化解析**的仍主要是 `## 启动询问`；其余章节整段注入编排器 prompt（待 `buildSkillContext`）。**全部是 Markdown 字符串，不矛盾。**
 
 ### 3.3 正文必需章节（检查清单）
 
@@ -325,8 +329,8 @@ suggestedWorkers: …
 | **自检清单** | 写后 | 提交验收前的检查点 |
 | **验收策略** | 写后 | 各 stage 的 acceptanceMode |
 | **质量评估标准** | 质量 | 可量化维度 + **接受度（预留）** |
-| **总管思维链** | 编排 | 每轮决策检查 |
-| **询问策略** | 编排 | 总管问 vs worker 问 |
+| **编排器思维链** | 编排 | 每轮决策检查 |
+| **询问策略** | 编排 | 编排器问 vs worker 问 |
 | **推荐 Worker** | 编排 | 与 suggestedWorkers 一致 |
 
 可选：`## Book 结构`、`examples.md` 外链。
@@ -414,25 +418,25 @@ Runtime 写入 `用户.需求`（或 skill 指定的 startupTargetKey），确�
 阶段 2（intake） 启动询问 → 用户描述需求 → confirm → agent burst
 ```
 
-**Agent 根据需求推理 worker 集**（`design-intake`），不再让用户在 registry 里四选一。
+**Agent 根据需求编排能力并收成 worker 集**（`design-flow` → `design-step`），不再让用户在 registry 里四选一。
 
 ---
 
-## 6. 总管如何使用已选 Skill
+## 6. 编排器如何使用已选 Skill
 
-`session.slots.activeSkill` 加载后，总管 prompt 注入：
+`session.slots.activeSkill` 加载后，编排器 prompt 注入：
 
 ```text
 当前 skill: novel-standard
 category: novel
 创作总纲: （SKILL.md 摘要或全文）
 当前推荐阶段: outline（由 resolver 根据黑板推断）
-询问策略: 总管应先问 brief；outline 细节交给 worker
+询问策略: 编排器应先问 brief；outline 细节交给 worker
 建议 worker: outline-worker, drafting-worker
 defaultFlowId: ghostwriting-flow
 ```
 
-总管决策仍通过 tool / JSON 决策，**不**直接改 phase。
+编排器决策仍通过 tool / JSON 决策，**不**直接改 phase。
 
 ---
 
@@ -441,9 +445,13 @@ defaultFlowId: ghostwriting-flow
 完整示例见仓库内真实文件（不要只在文档里维护一份）：
 
 ```text
-skills/novel/weird-rules-short.md
-skills/dialogue/theater-roleplay.md
+skills/dialogue/world-simulator/orchestrator.md
+skills/dialogue/world-simulator/workers/design-flow/SKILL.md
+skills/dialogue/world-simulator/modules/catalog.yaml
+skills/dialogue/world-simulator/recipes/catalog.yaml
 ```
+
+（历史示例 `skills/novel/weird-rules-short`、`theater-roleplay` 已不在仓库。）
 
 ---
 
@@ -463,7 +471,7 @@ listSkills() → SkillIndexEntry[]
 loadSkill(skillId) → ParsedSkill（含 startupInquiry 解析自 ## 启动询问）
 selectSkill(session, skillId) → session.slots.activeSkill
 getStartupPrompt(activeSkill) → 流程 2 展示文案
-buildSkillContext(activeSkill, blackboardIndex) → 总管 prompt 片段
+buildSkillContext(activeSkill, blackboardIndex) → 编排器 prompt 片段
 ```
 
 ---
@@ -491,7 +499,7 @@ Creation Playbook（概念）
 ```text
 skills/ 目录 + 示例 orchestrator 包
 启动 → 自动绑定默认 orchestrator → intake（描述需求）
-总管 prompt 注入 skill 摘要
+编排器 prompt 注入 skill 摘要
 registry.yaml 可选（legacy 包 / 读档兼容）
 ```
 

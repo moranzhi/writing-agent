@@ -510,6 +510,7 @@ export async function loadWorkerSkillWithContext(
       resolveDesignStepBinding,
       CREATION_CURRENT_STEP_TAG,
       CREATION_MODULE_OPENING_TAG,
+      formatStepParamsForPrompt,
     } = await import("./creation-flow.js");
     const binding = await resolveDesignStepBinding({
       skillPackRoot: skill.skillPackRoot,
@@ -522,7 +523,8 @@ export async function loadWorkerSkillWithContext(
       const openingNote = binding.opening
         ? `\n\n【程序开场】若黑板有「${CREATION_MODULE_OPENING_TAG}」，该默认问题已由程序发给用户（不经 LLM）；用户首答在「用户.worker答复」。勿重复同一开场白，在其答复与提示词基础上继续追问或产出。`
         : "";
-      modulePromptBlock = `## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}`;
+      const paramsBlock = `## 【本步参数】（编排期已钉；直接按此执行，勿再问「生成什么 / 调用哪个规则」）\n\n${formatStepParamsForPrompt(binding.step.params)}`;
+      modulePromptBlock = `${paramsBlock}\n\n## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}`;
       const baseInputs = [
         "用户.需求",
         "book.brief",

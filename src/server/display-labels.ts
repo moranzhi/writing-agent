@@ -1,6 +1,7 @@
 /**
  * 用户可见中文标签（与 docs/ui-glossary.md 同步）。
  * 内部 id 不变；仅展示层映射。
+ * 口径：配方 / 编排器 / 技能 / 工作流计划 / 运行规格 / 执行单元
  */
 
 const STAGE_LABELS: Record<string, string> = {
@@ -15,15 +16,15 @@ const STAGE_LABELS: Record<string, string> = {
 
 const WORKER_LABELS: Record<string, string> = {
   "design-core": "创作 · 核心",
-  "design-worker": "创作 · 演员规格",
+  "design-worker": "创作 · 执行单元规格",
   "design-fixed": "创作 · 固定上下文",
   "design-refine": "创作 · 细化与终稿",
   "design-intake": "创作 · 综合收口",
   "design-flow": "创作 · 流程编排",
   "design-step": "创作 · 执行步骤",
   "opening-generator": "开局 · 开场白",
-  orchestrator: "导演",
-  "agent-burst": "导演调度",
+  orchestrator: "编排器",
+  "agent-burst": "编排器调度",
   narrator: "叙事转述",
   "role-decide": "角色决策",
   "world-simulator": "世界推演",
@@ -57,14 +58,14 @@ export function displayStageLabel(id: string | undefined | null): string {
   return STAGE_LABELS[id] ?? id;
 }
 
-/** 导演选项 / skill pack 展示名 */
+/** 配方选项 / skill pack 展示名 */
 export function displaySkillPackLabel(id: string | undefined | null): string {
   if (!id) return "";
   return SKILL_PACK_LABELS[id] ?? id;
 }
 
 /**
- * 演员 / 单位 / 能力 id → 用户可见名（不含动作后缀）。
+ * 执行单元 / 单位 / 技能 id → 用户可见名（不含动作后缀）。
  */
 export function displayWorkerLabel(id: string | undefined | null): string {
   if (!id) return "";
@@ -79,11 +80,11 @@ export function displayWorkerLabel(id: string | undefined | null): string {
   }
   if (trimmed.startsWith("worker:")) {
     const ref = trimmed.slice("worker:".length);
-    return `演员 · ${displayWorkerLabel(ref)}`;
+    return `执行单元 · ${displayWorkerLabel(ref)}`;
   }
   if (trimmed.startsWith("fixed:")) {
     const topic = trimmed.slice("fixed:".length);
-    return `能力 · ${FIXED_TOPIC_LABELS[topic] ?? topic}`;
+    return `技能 · ${FIXED_TOPIC_LABELS[topic] ?? topic}`;
   }
   if (trimmed.startsWith("resident:")) {
     return `常驻 · ${trimmed.slice("resident:".length)}`;
@@ -99,7 +100,7 @@ export function formatWorkerDisplayTitle(
   workerId: string | undefined | null,
   action: WorkerTitleAction = null,
 ): string {
-  const base = displayWorkerLabel(workerId) || "演员";
+  const base = displayWorkerLabel(workerId) || "执行单元";
   switch (action) {
     case "output":
       return `${base} · 产出`;
@@ -114,8 +115,8 @@ export function formatWorkerDisplayTitle(
   }
 }
 
-/** 导演（调度 Agent）相关标题 */
+/** 编排器（调度 Agent）相关标题 */
 export function formatAgentDisplayTitle(detail?: string): string {
-  if (detail?.trim()) return `导演 · ${detail.trim()}`;
-  return "导演";
+  if (detail?.trim()) return `编排器 · ${detail.trim()}`;
+  return "编排器";
 }

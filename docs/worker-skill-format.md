@@ -1,7 +1,8 @@
 # Worker Skill 格式
 
 > **文档层级：Worker / 声明契约格式（非系统架构）。**  
-> 上下文编译原则见 [`architecture.md`](./architecture.md)、[`context-assembly.md`](./context-assembly.md)。
+> 上下文编译原则见 [`architecture.md`](./architecture.md)、[`context-assembly.md`](./context-assembly.md)。  
+> **现行包落地**见 [`skills/dialogue/world-simulator/README.md`](../skills/dialogue/world-simulator/README.md)。
 
 ## 1. 定位（现行：声明驱动）
 
@@ -9,11 +10,12 @@
 
 ```text
 play 时执行契约 = accept 后的 设计.worker集 某条 workers[]（实例 Worker 声明）
-可选模板       = worker-templates/{ref}.yaml（design-intake 合并默认值）
-磁盘 SKILL.md  = 仅创建阶段必要 worker（现：design-intake）
+可选模板       = worker-templates/{ref}.yaml（design 缺省合并默认值）
+磁盘 SKILL.md  = 仅创作阶段必要 worker（现：design-flow / design-step / opening-generator）
+技能正文       = modules/{id}/prompt.md（由 design-step 注入，不是独立 worker）
 ```
 
-总管 `run_worker(id)` → Runtime 校验 id ∈ Worker 声明 → 从 **Worker 集条目**（+ 可选模板合并）拼 prompt → 写声明的 `outputs`。
+编排器 `run_worker(id)` → Runtime 校验 id ∈ Worker 声明 → 从 **Worker 集条目**（+ 可选模板合并）拼 prompt → 写声明的 `outputs`。
 
 **不要**为每个 play ref 预置 `workers/narrator/SKILL.md`；实例差异写在 Worker 集里。
 
@@ -28,13 +30,18 @@ play 时执行契约 = accept 后的 设计.worker集 某条 workers[]（实例 
 ```text
 skills/dialogue/world-simulator/
 ├── orchestrator.md
+├── modules/{id}/prompt.md     # 能力切片（非 SKILL.md）
 ├── worker-templates/          # 可选模板，非执行文件
 └── workers/
-    └── design-intake/SKILL.md
+    ├── design-flow/SKILL.md
+    ├── design-step/SKILL.md
+    └── opening-generator/SKILL.md
 ```
 
 - 目录名 = worker id。
 - 文件名固定 **`SKILL.md`**。
+
+旧 `design-intake` / `design-core` / `design-fixed` / `design-worker` / `design-refine` **已移除**。
 
 ---
 
@@ -42,14 +49,14 @@ skills/dialogue/world-simulator/
 
 ```yaml
 ---
-id: design-intake
+id: design-step
 skill: world-simulator
-name: 实例设计 · Worker 集
+name: 创作 · 执行能力步
 stage: design
 inputTags:
   - "用户.需求"
+  - "设计.创作流程"
 outputTags:
-  - "设计.worker集"
   - "设计.worker集.草稿"
 inputMerge: latest
 ---
@@ -70,7 +77,7 @@ inputMerge: latest
 
 ## 4. 实例声明字段（写入 `设计.worker集`）
 
-design-intake 产出的每条 worker：
+`refine` 能力 / design 收口产出的每条 worker：
 
 ```yaml
 workers:
@@ -95,12 +102,13 @@ workers:
 
 - Agent **不**指定 inputTags；读 Worker 声明 / 模板。
 - `ref: null` + `gap`：声明了职责但无模板 / SKILL，需补声明或 temp worker。
-- 验收：`design-intake` 默认 `user_confirmed`；play 中间 worker 可 `no_confirmation`。
+- 验收：design-flow / design-step 默认需用户确认；play 中间 worker 可 `no_confirmation`。
 
 ## 相关
 
 | 文档 | 关系 |
 |------|------|
 | `creation-playbook.md` | 创作流 |
+| `world-simulator-modules.md` | 能力 / 编排器清单 |
 | `worker-declaration.ts` | Runtime 声明校验 |
 | `worker-templates/README.md` | 可选模板 |

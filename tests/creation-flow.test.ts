@@ -186,10 +186,23 @@ describe("creation-flow", () => {
     expect(
       catalog?.modules.find((m) => m.name === "具体实例")?.repeatable,
     ).toBe(true);
+    expect(
+      catalog?.modules.find((m) => m.name === "生成规则")?.params?.[0]?.key,
+    ).toBe("target");
+    expect(
+      catalog?.modules.find((m) => m.name === "具体实例")?.params?.[0]?.key,
+    ).toBe("rule_id");
+    const gen = catalog?.modules.find((m) => m.name === "生成规则");
+    expect(gen?.when).toBeTruthy();
+    expect(gen?.when_not).toBeTruthy();
+    expect(gen?.boundary).toBeTruthy();
     const block = formatModuleCatalogForAgent(catalog!);
     expect(block).toContain("【能力");
     expect(block).toContain("美学纲领与交互范式：");
     expect(block).toContain("生成规则〔可反复〕");
+    expect(block).toContain("何时用");
+    expect(block).toContain("何时不用");
+    expect(block).toContain("编排参数");
     expect(block).not.toContain("设计.美学纲领与交互范式");
   });
 
@@ -203,15 +216,20 @@ describe("creation-flow", () => {
 
     const details = await loadAllRecipeDetails("dialogue/world-simulator");
     expect(details.length).toBeGreaterThanOrEqual(2);
-    expect(details.find((d) => d.id === "world-simulator")?.when).toBeTruthy();
+    const ws = details.find((d) => d.id === "world-simulator");
+    expect(ws?.when).toBeTruthy();
+    expect(ws?.core).toBeTruthy();
+    expect(ws?.process).toBeTruthy();
+    expect(ws?.principles).toBeTruthy();
     expect(
-      details
-        .find((d) => d.id === "world-simulator")
-        ?.seed?.steps.some((s) => s.name === "美学纲领与交互范式"),
+      ws?.seed?.steps.some((s) => s.name === "美学纲领与交互范式"),
     ).toBe(true);
-    expect(details.find((d) => d.id === "world-simulator")?.seed?.status).toBe(
-      "open",
-    );
+    expect(ws?.seed?.status).toBe("open");
+    const formatted = formatSelectedRecipeForAgent(ws!);
+    expect(formatted).toContain("核心思路");
+    expect(formatted).toContain("设计流程");
+    expect(formatted).toContain("原则");
+    expect(formatted).not.toContain("调味提示");
   });
 
   it("parses selected recipe ref", () => {
@@ -222,11 +240,16 @@ describe("creation-flow", () => {
     expect(parseSelectedRecipeRef("")).toBeNull();
   });
 
-  it("parses recipe yaml with suggested steps", () => {
+  it("parses recipe yaml with methodology fields", () => {
     const detail = parseRecipeYaml(
       `
 when: 测试适用
-hint: 可调味
+core: 核心一句话
+process:
+  - 先美学
+  - 再按缺口选型
+principles:
+  - 正推
 brief: 测试 brief
 steps:
   - name: 美学纲领与交互范式
@@ -235,6 +258,9 @@ steps:
       { id: "t", name: "测试配方", declaration: "测" },
     );
     expect(detail.when).toBe("测试适用");
+    expect(detail.core).toContain("核心一句话");
+    expect(detail.process).toEqual(["先美学", "再按缺口选型"]);
+    expect(detail.principles).toEqual(["正推"]);
     expect(detail.seed?.status).toBe("open");
     expect(detail.seed?.steps).toEqual([
       {
@@ -243,10 +269,26 @@ steps:
         depends_on: [],
       },
     ]);
-    expect(formatSelectedRecipeForAgent(detail)).toContain("用户已选导演");
-    expect(formatSelectedRecipeForAgent(detail)).toContain("增量");
+    const formatted = formatSelectedRecipeForAgent(detail);
+    expect(formatted).toContain("用户已选配方");
+    expect(formatted).toContain("核心思路");
+    expect(formatted).toContain("增量");
   });
 
+  it("falls back to legacy hint when methodology absent", () => {
+    const detail = parseRecipeYaml(
+      `
+when: 旧配方
+hint: 可调味
+steps:
+  - name: 美学纲领与交互范式
+    depends_on: []
+`,
+      { id: "legacy", name: "旧", declaration: "测" },
+    );
+    expect(detail.hint).toBe("可调味");
+    expect(formatSelectedRecipeForAgent(detail)).toContain("调味提示（旧字段）");
+  });
   it("parseRecipeCatalog skips incomplete rows", () => {
     const cat = parseRecipeCatalog(`
 recipes:
@@ -277,10 +319,12 @@ recipes:
       { selectedRecipeRef: "world-simulator" },
     );
     expect(selected.worker.outputTags).toContain("设计.创作流程");
-    expect(selected.promptBody).toContain("【用户已选导演 · 世界模拟器】");
+    expect(selected.promptBody).toContain("【用户已选配方 · 世界模拟器】");
     expect(selected.promptBody).toContain("世界模拟器");
     expect(selected.promptBody).toContain("【能力");
     expect(selected.promptBody).toContain("美学纲领与交互范式");
+    expect(selected.promptBody).toContain("核心思路");
+    expect(selected.promptBody).toContain("何时用");
     expect(selected.promptBody).toContain("增量");
     expect(selected.promptBody).not.toContain("【导演】用户尚未手动选择");
   });
@@ -352,6 +396,72 @@ recipes:
     expect(binding?.opening).toContain("原型世界");
     expect(binding?.modulePrompt).toContain("```task");
     expect(binding?.modulePrompt).not.toContain("最想反复感受到的是什么");
+  });
+
+  it("parses and validates step params from catalog", async () => {
+    const flow = parseCreationFlow(`{
+      "status": "open",
+      "steps": [
+        {
+          "id": "生成规则·怪物",
+          "name": "生成规则",
+          "params": { "target": "怪物", "lifecycle_intent": "runtime_only" },
+          "depends_on": []
+        }
+      ]
+    }`)!;
+    expect(flow.steps[0]?.params).toEqual({
+      target: "怪物",
+      lifecycle_intent: "runtime_only",
+    });
+    const view = formatCreationFlowForUser(flow);
+    expect(view.steps[0]?.params?.target).toBe("怪物");
+
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    expect(
+      catalog?.modules.find((m) => m.name === "生成规则")?.params?.some(
+        (p) => p.key === "target" && p.required,
+      ),
+    ).toBe(true);
+    expect(validateCreationFlow(flow, catalog).ok).toBe(true);
+
+    const missing = parseCreationFlow(`{
+      "steps": [{ "name": "生成规则", "depends_on": [] }]
+    }`)!;
+    const bad = validateCreationFlow(missing, catalog);
+    expect(bad.ok).toBe(false);
+    expect(bad.errors.some((e) => e.includes("target"))).toBe(true);
+
+    const block = formatModuleCatalogForAgent(catalog!);
+    expect(block).toContain("编排参数");
+    expect(block).toContain("target");
+  });
+
+  it("injects step params into design-step prompt", async () => {
+    const flowRaw = JSON.stringify({
+      steps: [
+        {
+          id: "生成规则·怪物",
+          name: "生成规则",
+          params: { target: "怪物", rule_id: "monsters" },
+          depends_on: [],
+        },
+      ],
+    });
+    const loaded = await loadWorkerSkillWithContext(
+      "world-simulator",
+      "design-step",
+      undefined,
+      {
+        flowRaw,
+        currentStepName: "生成规则·怪物",
+        acceptedStepNames: [],
+      },
+    );
+    expect(loaded.promptBody).toContain("【本步参数】");
+    expect(loaded.promptBody).toContain("target: 怪物");
+    expect(loaded.promptBody).toContain("rule_id: monsters");
+    expect(loaded.worker.outputTags).toContain("设计.生成规则");
   });
 
   it("nextPendingStep respects deps and accepted by id", () => {

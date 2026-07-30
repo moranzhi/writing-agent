@@ -21,10 +21,10 @@ describe("display-labels", () => {
 
   it("maps creation unit ids", () => {
     expect(displayWorkerLabel("phase:core")).toBe("单位 · 核心");
-    expect(displayWorkerLabel("fixed:interaction")).toBe("能力 · 交互范式");
+    expect(displayWorkerLabel("fixed:interaction")).toBe("技能 · 交互范式");
     expect(displayWorkerLabel("fixed:aesthetics-interaction")).toBe(
-      "能力 · 美学纲领与交互范式",
+      "技能 · 美学纲领与交互范式",
     );
-    expect(displayWorkerLabel("worker:narrator")).toBe("演员 · 叙事转述");
+    expect(displayWorkerLabel("worker:narrator")).toBe("执行单元 · 叙事转述");
   });
 });

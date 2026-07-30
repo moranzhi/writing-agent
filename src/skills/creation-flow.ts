@@ -3,8 +3,8 @@
  * 可变增量 DAG：有序 steps + 每步 id/中文名 + depends_on；可追加、可同能力多次。
  *
  * 两层内容（作者细写，运行时只搭骨架）：
- * - recipes/：初始配方（给总管 / design-flow 的参考起点，可调味）
- * - modules/：共用组件池（步骤名与方法正文；配方与总管都从这里选型）
+ * - recipes/：配方方法论（适用、核心思路、设计流程、原则）+ 近期起点 steps
+ * - modules/：共用能力池；编排注入 meta 选型字段，执行注入方法全文
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,6 +25,9 @@ const DEFAULT_SKILLS_ROOT = path.resolve(
   "../../skills",
 );
 
+/** 步骤调用参数（编排期钉死；执行期只读） */
+export type CreationFlowStepParams = Record<string, unknown>;
+
 export type CreationFlowStep = {
   /**
    * 本局步骤唯一 id（验收与 depends_on 用这个）。
@@ -35,6 +38,11 @@ export type CreationFlowStep = {
   name: string;
   /** 依赖的其它步骤 id（旧稿若 name 唯一也可写 name） */
   depends_on: string[];
+  /**
+   * 本步调用参数。有「编排参数」声明的能力必须在进 design-step 前钉齐必填项。
+   * 例：生成规则 → target；具体实例 → rule_id。
+   */
+  params?: CreationFlowStepParams;
 };
 
 export type CreationFlowStatus = "open" | "closed";
@@ -49,6 +57,17 @@ export type CreationFlow = {
    */
   status?: CreationFlowStatus;
   steps: CreationFlowStep[];
+};
+
+/** catalog 声明：编排进 DAG 时本步需要哪些调用参数 */
+export type ModuleParamSpec = {
+  key: string;
+  /** 给人看的中文名 */
+  label: string;
+  /** 缺省 false；true = validateCreationFlow / 编排必须钉齐 */
+  required?: boolean;
+  /** 给编排器的短提示（选项从何来、可否其它） */
+  hint?: string;
 };
 
 export type ModuleCatalogEntry = {
@@ -69,6 +88,17 @@ export type ModuleCatalogEntry = {
    * catalog 写了则作覆盖。程序发出，不经 LLM。
    */
   opening?: string;
+  /**
+   * 可选：编排期步骤参数声明。
+   * 有 required 项时，steps[].params 必须在进执行前钉齐；勿把选型推迟到 design-step。
+   */
+  params?: ModuleParamSpec[];
+  /** 来自 prompt.md ```meta：何时该选用（编排选型） */
+  when?: string;
+  /** 来自 prompt.md ```meta：何时不该选用 */
+  when_not?: string;
+  /** 来自 prompt.md ```meta：与其它能力的边界 */
+  boundary?: string;
 };
 
 /** 本步程序开场白正文（design-step 发出后写入，供 LLM 看见） */
@@ -95,14 +125,24 @@ export type RecipeCatalog = {
 };
 
 /**
- * 单份初始配方详情。
- * seed = 建议步骤（可为空；name 须 ∈ 模块池）；编排时允许增删改。
+ * 单份配方详情。
+ * 方法论字段供编排选型；seed = 近期起点 steps（可为空；name 须 ∈ 模块池）。
  */
 export type RecipeDetail = {
   id: string;
   name: string;
   declaration: string;
+  /** 适用什么体验/任务 */
   when?: string;
+  /** 整套设计方法的核心思路与最终目标 */
+  core?: string;
+  /** 设计流程：如何增量选型、何时收成（字符串或条目列表） */
+  process?: string | string[];
+  /** 配方特有取舍原则 */
+  principles?: string | string[];
+  /**
+   * @deprecated 旧字段；新配方用 core/process/principles。解析仍可读，格式化时作兜底。
+   */
   hint?: string;
   seed: CreationFlow | null;
 };
@@ -125,6 +165,10 @@ export type CreationFlowUserView = {
     /** 目录里的短声明（有则展示） */
     declaration?: string;
     repeatable?: boolean;
+    /** 本步调用参数（编排期钉死） */
+    params?: CreationFlowStepParams;
+    /** 参数缺必填项时的提示（给人看） */
+    paramsMissing?: string[];
   }>;
   parseError?: string;
 };
@@ -150,9 +194,65 @@ export function extractJsonObject(raw: string): unknown | null {
   return null;
 }
 
+/** 规范化 steps[].params：仅接受普通对象 */
+export function normalizeStepParams(
+  raw: unknown,
+): CreationFlowStepParams | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: CreationFlowStepParams = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const key = k.trim();
+    if (!key) continue;
+    out[key] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** 目录声明的必填参数中，本步仍缺失的 key（按声明顺序） */
+export function missingRequiredStepParams(
+  step: Pick<CreationFlowStep, "params">,
+  module: ModuleCatalogEntry | null | undefined,
+): string[] {
+  const specs = module?.params ?? [];
+  if (specs.length === 0) return [];
+  const params = step.params ?? {};
+  const missing: string[] = [];
+  for (const spec of specs) {
+    if (!spec.required) continue;
+    const v = params[spec.key];
+    if (v == null) {
+      missing.push(spec.key);
+      continue;
+    }
+    if (typeof v === "string" && !v.trim()) {
+      missing.push(spec.key);
+    }
+  }
+  return missing;
+}
+
+/** 给人 / LLM 看的参数摘要 */
+export function formatStepParamsForPrompt(
+  params: CreationFlowStepParams | null | undefined,
+): string {
+  if (!params || Object.keys(params).length === 0) return "（无）";
+  return Object.entries(params)
+    .map(([k, v]) => {
+      const rendered =
+        typeof v === "string" ? v : JSON.stringify(v, null, 0);
+      return `- ${k}: ${rendered}`;
+    })
+    .join("\n");
+}
+
 /** 为缺 id 的步骤补齐唯一 id；同 name 多次 → name#2、name#3… */
 export function ensureCreationFlowStepIds(
-  steps: Array<{ id?: string; name: string; depends_on: string[] }>,
+  steps: Array<{
+    id?: string;
+    name: string;
+    depends_on: string[];
+    params?: CreationFlowStepParams;
+  }>,
 ): CreationFlowStep[] {
   const used = new Set<string>();
   const nameCount = new Map<string, number>();
@@ -177,6 +277,7 @@ export function ensureCreationFlowStepIds(
       id,
       name,
       depends_on: raw.depends_on.map((d) => d.trim()).filter(Boolean),
+      ...(raw.params ? { params: raw.params } : {}),
     });
   }
   return out;
@@ -208,7 +309,12 @@ export function parseCreationFlow(raw: string | undefined | null): CreationFlow 
   const stepsRaw = row.steps;
   if (!Array.isArray(stepsRaw) || stepsRaw.length === 0) return null;
 
-  const drafted: Array<{ id?: string; name: string; depends_on: string[] }> = [];
+  const drafted: Array<{
+    id?: string;
+    name: string;
+    depends_on: string[];
+    params?: CreationFlowStepParams;
+  }> = [];
   for (const item of stepsRaw) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const s = item as Record<string, unknown>;
@@ -219,7 +325,8 @@ export function parseCreationFlow(raw: string | undefined | null): CreationFlow 
     const depends_on = Array.isArray(depsRaw)
       ? depsRaw.map((d) => String(d).trim()).filter(Boolean)
       : [];
-    drafted.push({ id, name, depends_on });
+    const params = normalizeStepParams(s.params);
+    drafted.push({ id, name, depends_on, ...(params ? { params } : {}) });
   }
 
   const steps = ensureCreationFlowStepIds(drafted);
@@ -264,6 +371,7 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
         ? m.opening.trim()
         : undefined;
     const repeatable = m.repeatable === true;
+    const params = parseModuleParamSpecs(m.params);
     modules.push({
       id,
       name,
@@ -271,10 +379,34 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
       artifact,
       ...(repeatable ? { repeatable: true } : {}),
       ...(opening ? { opening } : {}),
+      ...(params ? { params } : {}),
     });
   }
   if (modules.length === 0) return null;
   return { modules };
+}
+
+function parseModuleParamSpecs(raw: unknown): ModuleParamSpec[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: ModuleParamSpec[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const key = typeof row.key === "string" ? row.key.trim() : "";
+    const label = typeof row.label === "string" ? row.label.trim() : "";
+    if (!key || !label) continue;
+    const hint =
+      typeof row.hint === "string" && row.hint.trim()
+        ? row.hint.trim()
+        : undefined;
+    out.push({
+      key,
+      label,
+      ...(row.required === true ? { required: true } : {}),
+      ...(hint ? { hint } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -325,6 +457,78 @@ export function getModuleSection(
 ): string | null {
   const body = sections.blocks[id.toLowerCase()]?.trim();
   return body || null;
+}
+
+/** 把 YAML 字段收成可展示的字符串（支持 string / string[]） */
+export function coerceYamlTextField(raw: unknown): string | undefined {
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  if (Array.isArray(raw)) {
+    const lines = raw
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean);
+    return lines.length ? lines.map((l) => `- ${l}`).join("\n") : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 从 prompt.md 的 ```meta 块解析选型字段。
+ * catalog 负责索引/params；when/when_not/boundary 以 meta 为准。
+ */
+export function parseModuleMetaFromPrompt(promptMd: string): {
+  declaration?: string;
+  when?: string;
+  when_not?: string;
+  boundary?: string;
+} | null {
+  const metaRaw = getModuleSection(parseModulePromptSections(promptMd), "meta");
+  if (!metaRaw) return null;
+  let doc: unknown;
+  try {
+    doc = parseYaml(metaRaw);
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+  const row = doc as Record<string, unknown>;
+  const declaration = coerceYamlTextField(row.declaration);
+  const when = coerceYamlTextField(row.when);
+  const when_not = coerceYamlTextField(row.when_not);
+  const boundary = coerceYamlTextField(row.boundary);
+  if (!declaration && !when && !when_not && !boundary) return null;
+  return {
+    ...(declaration ? { declaration } : {}),
+    ...(when ? { when } : {}),
+    ...(when_not ? { when_not } : {}),
+    ...(boundary ? { boundary } : {}),
+  };
+}
+
+/**
+ * 用各能力 prompt.md 的 meta 充实目录条目（编排选型用）。
+ * declaration：meta 有则覆盖 catalog；when/when_not/boundary：仅来自 meta。
+ */
+export async function enrichModuleCatalogWithMeta(
+  catalog: ModuleCatalog,
+  skillPackRoot: string,
+  skillsRoot = DEFAULT_SKILLS_ROOT,
+): Promise<ModuleCatalog> {
+  const modules = await Promise.all(
+    catalog.modules.map(async (m) => {
+      const prompt = await loadModulePrompt(skillPackRoot, m.id, skillsRoot);
+      if (!prompt) return m;
+      const meta = parseModuleMetaFromPrompt(prompt);
+      if (!meta) return m;
+      return {
+        ...m,
+        ...(meta.declaration ? { declaration: meta.declaration } : {}),
+        ...(meta.when ? { when: meta.when } : {}),
+        ...(meta.when_not ? { when_not: meta.when_not } : {}),
+        ...(meta.boundary ? { boundary: meta.boundary } : {}),
+      };
+    }),
+  );
+  return { modules };
 }
 
 /**
@@ -416,19 +620,49 @@ export async function loadModuleCatalog(
   const fullPath = path.join(skillsRoot, skillPackRoot, MODULE_CATALOG_FILENAME);
   try {
     const raw = await readFile(fullPath, "utf8");
-    return parseModuleCatalog(raw);
+    const catalog = parseModuleCatalog(raw);
+    if (!catalog) return null;
+    return enrichModuleCatalogWithMeta(catalog, skillPackRoot, skillsRoot);
   } catch {
     return null;
   }
 }
 
-/** 注入 design-flow 的短目录（非全文 prompt） */
+/** 注入 design-flow：能力名 + 选型字段（meta）+ 编排参数；非执行全文 */
 export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
   const lines = catalog.modules.map((m) => {
     const flags = m.repeatable ? "〔可反复〕" : "";
-    return `- ${m.name}${flags}：${m.declaration}`;
+    const parts: string[] = [`- ${m.name}${flags}：${m.declaration}`];
+    if (m.when) parts.push(`  何时用：${indentMultiline(m.when, "  ")}`);
+    if (m.when_not) parts.push(`  何时不用：${indentMultiline(m.when_not, "  ")}`);
+    if (m.boundary) parts.push(`  边界：${indentMultiline(m.boundary, "  ")}`);
+    if (m.params && m.params.length > 0) {
+      parts.push(
+        `  编排参数：${m.params
+          .map((p) => {
+            const req = p.required ? "必填" : "可选";
+            const hint = p.hint ? `，${p.hint}` : "";
+            return `${p.key}（${p.label}，${req}${hint}）`;
+          })
+          .join("；")}`,
+      );
+    }
+    return parts.join("\n");
   });
-  return `【能力 · 可选工序】（按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入）\n${lines.join("\n")}`;
+  return [
+    "【能力 · 可选工序】",
+    "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入。",
+    "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）；有「编排参数」的步骤必须在 DAG 里写齐 params，缺参时用 askUser 选项+其它，禁止空壳进执行。",
+    "不要把能力执行全文塞进本步；执行由 design-step 注入。",
+    lines.join("\n"),
+  ].join("\n");
+}
+
+/** 多行字段：首行接在标签后，续行缩进 */
+function indentMultiline(text: string, indent: string): string {
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= 1) return text;
+  return [lines[0], ...lines.slice(1).map((l) => `${indent}${l}`)].join("\n");
 }
 
 export function parseRecipeCatalog(raw: string): RecipeCatalog | null {
@@ -476,8 +710,8 @@ export async function loadRecipeCatalog(
 }
 
 /**
- * 解析单份 recipe.yaml（when / hint / brief / steps）。
- * steps 空或缺失 → seed 为 null（仍可作选型参考）。
+ * 解析单份 recipe.yaml（when / core / process / principles / brief / steps）。
+ * 兼容旧字段 hint。steps 空或缺失 → seed 为 null（仍可作选型参考）。
  */
 export function parseRecipeYaml(
   raw: string,
@@ -507,6 +741,9 @@ export function parseRecipeYaml(
     typeof row.when === "string" && row.when.trim()
       ? row.when.trim()
       : undefined;
+  const core = coerceYamlTextField(row.core);
+  const process = normalizeRecipeListOrText(row.process);
+  const principles = normalizeRecipeListOrText(row.principles);
   const hint =
     typeof row.hint === "string" && row.hint.trim()
       ? row.hint.trim()
@@ -528,9 +765,26 @@ export function parseRecipeYaml(
     name,
     declaration: meta.declaration,
     when,
-    hint,
+    ...(core ? { core } : {}),
+    ...(process ? { process } : {}),
+    ...(principles ? { principles } : {}),
+    ...(hint ? { hint } : {}),
     seed,
   };
+}
+
+/** process / principles：保留数组，或收成单字符串 */
+function normalizeRecipeListOrText(
+  raw: unknown,
+): string | string[] | undefined {
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  if (Array.isArray(raw)) {
+    const items = raw
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean);
+    return items.length ? items : undefined;
+  }
+  return undefined;
 }
 
 export async function loadRecipeDetail(
@@ -610,21 +864,36 @@ export function formatRecipeCatalogForAgent(catalog: RecipeCatalog): string {
   const lines = catalog.recipes.map(
     (r) => `- ${r.name}：${r.declaration}`,
   );
-  return `【可选导演】（须由用户手动选择）\n${lines.join("\n")}`;
+  return `【可选配方】（须由用户手动选择）\n${lines.join("\n")}`;
 }
 
-/** 注入 design-flow：用户已选导演（内部 recipe） */
+/** 注入 design-flow：用户已选配方（方法论 + 近期起点） */
 export function formatSelectedRecipeForAgent(detail: RecipeDetail): string {
   const lines: string[] = [
-    `【用户已选导演 · ${detail.name}】`,
-    "这是用户手动选定的方法起点，不是锁死流水线。",
-    "产出**增量 DAG**：只排近期要做的步骤；已验收步保留，可追加同能力多次调用（如生成规则 / 具体实例）。",
-    "按用户表述增删改未验收步骤与依赖（像现场改戏 / 调味）；步骤名只能从【能力】选。",
-    "禁止改选其它导演；若用户要换导演，须等用户重新选定后再编排。",
+    `【用户已选配方 · ${detail.name}】`,
+    "这是用户手动选定的设计方法，不是锁死流水线。",
+    "产出**增量工作流计划（DAG）**：只排近期要做的步骤；已验收步保留，可追加同技能多次调用。",
+    "按用户表述与配方方法论增删改未验收步骤与依赖；步骤名只能从【能力】选。",
+    "能力「何时用 / 何时不用」以【能力 · 可选工序】为准；本配方不重复罗列各能力调用条件。",
+    "禁止改选其它配方；若用户要换配方，须等用户重新选定后再编排。",
   ];
   if (detail.declaration) lines.push(`简介：${detail.declaration}`);
   if (detail.when) lines.push(`适用：${detail.when}`);
-  if (detail.hint) lines.push(`调味提示：${detail.hint}`);
+  if (detail.core) {
+    lines.push("核心思路：");
+    lines.push(detail.core);
+  }
+  if (detail.process) {
+    lines.push("设计流程：");
+    lines.push(formatRecipeFieldBlock(detail.process));
+  }
+  if (detail.principles) {
+    lines.push("原则：");
+    lines.push(formatRecipeFieldBlock(detail.principles));
+  }
+  if (!detail.core && !detail.process && !detail.principles && detail.hint) {
+    lines.push(`调味提示（旧字段）：${detail.hint}`);
+  }
   if (detail.seed?.steps.length) {
     const stepsJson = JSON.stringify(
       {
@@ -645,7 +914,14 @@ export function formatSelectedRecipeForAgent(detail: RecipeDetail): string {
   return lines.join("\n");
 }
 
-/** design-flow 一次注入：已选配方 + 组件池 */
+function formatRecipeFieldBlock(value: string | string[]): string {
+  if (Array.isArray(value)) {
+    return value.map((l) => `- ${l}`).join("\n");
+  }
+  return value;
+}
+
+/** design-flow 一次注入：已选配方 + 技能池 */
 export function formatDesignFlowContentBlocks(params: {
   selectedRecipe?: RecipeDetail | null;
   modules?: ModuleCatalog | null;
@@ -655,9 +931,9 @@ export function formatDesignFlowContentBlocks(params: {
   if (params.missingSelection) {
     blocks.push(
       [
-        "【导演】用户尚未手动选择。",
-        "禁止自行猜测或替用户选定导演。",
-        "请 askUser 请用户从可用导演中选择，或等待用户在界面选定后再编排。",
+        "【配方】用户尚未手动选择。",
+        "禁止自行猜测或替用户选定配方。",
+        "请 askUser 请用户从可用配方中选择，或等待用户在界面选定后再编排。",
       ].join("\n"),
     );
   } else if (params.selectedRecipe) {
@@ -735,6 +1011,21 @@ export function validateCreationFlow(
         );
       }
     }
+
+    if (mod?.params?.length) {
+      const missing = missingRequiredStepParams(step, mod);
+      if (missing.length > 0) {
+        const labels = missing
+          .map((key) => {
+            const spec = mod.params!.find((p) => p.key === key);
+            return spec ? `${key}（${spec.label}）` : key;
+          })
+          .join("、");
+        errors.push(
+          `「${step.id}」缺少必填编排参数：${labels}（须在 design-flow 钉齐后再执行）`,
+        );
+      }
+    }
   }
 
   return { ok: errors.length === 0, errors };
@@ -762,6 +1053,7 @@ export function formatCreationFlowForUser(
       const n = (seenName.get(s.name) ?? 0) + 1;
       seenName.set(s.name, n);
       const mod = decl.get(s.name);
+      const paramsMissing = missingRequiredStepParams(s, mod);
       return {
         order: i + 1,
         id: s.id,
@@ -770,6 +1062,8 @@ export function formatCreationFlowForUser(
         occurrence: n,
         declaration: mod?.declaration,
         repeatable: mod?.repeatable,
+        ...(s.params ? { params: s.params } : {}),
+        ...(paramsMissing.length > 0 ? { paramsMissing } : {}),
       };
     }),
   };

@@ -68,29 +68,30 @@ function buildToolLoopSystemPrompt(
 「不是规则怪谈，跳过 write-rules。」
 
 示例（好）：
-- 「用户已选导演且要 1v1 网恋 → design-flow 排出近期增量步骤（可调味）→ 认可后反复 design-step；不够再追加。」
+- 「用户已选配方且要 1v1 网恋 → design-flow 排出近期增量步骤（可调味）→ 认可后反复 design-step；不够再追加。」
 - 「尚无设计.创作流程 → run_worker(design-flow)；有未完成步骤 → design-step；steps 完但 status=open → 再 design-flow。」
-- 「Worker 集已 accept 且声明需要开局 → 调用 opening-generator 写开场白。」
+- 「运行规格已 accept 且声明需要开局 → 调用 opening-generator 写开场白。」
 
 示例（坏）：
 - 「调度 design-core / design-fixed（已废弃）。」
 - 「一次 design-flow 排死全程固定 DAG。」
-- 「跳过流程编排直接写满 Worker 集。」
+- 「跳过流程编排直接写满运行规格。」
 - 「默认先上世界模拟全套再问用户要什么。」
-- 「替用户改选 / 猜测导演。」
+- 「替用户改选 / 猜测配方。」
 
 在 reasoning / 可见 content 中请用 **正推句式** 写出调度理由；终止 tool 的 reason 字段同样用正推表述。
 
 ## design 阶段提示
 - 尚无「设计.创作流程」→ **优先 design-flow**（近期 horizon；status=open；未选则先请用户选）。
 - 流程已验收、还有未完成步骤 → **design-step**（一次一步）。
-- 已列步骤全验收但 **status=open** → 再 **design-flow**（追加生成规则/具体实例等，或设 closed）。
+- 已列步骤全验收但 **status=open** → 再 **design-flow**（追加生成规则/具体实例等并钉齐 params，或设 closed）。
+- 有编排参数的步骤缺必填 params → 先让 design-flow askUser，不要空壳跑 design-step。
 - 禁止 run_worker(design-core|design-fixed|design-worker|design-refine)——已废弃。
 - 不要重复问用户「想做什么」——意图已在 用户.需求。
-- Worker 集已 accept，且可用 worker 含 opening-generator，尚无开场产物 → opening-generator。
+- 运行规格已 accept，且可用 worker 含 opening-generator，尚无开场产物 → opening-generator。
 - 进 play 由用户手动决定。
 - 未声明开局、用户也未要求开场时，不要硬调 opening-generator。
-- **禁止**替用户猜测或改选导演。
+- **禁止**替用户猜测或改选配方。
 - **禁止**一次编排排死全程固定长链。
 当前 skill 可用 worker：
 ${workerLines}

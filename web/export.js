@@ -13,12 +13,12 @@ function formatExportTime(iso) {
 
 const KIND_LABELS = {
   user_input: "用户输入",
-  orchestrator_decision: "导演决策",
-  orchestrator_prompt: "导演询问",
-  agent_tool: "Agent Tool",
-  worker_running: "Worker 执行",
-  worker_output: "Worker 产出",
-  worker_stub: "Worker 占位",
+  orchestrator_decision: "编排器决策",
+  orchestrator_prompt: "编排器询问",
+  agent_tool: "工具",
+  worker_running: "执行单元 · 执行",
+  worker_output: "执行单元 · 产出",
+  worker_stub: "执行单元 · 占位",
   system_info: "系统",
   error: "错误",
 };
@@ -39,7 +39,7 @@ export function sessionToMarkdown(view) {
 
   if (view.skillCatalog?.length) {
     const stageLabel = view.lifecycleStage === "play" ? "游玩" : "创作";
-    lines.push(`## ${stageLabel}能力清单`);
+    lines.push(`## ${stageLabel}技能清单`);
     lines.push("");
     for (const skill of view.skillCatalog) {
       const mark =

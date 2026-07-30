@@ -1,5 +1,9 @@
 # Book 存储模型
 
+> **状态：目标愿景（未完全实现）。**  
+> **现行实现**以 `src/types/book.ts`、`src/book/store.ts`、`src/types/book-session.ts` 与 [`run-snapshot.md`](./run-snapshot.md) 为准（扁平 `books/{id}.json` + `session.json` + run/instance 快照）。  
+> 下文 CardBook / PlayBook / designTrace 等为远期形态，**不要**按本文当当前磁盘契约写代码。
+
 ## 1. 定位
 
 Book = **长期项目容器**。Session = 一次打开的运行进程。黑板 = Session 内运行时 tag。

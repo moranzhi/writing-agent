@@ -1,31 +1,31 @@
 # 创作流程指南（Creation Playbook）
 
-> **文档层级：剧本 / 创作流程概念（非系统架构）。**  
+> **文档层级：工作流计划 / 创作流程概念（非系统架构）。**  
 > 系统模块与边界见 [`architecture.md`](./architecture.md)。
 
 ## 0. 内容在哪
 
 **设计方法（正推、三大步、表与副作用）** → **`design-orchestrator-guide.md`**（权威）。  
-**流程落地**在 skill 包（`orchestrator.md` + `design-intake`）。  
-写新包 → `skill-design-guide.md`（包格式薄层）→ `skills/.../orchestrator.md`。
+**流程落地**在 skill 包：`orchestrator.md` + `design-flow` / `design-step` + `modules/` / `recipes/`。  
+写新包 → `skill-design-guide.md`（包格式薄层）→ `skills/.../orchestrator.md`；清单见 `world-simulator-modules.md`。
 
 ---
 
 ## 1. 定位
 
 ```text
-Orchestrator 包     能力库 + manifest（静态）
+Orchestrator 包     技能库 + manifest（静态）
 黑板 tag            一次 Session 的实参（动态）
 Book                跨 Session：过程、资产、游玩
-设计.worker集       实例规格（JSON；accept 后 = Worker 声明）
+设计.worker集       运行规格（JSON；accept 后 = 执行单元声明）
 ```
 
 | 层 | 管什么 |
 |----|--------|
 | **运行相位** | `idle` / `running` / `waiting_user` — 系统在等什么 |
 | **业务 stage** | `design`（创作）→ `play`（游玩）→ `done` |
-| **Agent** | tool loop 内 invoke 哪个 worker |
-| **声明** | play 可调度哪些 ref；executor 读声明（非题材管道） |
+| **编排器** | tool loop 内 invoke 哪个执行单元 |
+| **运行规格** | play 可调度哪些 ref；executor 读声明（非题材管道） |
 | **Book** | 长期存储，见 `book-storage.md` |
 
 ---
@@ -33,18 +33,16 @@ Book                跨 Session：过程、资产、游玩
 ## 2. 默认包创作流
 
 ```text
-新建作品 → UI 引导 → 用户首句 → 创作单位逐步谈
-  → 宜：phase:core → 纲领类 fixed:* → worker:* → refine
-     （非死管道；可穿插，但禁止默认「先写完 worker 再填上下文」）
-  → 单位 = 已写出的 fixed:* / resident:* | worker:*（示例话题可问用户，非填空）
-  → 单位跑：只写 设计.worker集.草稿；讨论进 messages
-  → 用户接受 → 删本单位交互消息，只留产物；草稿保留
-  → ……谈完后终稿写 设计.worker集 → 验收后才可进 play
-  → （可选）开局 · 开场白 → 用户手动进游玩
-  → run：worker 按契约从黑板重装；acceptance=review 处停、压缩过程 tag
+新建作品 → UI 选配方 → 用户首句
+  → design-flow：排出近期 设计.创作流程（工作流计划 / 增量 DAG，status=open|closed）
+  → 反复 design-step：注入当前技能 modules/{id}/prompt.md + 依赖产物
+  → 不够则再 design-flow（可追加 / 反复调用 repeatable 技能）→ closed
+  → 收成 设计.worker集（运行规格）→ 验收后才可进 play
+  → （可选）opening-generator → 用户手动进游玩
+  → run：执行单元按契约从黑板重装；acceptance=review 处停、压缩过程 tag
 ```
 
-固定上下文 tag 的主收益是 **跨 worker 复用同一份正文**；写下游时仍依赖上游定稿（不能只报 tag 名省掉正文）。能省的是扯皮过程（验收折叠）。
+固定上下文 tag 的主收益是 **跨执行单元复用同一份正文**；写下游时仍依赖上游定稿（不能只报 tag 名省掉正文）。能省的是扯皮过程（验收折叠）。
 
 不再要求用户选择 skill 包；默认 orchestrator 见 `src/config/default-orchestrator.ts`。  
 方法细节见 **`design-orchestrator-guide.md` §7.2**。不要以「世界模拟器」为默认总形态。

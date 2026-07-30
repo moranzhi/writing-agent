@@ -27,12 +27,12 @@ const MSG_CLASS = {
 const MSG_LABEL = {
   user_input: "你",
   agent_tool: "工具",
-  orchestrator_decision: "导演",
-  orchestrator_thinking: "导演 · 思考",
-  orchestrator_prompt: "导演",
-  orchestrator_assessment: "导演 · 内容评价",
-  worker_running: "Worker",
-  worker_output: "Worker",
+  orchestrator_decision: "编排器",
+  orchestrator_thinking: "编排器 · 思考",
+  orchestrator_prompt: "编排器",
+  orchestrator_assessment: "编排器 · 内容评价",
+  worker_running: "执行单元",
+  worker_output: "执行单元",
   worker_questions: "提问",
   error: "错误",
   system_info: "系统",
@@ -924,7 +924,7 @@ function renderCreationFlowView(flowView) {
     return `<div class="review-parse-error" role="alert">
       <div class="review-parse-error-title">流程无法解析</div>
       <p>${esc(flowView.parseError)}</p>
-      <p class="review-parse-error-hint">需要 JSON：steps 数组，每步含 name（与可选 id）与 depends_on；可含 status=open|closed。</p>
+      <p class="review-parse-error-hint">需要 JSON：steps 数组，每步含 name（与可选 id）、depends_on、可选 params；可含 status=open|closed。</p>
     </div>`;
   }
   if (!flowView.steps?.length) return "";
@@ -957,9 +957,19 @@ function renderCreationFlowView(flowView) {
         s.id && s.id !== s.name
           ? `${esc(s.name)} <span class="flow-id">(${esc(s.id)})</span>`
           : esc(s.name);
+      const paramsText = formatFlowParams(s.params);
+      const paramsMissing =
+        s.paramsMissing?.length > 0
+          ? `<span class="flow-params-missing">缺参：${esc(s.paramsMissing.join("、"))}</span>`
+          : "";
+      const paramsHtml = paramsText
+        ? `<span class="flow-params">${esc(paramsText)}</span>`
+        : "";
       return `<li class="flow-step">
         <span class="flow-order">${esc(String(s.order))}</span>
         <span class="flow-name">${nameLabel}${occ}</span>
+        ${paramsHtml}
+        ${paramsMissing}
         <span class="flow-deps">依赖：${deps}</span>
       </li>`;
     })
@@ -971,6 +981,14 @@ function renderCreationFlowView(flowView) {
     ${statusHtml}
     <ol class="flow-steps">${rows}</ol>
   </section>`;
+}
+
+function formatFlowParams(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return "";
+  const parts = Object.entries(params)
+    .filter(([, v]) => v != null && String(v).trim() !== "")
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
+  return parts.length ? parts.join(" · ") : "";
 }
 
 function renderReviewFeedCard(review) {
@@ -1133,9 +1151,9 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         p.textContent = "游玩模式：Agent 将按 Worker 集调度，推进世界与叙事。";
       } else if (view.uiPrompt) {
         const recipeLine = view.selectedRecipe?.name
-          ? `\n\n已选导演：${view.selectedRecipe.name}`
+          ? `\n\n已选配方：${view.selectedRecipe.name}`
           : view.recipes?.length
-            ? "\n\n（请先在新建作品时选定导演）"
+            ? "\n\n（请先在新建作品时选定配方）"
             : "";
         p.textContent = `${view.uiPrompt}${recipeLine}`;
         p.classList.add("empty-intake");

@@ -177,7 +177,7 @@ export async function handleBooksApi(
     return true;
   }
 
-  /** 新建作品：导演一层选型（内部 = recipes catalog） */
+  /** 新建作品：配方一层选型（内部 = recipes catalog） */
   if (pathname === "/api/directors" && req.method === "GET") {
     const { DEFAULT_ORCHESTRATOR_ID } = await import(
       "../config/default-orchestrator.js"
@@ -202,7 +202,7 @@ export async function handleBooksApi(
       });
     } catch (err) {
       json(res, 404, {
-        error: err instanceof Error ? err.message : "未找到导演列表",
+        error: err instanceof Error ? err.message : "未找到配方列表",
       });
     }
     return true;
@@ -229,13 +229,13 @@ export async function handleBooksApi(
       });
     } catch (err) {
       json(res, 404, {
-        error: err instanceof Error ? err.message : "未找到能力包",
+        error: err instanceof Error ? err.message : "未找到技能包",
       });
     }
     return true;
   }
 
-  /** 默认导演包的能力池（编排备选） */
+  /** 默认配方包的技能池（编排备选） */
   if (pathname === "/api/modules" && req.method === "GET") {
     const { DEFAULT_ORCHESTRATOR_ID } = await import(
       "../config/default-orchestrator.js"
@@ -320,9 +320,9 @@ export async function handleBooksApi(
   if (pathname === "/api/books" && req.method === "POST") {
     const body = JSON.parse(await readBody(req)) as {
       title?: string;
-      /** 导演 Skill / 能力包 id（registry name） */
+      /** 编排器包 id（registry name） */
       orchestratorId?: string;
-      /** 用户手动选定的导演 id（内部 recipe） */
+      /** 用户手动选定的配方 id（内部 recipe） */
       recipeId?: string;
     };
     const skills = await listSkills();
@@ -332,7 +332,7 @@ export async function handleBooksApi(
       skills.find((s) => s.name === "world-simulator") ||
       skills[0];
     if (!director) {
-      json(res, 400, { error: "没有可用的导演 Skill（能力包）" });
+      json(res, 400, { error: "没有可用的编排器技能包" });
       return true;
     }
     const book = createBook({ title: body.title });

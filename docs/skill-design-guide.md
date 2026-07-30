@@ -1,11 +1,16 @@
 # Skill 设计指南（包格式薄层）
 
 > **文档层级：Skill 包格式薄层（非系统架构）。**  
-> 运行内核见 [`architecture.md`](./architecture.md)；创作方法见下。
+> 运行内核见 [`architecture.md`](./architecture.md)；创作方法见下。  
+> **现行磁盘布局**见 [`skills/dialogue/world-simulator/README.md`](../skills/dialogue/world-simulator/README.md)。
 
 **创作方法（三大步、表、自检、正推）** 的权威文档是：
 
 → **[`design-orchestrator-guide.md`](./design-orchestrator-guide.md)**
+
+能力 / 编排器清单：
+
+→ **[`world-simulator-modules.md`](./world-simulator-modules.md)**
 
 本文只保留：**如何在仓库里建包、Worker 集弱结构示例、与旧概念对照**。不要在本文重复长方法文。
 
@@ -14,10 +19,11 @@
 **设计顺序（概念）：**
 
 ```text
-1. 用户意图 → design-intake（按 design-orchestrator-guide）→ 设计.worker集 JSON
-2. 需要时合并 worker-templates 默认契约（仅 design 缺省）
-3. 用户验收 → 用户手动进 play
-4. play：按声明调度；表维护/副作用边沿触发
+1. 用户选配方 → design-flow 排出近期 设计.创作流程
+2. 反复 design-step（modules 能力切片）→ 收成 设计.worker集 JSON
+3. 需要时合并 worker-templates 默认契约（仅 design 缺省）
+4. 用户验收 → 用户手动进 play
+5. play：按声明调度；表维护/副作用边沿触发
 ```
 
 ---
@@ -36,9 +42,11 @@
 
 Worker 集不是闭集枚举，也不是逐步管道。方法见 `design-orchestrator-guide.md`。
 
-### 0.2 design-intake
+### 0.2 design-flow / design-step
 
-与用户对话，增量更新草稿，accept 后即实例规格。进 play **由用户手动决定**。
+与用户对话，经编排器能力编排与逐步执行，增量更新草稿，accept 后即实例规格。进 play **由用户手动决定**。
+
+旧名 `design-intake` 仅作兼容别名出现在部分代码注释中，**磁盘上已不存在**。
 
 ### 0.3 弱结构示例（JSON）
 

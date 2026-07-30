@@ -193,7 +193,7 @@ async function boot() {
     const data = await res.json();
     modulesCache = data.modules || [];
     document.getElementById("pack-label").textContent =
-      `导演包 · ${data.skillPackId || "—"} · ${modulesCache.length} 项`;
+      `配方包 · ${data.skillPackId || "—"} · ${modulesCache.length} 项`;
     renderList();
 
     const fromHash = decodeURIComponent((location.hash || "").replace(/^#/, ""));

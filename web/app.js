@@ -28,7 +28,7 @@ const $ = (id) => document.getElementById(id);
 
 const PHASE = { idle: "待命", running: "执行中", waiting_user: "等待你", done: "已完成", error: "出错" };
 const REASON = {
-  skill_selection: "选择能力包",
+  skill_selection: "选择配方",
   intake: "补充信息",
   input: "等待输入",
   approve_step: "确认执行",
@@ -748,7 +748,7 @@ function renderHeader(view, loading) {
   $("work-title").textContent = view.bookTitle ?? "未命名作品";
   const skill = displaySkillPackLabel(view.activeSkill) ||
     view.selectedRecipe?.name ||
-    "导演";
+    "配方";
   const phase = view.waitingReason
     ? REASON[view.waitingReason.kind] ?? view.phase
     : PHASE[view.phase] ?? view.phase;
@@ -988,10 +988,10 @@ async function populateDirectorSelect() {
     const directors = data.directors ?? [];
     sel.innerHTML = "";
     if (!directors.length) {
-      sel.innerHTML = `<option value="">暂无导演</option>`;
+      sel.innerHTML = `<option value="">暂无配方</option>`;
       if (desc) {
         desc.hidden = false;
-        desc.textContent = "尚未配置导演选项（recipes/catalog.yaml）。";
+        desc.textContent = "尚未配置配方选项（recipes/catalog.yaml）。";
       }
       return;
     }
@@ -1027,7 +1027,7 @@ async function createBook() {
   const title = $("input-book-title").value.trim() || "未命名作品";
   const recipeId = $("select-director")?.value?.trim();
   if (!recipeId) {
-    alert("请选择导演");
+    alert("请选择配方");
     return;
   }
   $("btn-create-book").disabled = true;

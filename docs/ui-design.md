@@ -1,10 +1,14 @@
 # Web UI 心流设计
 
+> **状态：PX1+ 目标态 / 体验北星。**  
+> **PX0 不做按本文大重构**；仅抄补存档/确认/选配方等缺口（见 [`px-roadmap.md`](./px-roadmap.md) WP-U）。  
+> 用户可见文案权威仍是 [`ui-glossary.md`](./ui-glossary.md)。
+
 ## 1. 定位
 
 Writing Agent 的 Web 界面是 **全屏创作工作台**，不是即时通讯客户端。
 
-**用户可见文案**（阶段名、Worker 名、气泡标题）须服从 **`ui-glossary.md`**：内部仍用 `design` / `design-core` 等 id，界面映射为「创作」「创作 · 核心」等中文。实现见 `src/server/display-labels.ts` 与 `web/display-labels.js`。
+**用户可见文案**（阶段名、Worker 名、气泡标题）须服从 **`ui-glossary.md`**：内部仍用 `design` / `design-flow` 等 id，界面映射为「创作」「创作 · 流程编排」等中文。实现见 `src/server/display-labels.ts` 与 `web/display-labels.js`。
 
 | 层 | 角色 |
 |----|------|
@@ -308,7 +312,7 @@ Continue 提交后：卡收起 → 系统 `running` → 回复摘要进对话流
 
 Worker / Agent 发问侧（对齐 Cursor AskQuestion：询问不阻断主产出）：
 
-- 总管 `ask_user`：**assessment 是主内容**；`questions` 挂在其下，用户可 Skip 并请总管基于现有信息继续。
+- 总管 `ask_user`：**assessment 是主内容**；`questions` 挂在其下，用户可 Skip 并请编排器基于现有信息继续。
 - Worker：优先 `outputs` + `askUser` 同时给出；有产物时追问挂在验收态下，用户可直接「接受目前产物」而不作答。仅完全无法产出时才阻塞提问。
 - 能推断选项时 **必须** 给 `options`；每项写成用户可直接采用或微调的**建议示范**（可含短场景钩子），禁止空泛「是 / 否」。
 - `editable` 默认 `true`；挂载题 `required` 默认 `false`。
