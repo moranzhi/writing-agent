@@ -9,16 +9,28 @@ import {
   CREATION_ACCEPTED_CONTENT_TAG,
   formatAcceptedContentForPrompt,
 } from "./creation-units.js";
+import { projectFragmentContent } from "./context-fragment.js";
+import {
+  buildHistoryFallback,
+  isDialogueHistoryRef,
+  projectDialogueHistory,
+  DIALOGUE_HISTORY_TAG,
+} from "./dialogue-history.js";
 
 export type ContextSegmentTier = "static" | "dynamic";
 
 export type ContextSegmentDef = {
   id: string;
+  /** 缓存提示；有序拼装时不再按 tier 重排 */
   tier: ContextSegmentTier;
   tags: string[];
   label?: string;
   /** latest | concat | tail_lines_N */
   policy?: string;
+  /** 不读黑板，直接注入（如 worker.persona） */
+  inline?: string;
+  /** context-order 投影级别：full | summary | fields | fixed */
+  projection?: string;
 };
 
 export function parseContextSegments(raw: unknown): ContextSegmentDef[] {
@@ -32,13 +44,16 @@ export function parseContextSegments(raw: unknown): ContextSegmentDef[] {
     const tags = Array.isArray(r.tags)
       ? r.tags.filter((t): t is string => typeof t === "string" && t.trim()).map((t) => t.trim())
       : [];
-    if (!id || tags.length === 0) continue;
+    const inline = typeof r.inline === "string" ? r.inline.trim() : undefined;
+    if (!id || (tags.length === 0 && !inline)) continue;
     out.push({
       id,
       tier,
       tags,
       label: typeof r.label === "string" ? r.label.trim() : undefined,
       policy: typeof r.policy === "string" ? r.policy.trim() : undefined,
+      inline: inline || undefined,
+      projection: typeof r.projection === "string" ? r.projection.trim() : undefined,
     });
   }
   return out;
@@ -78,18 +93,48 @@ function formatSegmentBody(
   blackboard: Blackboard,
   inputMerge: BlackboardInputMerge,
 ): string {
+  if (segment.inline?.trim()) {
+    return applyProjection(segment.inline.trim(), segment.projection);
+  }
   const parts: string[] = [];
   for (const tag of segment.tags) {
-    let content = readTagContent(tag, inputs, blackboard, inputMerge);
-    if (!content) continue;
-    if (tag === CREATION_ACCEPTED_CONTENT_TAG) {
-      content = formatAcceptedContentForPrompt(content);
+    let content: string;
+    if (isDialogueHistoryRef(tag)) {
+      content = resolveDialogueHistory(inputs, blackboard, inputMerge);
+      content = projectDialogueHistory(content, segment.projection);
+    } else {
+      content = readTagContent(tag, inputs, blackboard, inputMerge);
+      if (!content) continue;
+      if (tag === CREATION_ACCEPTED_CONTENT_TAG) {
+        content = formatAcceptedContentForPrompt(content);
+      }
+      content = applyPolicy(content, segment.policy);
+      content = applyProjection(content, segment.projection);
     }
-    content = applyPolicy(content, segment.policy);
     if (!content.trim()) continue;
     parts.push(content.trim());
   }
   return parts.join("\n\n");
+}
+
+function resolveDialogueHistory(
+  inputs: Record<string, string>,
+  blackboard: Blackboard,
+  inputMerge: BlackboardInputMerge,
+): string {
+  const direct =
+    readTagContent(DIALOGUE_HISTORY_TAG, inputs, blackboard, inputMerge) ||
+    readTagContent("对话历史", inputs, blackboard, inputMerge);
+  return buildHistoryFallback({
+    dialogueHistory: direct,
+    eventStream: readTagContent("运行.事件流", inputs, blackboard, "concat"),
+    latestUser: readTagContent("用户.最新输入", inputs, blackboard, inputMerge),
+  });
+}
+
+function applyProjection(content: string, projection?: string): string {
+  if (!projection || projection === "full") return content;
+  return projectFragmentContent(content, projection);
 }
 
 /**
@@ -124,8 +169,6 @@ export function assembleWorkerContext(params: {
     );
   }
 
-  const staticSegs = segments.filter((s) => s.tier === "static");
-  const dynamicSegs = segments.filter((s) => s.tier === "dynamic");
   const blocks: string[] = [];
 
   const render = (seg: ContextSegmentDef) => {
@@ -138,8 +181,8 @@ export function assembleWorkerContext(params: {
     }
   };
 
-  for (const seg of staticSegs) render(seg);
-  for (const seg of dynamicSegs) render(seg);
+  // 严格按 segments 数组顺序（投影排序表顺序）；不再按 static/dynamic 重排
+  for (const seg of segments) render(seg);
 
   // 定稿摘要：若未在 segments 中声明，仍附在末尾
   const brief = params.inputs[CONTEXT_BRIEF_TAG]?.trim();

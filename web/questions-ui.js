@@ -73,6 +73,10 @@ export function getActiveQuestions(view) {
     };
   }
   if (wr.kind === "review_artifact" && wr.questions?.length) {
+    const assessment =
+      typeof wr.assessment === "string" && wr.assessment.trim()
+        ? wr.assessment.trim()
+        : "";
     return {
       questions: normalizeQuestions(wr.questions).map((q) => ({
         ...q,
@@ -80,6 +84,7 @@ export function getActiveQuestions(view) {
       })),
       workerId: view.reviewArtifact?.workerId,
       pageSize,
+      assessment,
       optional: true,
       skipLabel: "跳过",
       dismissOnAccept: true,

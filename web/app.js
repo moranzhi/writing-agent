@@ -1,4 +1,4 @@
-import { renderWorkspace, updateLiveStreamPanel } from "./agent-ui.js";
+import { renderWorkspace, updateLiveStreamPanel, resetRailChrome } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
 import { displaySkillPackLabel } from "./display-labels.js";
@@ -780,12 +780,17 @@ function renderEmpty() {
   $("btn-export").disabled = true;
   $("message-feed").innerHTML = `<p class="empty">点击左侧 + 新建作品</p>`;
   $("skill-picker").hidden = true;
-  $("agent-focus").innerHTML = "";
-  $("agent-timeline").innerHTML = "";
-  $("skill-guide-list").innerHTML = "";
-  const wsp = $("worker-set-user-panel");
-  if (wsp) wsp.innerHTML = "";
-  $("tool-trace").hidden = true;
+  const focus = $("agent-focus");
+  if (focus) focus.innerHTML = "";
+  const timeline = $("agent-timeline");
+  if (timeline) timeline.innerHTML = "";
+  const trace = $("tool-trace");
+  if (trace) {
+    trace.hidden = true;
+    trace.innerHTML = "";
+  }
+  document.body.classList.remove("is-reviewing");
+  resetRailChrome();
   hideBookMenu();
   document.body.dataset.lifecycle = "design";
   $("composer").innerHTML = `<div class="composer-idle">暂无打开的作品</div>`;

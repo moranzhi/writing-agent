@@ -32,7 +32,7 @@ function buildMainAgentSystemPrompt(
 4. 当信息不足时，使用 ask_user：assessment 是主内容（完备度评价）；questions 挂在其下且用户可跳过；一次 1～2 题。
 5. 当需要执行任务时，使用 run_worker，只指定 workerId。不要指定 inputTags 或 outputTags——Runtime 从 Worker Skill 读取。
 6. requiresApproval 表示运行 worker 前是否需要用户确认。代笔模式通常为 true。
-7. run_worker 可选 workerContext：{ "roleId": "A" }，用于 role-decide 等指定当前决策角色（Runtime 写入 世界.当前角色.id）。
+7. run_worker 可选 workerContext：{ "roleId": "A" } 或 { "chance": { "op":"roll", "expression":"2d6" } }（机遇裁定走程序，勿让模型编随机）。
 8. 你不能把未验收内容当作事实。
 9. 向用户提问是 worker 的技能（ask_user tool），不是独立 worker。编排器只在调度层提问。
 10. blackboardIndex 只有 tag 索引，不含正文 content。
@@ -175,9 +175,27 @@ export function parseMainAgentDecision(raw: string): MainAgentDecision {
   let workerContext: MainAgentDecision["workerContext"];
   const ctxRaw = obj.workerContext;
   if (ctxRaw && typeof ctxRaw === "object" && !Array.isArray(ctxRaw)) {
-    const roleIdRaw = (ctxRaw as Record<string, unknown>).roleId;
+    const ctx = ctxRaw as Record<string, unknown>;
+    const roleIdRaw = ctx.roleId;
     const roleId = typeof roleIdRaw === "string" ? roleIdRaw.trim() : undefined;
-    if (roleId) workerContext = { roleId };
+    const chanceRaw = ctx.chance;
+    const chance =
+      chanceRaw && typeof chanceRaw === "object" && !Array.isArray(chanceRaw)
+        ? (chanceRaw as Record<string, unknown>)
+        : undefined;
+    if (roleId || chance) {
+      workerContext = {
+        ...(roleId ? { roleId } : {}),
+        ...(chance ? { chance } : {}),
+      };
+    }
+  }
+  // 兼容 tool 扁平参数 chance（与 workerContext.chance 等价）
+  if (!workerContext?.chance && obj.chance && typeof obj.chance === "object") {
+    workerContext = {
+      ...(workerContext ?? {}),
+      chance: obj.chance as Record<string, unknown>,
+    };
   }
 
   const assessmentRaw =

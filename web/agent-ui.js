@@ -4,7 +4,7 @@ import { displayWorkerLabel, formatWorkerDisplayTitle } from "./display-labels.j
 
 const HIDE_KINDS = new Set(["worker_stub"]);
 
-/** 中间对话区不展示的内部调度消息（仅出现在右侧「历史」） */
+/** 中间对话区不展示的内部调度消息（仅出现在左侧「调度」） */
 const FEED_HIDDEN_KINDS = new Set([
   "agent_tool",
   "orchestrator_decision",
@@ -352,36 +352,83 @@ export function renderSkillPicker(_view, _onPick) {
   el.innerHTML = "";
 }
 
-let activeAgentTab = "timeline";
-let lastAutoTabReason = null;
-let userPinnedAgentTab = false;
+let activeRailTab = "books";
+/** 用户手动展开侧栏后，在本会话保持展开，直到再点收起 */
+let railUserExpanded = false;
 
-export function setAgentTab(tab, { user = false } = {}) {
-  activeAgentTab = tab;
-  if (user) userPinnedAgentTab = true;
-  const tabs = document.getElementById("agent-tabs");
-  tabs?.querySelectorAll(".agent-tab").forEach((btn) => {
-    const id = btn.getAttribute("data-tab");
-    const active = id === tab && !btn.hidden;
+export function setRailTab(tab, { expand = false } = {}) {
+  activeRailTab = tab === "log" ? "log" : "books";
+  if (expand) railUserExpanded = true;
+  document.querySelectorAll(".rail-tab").forEach((btn) => {
+    const id = btn.getAttribute("data-rail-tab");
+    const active = id === activeRailTab;
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-selected", active ? "true" : "false");
   });
-  for (const id of ["timeline", "review", "progress", "board"]) {
-    const panel = document.getElementById(`agent-panel-${id}`);
-    panel?.classList.toggle("active", tab === id);
-    panel?.toggleAttribute("hidden", tab !== id);
+  document.querySelectorAll(".rail-tab-panel").forEach((panel) => {
+    const id = panel.getAttribute("data-rail-panel");
+    const active = id === activeRailTab;
+    panel.classList.toggle("active", active);
+    panel.toggleAttribute("hidden", !active);
+  });
+  syncRailCollapse();
+}
+
+function wireRailChrome() {
+  const tabs = document.getElementById("rail-tabs");
+  if (tabs && !tabs.dataset.wired) {
+    tabs.dataset.wired = "1";
+    tabs.addEventListener("click", (e) => {
+      const btn = e.target.closest(".rail-tab");
+      if (!btn) return;
+      const tab = btn.getAttribute("data-rail-tab") ?? "books";
+      const collapsed = document.body.classList.contains("rail-collapsed");
+      setRailTab(tab, { expand: collapsed });
+    });
+  }
+  const toggle = document.getElementById("btn-rail-toggle");
+  if (toggle && !toggle.dataset.wired) {
+    toggle.dataset.wired = "1";
+    toggle.addEventListener("click", () => {
+      if (document.body.dataset.railCanCollapse !== "1") {
+        railUserExpanded = true;
+      } else {
+        railUserExpanded = !railUserExpanded;
+      }
+      syncRailCollapse();
+    });
   }
 }
 
-function wireAgentTabs() {
-  const tabs = document.getElementById("agent-tabs");
-  if (!tabs || tabs.dataset.wired) return;
-  tabs.dataset.wired = "1";
-  tabs.addEventListener("click", (e) => {
-    const btn = e.target.closest(".agent-tab");
-    if (!btn || btn.hidden) return;
-    setAgentTab(btn.getAttribute("data-tab") ?? "timeline", { user: true });
-  });
+function hasStartedCreation(view) {
+  if (!view?.id) return false;
+  if (view.lifecycleStage === "play") return true;
+  if (hasUserMessages(view)) return true;
+  const reason = view.waitingReason?.kind;
+  if (reason && reason !== "intake") return true;
+  return Boolean(view.reviewArtifact);
+}
+
+function syncRailCollapse(view) {
+  if (view) {
+    document.body.dataset.railCanCollapse = hasStartedCreation(view) ? "1" : "0";
+  }
+  const canCollapse = document.body.dataset.railCanCollapse === "1";
+  const collapsed = canCollapse && !railUserExpanded;
+  document.body.classList.toggle("rail-collapsed", collapsed);
+  const toggle = document.getElementById("btn-rail-toggle");
+  if (toggle) {
+    toggle.title = collapsed ? "展开侧栏" : "收起侧栏";
+    toggle.textContent = collapsed ? "›" : "‹";
+  }
+}
+
+export function resetRailChrome() {
+  railUserExpanded = true;
+  activeRailTab = "books";
+  document.body.dataset.railCanCollapse = "0";
+  document.body.classList.remove("rail-collapsed");
+  setRailTab("books");
 }
 
 function hasUserMessages(view) {
@@ -421,19 +468,18 @@ function shouldShowInFeed(msg, view) {
   return true;
 }
 
-function maybeAutoSwitchTab(view) {
-  const reason = view.waitingReason?.kind ?? null;
-  // 创作验收改在主对话展示，不再自动跳到侧栏「验收」Tab
-  if (reason === "review_artifact") {
-    if (lastAutoTabReason !== "review_artifact" && activeAgentTab === "review") {
-      setAgentTab("timeline");
-    }
-  } else if (!userPinnedAgentTab && reason === "worker_questions") {
-    if (lastAutoTabReason !== "worker_questions" && activeAgentTab === "review") {
-      setAgentTab("timeline");
-    }
+function maybeSyncRail(view) {
+  const started = hasStartedCreation(view);
+  const wasCollapsible = document.body.dataset.railCanCollapse === "1";
+  // 刚进入创作：默认缩进；未开写：展开并停在作品
+  if (started && !wasCollapsible) {
+    railUserExpanded = false;
   }
-  lastAutoTabReason = reason;
+  if (!started) {
+    railUserExpanded = true;
+    if (activeRailTab !== "books") setRailTab("books");
+  }
+  syncRailCollapse(view);
 }
 
 export function renderLifecycle(view) {
@@ -455,55 +501,9 @@ export function renderLifecycle(view) {
   });
 }
 
-export function renderSkillGuide(view) {
-  wireAgentTabs();
-  const progressTabBtn = document.getElementById("agent-tab-btn-progress");
-  const list = document.getElementById("skill-guide-list");
-  const workerPanel = document.getElementById("worker-set-user-panel");
-  if (!list) return;
-
-  const hasCatalog =
-    view.lifecycleStage === "design" && (view.skillCatalog?.length ?? 0) > 0;
-  const hasWorkerView = Boolean(
-    view.workerSetView?.workers?.length || view.workerSetView?.contextTags?.length,
-  );
-  const hasFlowView = Boolean(view.creationFlowView?.steps?.length);
-  const show = hasCatalog || hasWorkerView || hasFlowView;
-
-  if (progressTabBtn) {
-    progressTabBtn.hidden = !show;
-  }
-
-  if (workerPanel) {
-    const parts = [];
-    if (hasFlowView && view.lifecycleStage === "design") {
-      parts.push(renderCreationFlowView(view.creationFlowView));
-    }
-    if (hasWorkerView && view.lifecycleStage === "design") {
-      parts.push(renderWorkerSetUserView(view.workerSetView, { compact: true }));
-    }
-    workerPanel.innerHTML = parts.join("");
-    workerPanel.hidden = !workerPanel.innerHTML;
-  }
-
-  if (!show) {
-    list.innerHTML = "";
-    if (activeAgentTab === "progress") setAgentTab("timeline");
-    return;
-  }
-
-  list.innerHTML = (view.skillCatalog ?? [])
-    .map(
-      (s) => `
-    <div class="skill-guide-item ${s.status}">
-      <span class="skill-guide-dot"></span>
-      <div>
-        <div class="skill-guide-label">${esc(s.label)} <code>${esc(s.id)}</code>${s.runCount && s.runCount > 1 ? ` <span class="skill-guide-runs">×${s.runCount}</span>` : ""}</div>
-        <div class="skill-guide-purpose">${esc(s.purpose)}</div>
-      </div>
-    </div>`,
-    )
-    .join("");
+/** @deprecated 设计 Tab 已移除；保留空函数以免外部误调用 */
+export function renderSkillGuide(_view) {
+  wireRailChrome();
 }
 
 function renderTagList(tags, emptyLabel) {
@@ -535,18 +535,17 @@ function formatFocusBodyHtml(body) {
   if (typeof body === "string") {
     const t = body.trim();
     return t
-      ? `<pre class="ws-focus-body-text">${esc(t)}</pre>`
+      ? formatArtifactBodyHtml(t)
       : `<p class="ws-muted">（本块尚无正文，请在下方对话中补充）</p>`;
   }
   try {
-    const pretty = JSON.stringify(body, null, 2);
-    return `<pre class="json-pretty ws-focus-body-json" tabindex="0"><code>${highlightJson(pretty)}</code></pre>`;
+    return formatArtifactBodyHtml(JSON.stringify(body));
   } catch {
     return `<pre class="ws-focus-body-text">${esc(String(body))}</pre>`;
   }
 }
 
-function renderFocusUnitBanner(focusUnit) {
+function renderFocusUnitBanner(focusUnit, opts = {}) {
   if (!focusUnit) return "";
   const isContext =
     focusUnit.kind === "fixed" ||
@@ -558,12 +557,19 @@ function renderFocusUnitBanner(focusUnit) {
       : focusUnit.kind === "phase"
         ? "创作阶段"
         : "填充上下文";
-  const hint = isContext
-    ? "请重点审阅高亮区：这是本次要写入 / 验收的上下文正文。"
-    : focusUnit.kind === "worker"
-      ? "请重点审阅当前 Worker 规格；展示名应使用中文。"
-      : "请重点审阅当前创作单位。";
-  const bodyHtml = isContext || focusUnit.kind === "phase"
+  const showBody =
+    !opts.omitFocusBody &&
+    (isContext || focusUnit.kind === "phase") &&
+    focusUnit.body != null &&
+    String(focusUnit.body).trim();
+  const hint = opts.omitFocusBody
+    ? "下方卡片为本次待验收产物。"
+    : isContext
+      ? "请重点审阅：这是本次要写入 / 验收的上下文。"
+      : focusUnit.kind === "worker"
+        ? "请重点审阅当前运行规格。"
+        : "请重点审阅当前创作单位。";
+  const bodyHtml = showBody
     ? `<div class="ws-focus-body">${formatFocusBodyHtml(focusUnit.body)}</div>`
     : "";
   return `<section class="ws-section ws-focus-banner" data-focus-kind="${esc(focusUnit.kind)}" data-focus-id="${esc(focusUnit.id)}">
@@ -669,8 +675,10 @@ function renderWorkerSetUserView(userView, opts = {}) {
       ? focusId.slice("worker:".length)
       : "";
 
-  // 当前单位横幅：填充上下文时高亮正文；创造 worker 时标明焦点
-  const focusBanner = renderFocusUnitBanner(focusUnit);
+  // 当前单位横幅；验收卡可 omitFocusBody，避免与下方产物卡重复占位
+  const focusBanner = renderFocusUnitBanner(focusUnit, {
+    omitFocusBody: opts.omitFocusBody === true,
+  });
   if (focusBanner) parts.push(focusBanner);
 
   if (userView.headline) {
@@ -687,8 +695,86 @@ function renderWorkerSetUserView(userView, opts = {}) {
 
   if (userView.coreWorker) {
     parts.push(
-      `<section class="ws-section"><h4>核心 Worker</h4><p><code>${esc(userView.coreWorker)}</code> — 负责推剧情并产出本轮实质内容</p></section>`,
+      `<section class="ws-section"><h4>核心执行单元</h4><p><code>${esc(userView.coreWorker)}</code> — 负责推剧情并产出本轮实质内容</p></section>`,
     );
+  }
+
+  if (userView.playSlots?.length) {
+    const chips = userView.playSlots
+      .map((s) => {
+        const on = s.enabled ? "ws-slot-on" : "ws-slot-off";
+        const state = s.enabled ? "开" : "关";
+        return `<span class="ws-slot-chip ${on}" title="${esc(s.ref)}">${esc(s.label)} · ${state}</span>`;
+      })
+      .join("");
+    parts.push(
+      `<section class="ws-section"><h4>游玩槽位</h4><div class="ws-slot-row">${chips}</div></section>`,
+    );
+  }
+
+  if (userView.contextOrder?.slots?.length) {
+    const editable = opts.editable === true && Boolean(opts.sessionId);
+    const orderParts = [];
+    if (userView.contextOrder.brief) {
+      orderParts.push(`<p>${esc(userView.contextOrder.brief)}</p>`);
+    }
+    if (userView.contextOrder.synthesized) {
+      orderParts.push(
+        `<p class="ws-muted ws-order-hint">尚未写入规格；调整顺序将保存为「上下文投影排序」并合并进 Worker 集（若已有）。</p>`,
+      );
+    } else if (editable) {
+      orderParts.push(
+        `<p class="ws-muted ws-order-hint">扁平投影序：↑↓ 调整位置；「对话.历史」是可投影标签（改 projection 裁剪长度）；也可移到历史前/后。</p>`,
+      );
+    }
+    for (const slot of userView.contextOrder.slots) {
+      const title = slot.label || slot.ref;
+      const inserts = Array.isArray(slot.inserts) ? slot.inserts : null;
+      if (editable && inserts?.length) {
+        const rows = inserts
+          .map((ins) => {
+            const isHist = Boolean(ins.isHistory) || ins.ref === "对话.历史";
+            const histBtns = isHist
+              ? ""
+              : `<button type="button" class="btn-mini" data-ctx-order="set_anchor" data-anchor="pre_history" title="移到历史前">史前</button>
+                <button type="button" class="btn-mini" data-ctx-order="set_anchor" data-anchor="post_history" title="移到历史后">史后</button>`;
+            return `<li class="ctx-order-row${isHist ? " ctx-order-history" : ""}" data-slot-ref="${esc(slot.ref)}" data-index="${esc(String(ins.index))}">
+              <span class="ctx-order-line">${esc(ins.line || "")}</span>
+              <span class="ctx-order-actions">
+                <button type="button" class="btn-mini" data-ctx-order="move" data-delta="-1" title="上移">↑</button>
+                <button type="button" class="btn-mini" data-ctx-order="move" data-delta="1" title="下移">↓</button>
+                ${histBtns}
+                <select class="ctx-order-proj" data-ctx-order="set_projection" title="投影级别">
+                  ${["fixed", "summary", "fields", "full"]
+                    .map(
+                      (p) =>
+                        `<option value="${p}" ${p === ins.projection ? "selected" : ""}>${p}</option>`,
+                    )
+                    .join("")}
+                </select>
+              </span>
+            </li>`;
+          })
+          .join("");
+        orderParts.push(
+          `<h5 class="ws-subhead">${esc(title)}</h5><ul class="ctx-order-list">${rows}</ul>`,
+        );
+      } else {
+        const lis = (slot.lines || [])
+          .map((l) => `<li>${esc(l)}</li>`)
+          .join("");
+        if (lis) {
+          orderParts.push(
+            `<h5 class="ws-subhead">${esc(title)}</h5><ul class="artifact-list">${lis}</ul>`,
+          );
+        }
+      }
+    }
+    if (orderParts.length) {
+      parts.push(
+        `<section class="ws-section ws-context-order"><h4>上下文投影排序${editable ? " · 可编排" : ""}</h4>${orderParts.join("")}</section>`,
+      );
+    }
   }
 
   if (!compact && userView.reasoning) {
@@ -856,43 +942,978 @@ function renderWorkerSetUserView(userView, opts = {}) {
   return `<div class="ws-user-view">${parts.join("")}</div>`;
 }
 
-/** 尝试把正文美化为缩进 JSON；失败则原样 pre */
-function formatArtifactBodyHtml(body) {
-  const trimmed = (body || "").trim();
-  if (!trimmed) {
-    return `<p class="empty-sm">（无正文）</p>`;
-  }
+const ARTIFACT_TITLE_KEYS = [
+  "名",
+  "显示名",
+  "块id",
+  "段id",
+  "rule_id",
+  "pool_id",
+  "映射id",
+  "id",
+  "key",
+  "字段名",
+  "label",
+  "ref",
+  "title",
+];
 
-  const tryParse = (text) => {
+const ARTIFACT_SKIP_KEYS = new Set(["schema", "schema_version"]);
+
+/** 剥 markdown 代码围栏，便于从验收正文里取出 JSON */
+function stripCodeFences(text) {
+  let t = String(text || "").trim();
+  t = t.replace(/^```(?:json|yaml|yml)?\s*\n?/i, "");
+  t = t.replace(/\n?```\s*$/i, "");
+  return t.trim();
+}
+
+/** 验收正文常为 `## tag\\n\\n{json}` 多段拼接 */
+function splitTaggedArtifactSections(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return [];
+  const re = /^##\s+(.+?)\s*$/gm;
+  const hits = [];
+  let m;
+  while ((m = re.exec(trimmed))) {
+    hits.push({ title: m[1].trim(), index: m.index, headerEnd: m.index + m[0].length });
+  }
+  if (!hits.length) return [{ title: "", content: trimmed }];
+  return hits.map((h, i) => {
+    const end = i + 1 < hits.length ? hits[i + 1].index : trimmed.length;
+    return { title: h.title, content: trimmed.slice(h.headerEnd, end).trim() };
+  });
+}
+
+function tryParseJsonDoc(text) {
+  const tryParse = (s) => {
     try {
-      return JSON.parse(text);
+      return JSON.parse(s);
     } catch {
       return null;
     }
   };
+  const cleaned = stripCodeFences(text);
+  let parsed = tryParse(cleaned);
+  if (parsed != null) return parsed;
+  const objStart = cleaned.indexOf("{");
+  const objEnd = cleaned.lastIndexOf("}");
+  if (objStart >= 0 && objEnd > objStart) {
+    parsed = tryParse(cleaned.slice(objStart, objEnd + 1));
+    if (parsed != null) return parsed;
+  }
+  const arrStart = cleaned.indexOf("[");
+  const arrEnd = cleaned.lastIndexOf("]");
+  if (arrStart >= 0 && arrEnd > arrStart) {
+    parsed = tryParse(cleaned.slice(arrStart, arrEnd + 1));
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
 
-  let parsed = tryParse(trimmed);
-  if (!parsed) {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      parsed = tryParse(trimmed.slice(start, end + 1));
+function wrapArtifactRawDetails(rawText) {
+  const pretty = (() => {
+    const parsed = tryParseJsonDoc(rawText);
+    if (parsed != null) return JSON.stringify(parsed, null, 2);
+    return String(rawText || "").trim();
+  })();
+  const body = pretty.startsWith("{") || pretty.startsWith("[")
+    ? `<code>${highlightJson(pretty)}</code>`
+    : esc(pretty);
+  return `<details class="artifact-raw"><summary>原始 JSON</summary><pre class="json-pretty" tabindex="0">${body}</pre></details>`;
+}
+
+function clampPreviewText(text, max = 140) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/** 从产物对象抽出卡片预览：标题 / 摘要 / 徽章 / 分数 pill */
+function summarizeArtifactDoc(doc, tagTitle = "") {
+  if (Array.isArray(doc)) {
+    return {
+      title: tagTitle || "列表产物",
+      brief: `${doc.length} 条记录`,
+      chipsHtml: "",
+      scoresHtml: "",
+    };
+  }
+  const title =
+    tagTitle ||
+    (typeof doc.技能 === "string" && doc.技能.trim()) ||
+    (typeof doc.brief === "string" && clampPreviewText(doc.brief, 40)) ||
+    doc.schema ||
+    "产物";
+  let brief = "";
+  if (typeof doc.brief === "string" && doc.brief.trim()) {
+    brief = clampPreviewText(doc.brief, 160);
+  } else if (typeof doc.正文 === "string") {
+    brief = clampPreviewText(doc.正文, 160);
+  } else if (doc.正文 && typeof doc.正文 === "object") {
+    const body = doc.正文;
+    const kernel = body.美学纲领?.体验内核 || body.体验内核;
+    if (typeof kernel === "string") brief = clampPreviewText(kernel, 160);
+    else {
+      const keys = Object.keys(body).slice(0, 5);
+      brief = keys.length ? `含：${keys.join("、")}` : "";
+    }
+  } else if (Array.isArray(doc.真值)) {
+    brief = `真值 ${doc.真值.length} 项` + (doc.side_effects ? ` · 副作用 ${doc.side_effects.length}` : "");
+  } else if (doc.play_slots) {
+    brief = "游玩槽位配置";
+  }
+
+  const chips = [];
+  const stability = doc.稳变 || doc.稳定 || doc.stability;
+  if (stability) chips.push(`<span class="ws-badge ws-badge-continue">${esc(String(stability))}</span>`);
+  if (Array.isArray(doc.mount)) {
+    for (const m of doc.mount.slice(0, 3)) {
+      chips.push(`<span class="ws-slot-chip ws-slot-on">${esc(String(m))}</span>`);
+    }
+    if (doc.mount.length > 3) {
+      chips.push(`<span class="ws-muted">+${doc.mount.length - 3}</span>`);
     }
   }
-  if (!parsed) {
-    const start = trimmed.indexOf("[");
-    const end = trimmed.lastIndexOf("]");
-    if (start >= 0 && end > start) {
-      parsed = tryParse(trimmed.slice(start, end + 1));
-    }
+  const 自评 = doc.自评;
+  let scoresHtml = "";
+  if (自评 && typeof 自评 === "object" && Array.isArray(自评.维度)) {
+    const pills = 自评.维度
+      .map((d) => {
+        if (!d || typeof d !== "object") return "";
+        const name = d.名 || d.维度 || "?";
+        const pct = parseCompleteness(d.分数);
+        if (pct == null) return "";
+        return `<span class="pct-pill tone-${pctTone(pct)}">${esc(String(name))} ${Math.round(pct)}%</span>`;
+      })
+      .filter(Boolean);
+    if (pills.length) scoresHtml = pills.join("");
+  }
+  return {
+    title: String(title),
+    brief,
+    chipsHtml: chips.join(""),
+    scoresHtml,
+  };
+}
+
+function renderArtifactCompactCard(doc, tagTitle, rawSlice, opts = {}) {
+  const meta = summarizeArtifactDoc(doc, tagTitle);
+  const full =
+    renderKnownArtifactHtml(doc, {
+      embed: true,
+      hideAskSidecar: opts.hideAskSidecar === true,
+    }) || renderStructuredDocHtml(doc);
+  const raw = rawSlice ? wrapArtifactRawDetails(rawSlice) : "";
+  const metaRow = [meta.chipsHtml, meta.scoresHtml].filter(Boolean).join("");
+  const openAttr = opts.open ? " open" : "";
+  return `<details class="artifact-compact"${openAttr}>
+    <summary class="artifact-compact-sum">
+      <div class="artifact-compact-row">
+        <div class="artifact-compact-main">
+          <span class="artifact-compact-title">${esc(meta.title)}</span>
+          ${metaRow ? `<div class="artifact-compact-meta">${metaRow}</div>` : ""}
+          ${meta.brief ? `<p class="artifact-compact-preview">${esc(meta.brief)}</p>` : ""}
+        </div>
+        <span class="artifact-compact-toggle" aria-hidden="true"></span>
+      </div>
+    </summary>
+    <div class="artifact-compact-body">${full}${raw}</div>
+  </details>`;
+}
+
+function renderPlainCompactCard(title, content, opts = {}) {
+  const preview = clampPreviewText(content, 160);
+  const openAttr = opts.open ? " open" : "";
+  return `<details class="artifact-compact"${openAttr}>
+    <summary class="artifact-compact-sum">
+      <div class="artifact-compact-row">
+        <div class="artifact-compact-main">
+          <span class="artifact-compact-title">${esc(title || "产物")}</span>
+          ${preview ? `<p class="artifact-compact-preview">${esc(preview)}</p>` : ""}
+        </div>
+        <span class="artifact-compact-toggle" aria-hidden="true"></span>
+      </div>
+    </summary>
+    <div class="artifact-compact-body"><pre class="review-feed-plain">${esc(content)}</pre></div>
+  </details>`;
+}
+
+/** 紧凑卡片：预览 + 展开详情；多 tag 各一张。opts.defaultOpen：验收时默认展开吃满阅读区 */
+function formatArtifactBodyHtml(body, opts = {}) {
+  const trimmed = (body || "").trim();
+  if (!trimmed) {
+    return `<p class="empty-sm">（无正文）</p>`;
+  }
+  const cardOpts = {
+    open: opts.defaultOpen === true,
+    hideAskSidecar: opts.hideAskSidecar === true,
+  };
+
+  const sections = splitTaggedArtifactSections(trimmed);
+  const hasTagHeaders = sections.length > 1 || (sections.length === 1 && sections[0].title);
+
+  if (hasTagHeaders) {
+    const cards = sections.map((sec) => {
+      const parsed = tryParseJsonDoc(sec.content);
+      if (parsed != null && typeof parsed === "object") {
+        return renderArtifactCompactCard(parsed, sec.title, sec.content, cardOpts);
+      }
+      return renderPlainCompactCard(sec.title || "产物", sec.content, cardOpts);
+    });
+    return `<div class="artifact-compact-list">${cards.join("")}</div>`;
   }
 
+  const parsed = tryParseJsonDoc(trimmed);
   if (parsed != null && typeof parsed === "object") {
-    const pretty = JSON.stringify(parsed, null, 2);
-    return `<pre class="json-pretty" tabindex="0"><code>${highlightJson(pretty)}</code></pre>`;
+    return `<div class="artifact-compact-list">${renderArtifactCompactCard(parsed, "", trimmed, cardOpts)}</div>`;
   }
 
-  return `<pre class="review-feed-plain">${esc(trimmed)}</pre>`;
+  return `<div class="artifact-compact-list">${renderPlainCompactCard("产物", trimmed, cardOpts)}</div>`;
+}
+
+/** 已知产物 → 分节卡片；未知对象走通用结构化渲染 */
+function renderKnownArtifactHtml(doc, opts = {}) {
+  if (Array.isArray(doc)) {
+    return `<div class="artifact-friendly">${renderStructuredValueHtml(doc, 0)}</div>`;
+  }
+  const schema = doc.schema;
+  if (schema === "settlement.v1" || isSettlementLike(doc)) {
+    return renderSettlementSectionsHtml(doc);
+  }
+  if (schema === "context-fragment.v1" || isContextFragmentLike(doc)) {
+    return renderContextFragmentHtml(doc, opts);
+  }
+  if (schema === "context-order.v1" || Array.isArray(doc.slots)) {
+    const orderHtml = renderContextOrderHtml(doc);
+    if (orderHtml) return orderHtml;
+  }
+  if (Array.isArray(doc.真值) || Array.isArray(doc.side_effects) || doc.维护语句约定) {
+    return renderVariableDesignHtml(doc);
+  }
+  if (doc.play_slots && typeof doc.play_slots === "object") {
+    return renderPlaySlotsHtml(doc);
+  }
+  return null;
+}
+
+function renderPlaySlotsHtml(doc) {
+  const slotLabels = {
+    gm: "主世界层",
+    "world-simulator": "主世界层",
+    narrator: "叙事转述",
+    perspective: "角色视角",
+    chance: "机遇裁定",
+  };
+  const slots = doc.play_slots;
+  const keys = Object.keys(slots);
+  const chips = keys
+    .map((k) => {
+      const on = Boolean(slots[k]);
+      const label = slotLabels[k] || k;
+      return `<span class="ws-slot-chip ${on ? "ws-slot-on" : "ws-slot-off"}">${esc(label)}</span>`;
+    })
+    .join("");
+  const parts = [];
+  if (doc.brief) {
+    parts.push(`<section class="ws-section"><h4>概要</h4><p>${esc(String(doc.brief))}</p></section>`);
+  }
+  parts.push(
+    `<section class="ws-section"><h4>游玩槽位</h4><div class="ws-slot-row">${chips}</div></section>`,
+  );
+  const rest = { ...doc };
+  delete rest.play_slots;
+  delete rest.brief;
+  delete rest.schema;
+  const extra = Object.keys(rest).filter((k) => rest[k] != null && rest[k] !== "");
+  if (extra.length) {
+    parts.push(
+      `<section class="ws-section"><h4>其它</h4>${renderStructuredValueHtml(rest, 0)}</section>`,
+    );
+  }
+  return `<div class="artifact-friendly artifact-play-slots">${parts.join("")}</div>`;
+}
+
+function isContextFragmentLike(doc) {
+  return (
+    typeof doc.brief === "string" &&
+    (doc.正文 != null || doc.body != null) &&
+    (typeof doc.技能 === "string" || doc.schema === "context-fragment.v1")
+  );
+}
+
+function renderContextFragmentHtml(doc, opts = {}) {
+  const parts = [];
+  // 紧凑卡外层已展示 brief/挂载，展开内不再重复头区
+  if (!opts.embed) {
+    const metaChips = [];
+    if (doc.技能) metaChips.push(`<span class="ws-badge ws-badge-review">${esc(String(doc.技能))}</span>`);
+    const stability = doc.稳变 || doc.稳定 || doc.stability;
+    if (stability) metaChips.push(`<span class="ws-badge ws-badge-continue">${esc(String(stability))}</span>`);
+    if (Array.isArray(doc.mount) && doc.mount.length) {
+      for (const m of doc.mount) {
+        metaChips.push(`<span class="ws-slot-chip ws-slot-on">${esc(String(m))}</span>`);
+      }
+    }
+    if (doc.brief || metaChips.length) {
+      parts.push(`<header class="artifact-hero">
+      ${metaChips.length ? `<div class="artifact-chip-row">${metaChips.join("")}</div>` : ""}
+      ${doc.brief ? `<p class="artifact-brief">${esc(String(doc.brief))}</p>` : ""}
+    </header>`);
+    }
+  }
+
+  const body = doc.正文 != null ? doc.正文 : doc.body;
+  if (typeof body === "string" && body.trim()) {
+    parts.push(
+      `<section class="artifact-block"><h4>正文</h4>${renderProseHtml(body)}</section>`,
+    );
+  } else if (body && typeof body === "object") {
+    const specialty = renderSpecialtyBodyHtml(body, doc.技能);
+    if (specialty) {
+      parts.push(specialty);
+    } else {
+      parts.push(
+        `<section class="artifact-block artifact-body-root"><h4>正文</h4>${renderStructuredValueHtml(body, 0)}</section>`,
+      );
+    }
+  }
+
+  // 自评/追问已挂询问卡时：产物内保留评分条，追问不重复展示
+  const hideAsk = opts.hideAskSidecar === true;
+  const scoreHtml = renderSelfScoreHtml(doc.自评);
+  if (scoreHtml) parts.push(scoreHtml);
+
+  if (!hideAsk) {
+    const probeHtml = renderProbeHtml(doc.追问);
+    if (probeHtml) parts.push(probeHtml);
+
+    const openQs = Array.isArray(doc.开放问题) ? doc.开放问题 : [];
+    if (openQs.length) {
+      parts.push(
+        `<section class="artifact-block"><h4>开放问题</h4><ul class="artifact-list">${openQs
+          .map((l) => `<li>${esc(String(l))}</li>`)
+          .join("")}</ul></section>`,
+      );
+    }
+  }
+  if (!parts.length) return null;
+  return `<div class="artifact-friendly artifact-context-fragment">${parts.join("")}</div>`;
+}
+
+/** 美学纲领等：顶层板块并排 mosaic，子项用瓷砖网格 */
+function renderSpecialtyBodyHtml(body, skill) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const looksAesthetics =
+    body.设定逻辑 != null ||
+    body.交互范式 != null ||
+    body.美学纲领 != null ||
+    (typeof skill === "string" && skill.includes("美学"));
+  if (!looksAesthetics) return "";
+
+  const order = ["设定逻辑", "交互范式", "美学纲领"];
+  const used = new Set();
+  const parts = [];
+  for (const key of order) {
+    if (body[key] == null) continue;
+    used.add(key);
+    const wide = key === "美学纲领";
+    parts.push(
+      `<section class="af-panel${wide ? " af-panel-wide" : ""}"><h4>${esc(key)}</h4>${renderAestheticsNodeHtml(body[key], key, 0)}</section>`,
+    );
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (used.has(k) || v == null || v === "") continue;
+    parts.push(
+      `<section class="af-panel"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, 0)}</section>`,
+    );
+  }
+  return parts.length ? `<div class="af-mosaic">${parts.join("")}</div>` : "";
+}
+
+function parseCompleteness(v) {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) {
+    if (v < 0 || v > 100) return null;
+    return v;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  const withPct = s.match(/^(\d+(?:\.\d+)?)\s*%$/);
+  if (withPct) return Math.max(0, Math.min(100, Number(withPct[1])));
+  const bare = s.match(/^(\d+(?:\.\d+)?)$/);
+  if (bare) {
+    const n = Number(bare[1]);
+    if (n >= 0 && n <= 100) return n;
+  }
+  return null;
+}
+
+function pctTone(pct) {
+  if (pct < 40) return "low";
+  if (pct < 70) return "mid";
+  return "high";
+}
+
+/** 统一百分比条：对齐 status-dot / badge 色阶 */
+function renderPctMeterHtml(pct, label = "完备度") {
+  if (pct == null || !Number.isFinite(pct)) return "";
+  const n = Math.max(0, Math.min(100, Math.round(pct)));
+  const tone = pctTone(n);
+  return `<div class="pct-meter tone-${tone}" role="meter" aria-valuenow="${n}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(label)} ${n}%">
+    <div class="pct-meter-head">
+      <span class="pct-meter-label">${esc(label)}</span>
+      <span class="pct-meter-value">${n}%</span>
+    </div>
+    <div class="pct-meter-track"><i style="width:${n}%"></i></div>
+  </div>`;
+}
+
+/** 瓷砖用迷你百分比（数字 + 细条），省纵向空间 */
+function renderMiniPctHtml(pct) {
+  if (pct == null || !Number.isFinite(pct)) return "";
+  const n = Math.max(0, Math.min(100, Math.round(pct)));
+  return `<span class="pct-mini tone-${pctTone(n)}" title="完备度 ${n}%"><b>${n}</b><i style="--p:${n}%"></i></span>`;
+}
+
+function extractNodePct(value) {
+  if (!value || typeof value !== "object") return null;
+  return parseCompleteness(value.完备度 ?? value.分数);
+}
+
+/** 短诊断块（结论/完备度/已知待探）适合瓷砖；散文对象必须通栏 */
+function isDiagnosticNode(value) {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value.结论 != null ||
+      value.完备度 != null ||
+      value.已知 != null ||
+      value.待探 != null)
+  );
+}
+
+function isProseHeavyObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (isDiagnosticNode(value)) return false;
+  const vals = Object.values(value).filter((x) => x != null && x !== "");
+  if (!vals.length) return false;
+  let prose = 0;
+  for (const x of vals) {
+    if (typeof x === "string" && (x.length > 36 || x.includes("\n"))) prose += 1;
+    else if (Array.isArray(x)) prose += 1;
+    else if (typeof x === "object" && !isDiagnosticNode(x)) prose += 1;
+  }
+  return prose >= Math.ceil(vals.length / 2);
+}
+
+function renderAfTile(title, value) {
+  const pct = extractNodePct(value);
+  const mini = pct != null ? renderMiniPctHtml(pct) : "";
+  let body = "";
+  if (value == null) {
+    body = `<span class="ws-muted">—</span>`;
+  } else if (typeof value !== "object") {
+    body = `<p class="af-tile-text">${esc(clampPreviewText(String(value), 100))}</p>`;
+  } else if (value.结论 != null || value.完备度 != null) {
+    const text = value.结论 != null ? String(value.结论) : "";
+    const basis = value.依据 ? `<span class="af-tile-sub">${esc(clampPreviewText(String(value.依据), 60))}</span>` : "";
+    body = `${text ? `<p class="af-tile-text">${esc(clampPreviewText(text, 90))}</p>` : ""}${basis}`;
+  } else if (value.已知 != null || value.待探 != null) {
+    body = `${value.已知 != null ? `<p class="af-tile-text">${esc(clampPreviewText(String(value.已知), 80))}</p>` : ""}
+      ${value.待探 != null && String(value.待探) !== "无" ? `<p class="af-tile-sub pending">${esc(clampPreviewText(`待探：${value.待探}`, 60))}</p>` : ""}`;
+  } else {
+    // 非诊断对象不应进瓷砖；通栏回退
+    return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(title)}${mini}</div>${renderAestheticsNodeHtml(value, title, 1)}</div>`;
+  }
+  return `<article class="af-tile"><header class="af-tile-head"><span class="af-tile-name">${esc(title)}</span>${mini}</header>${body}</article>`;
+}
+
+function isPctFieldKey(key) {
+  if (!key) return false;
+  return /完备度|分数|覆盖度|充分度|克制度|承重度|可维护|必要性|属性妥当|格式准确|契约符合|同真相|可开玩|完整度|进度/.test(
+    String(key),
+  );
+}
+
+function renderScalarOrPctHtml(value, keyHint) {
+  if (typeof value === "boolean") {
+    return `<span class="artifact-scalar">${value ? "是" : "否"}</span>`;
+  }
+  if (isPctFieldKey(keyHint) || (typeof value === "string" && /^\d+(\.\d+)?\s*%$/.test(value.trim()))) {
+    const pct = parseCompleteness(value);
+    if (pct != null) return renderPctMeterHtml(pct, keyHint || "完备度");
+  }
+  if (typeof value === "number" && isPctFieldKey(keyHint)) {
+    const pct = parseCompleteness(value);
+    if (pct != null) return renderPctMeterHtml(pct, keyHint);
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return renderProseHtml(String(value));
+  }
+  return `<span class="artifact-scalar">${esc(String(value))}</span>`;
+}
+
+function renderAestheticsNodeHtml(value, keyHint, depth) {
+  if (value == null || value === "") return `<span class="ws-muted">—</span>`;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return renderScalarOrPctHtml(value, keyHint);
+  }
+  if (Array.isArray(value)) return renderStructuredValueHtml(value, depth);
+
+  // 单点诊断：由上层 af-tile 承载；此处给非网格调用兜底
+  if (value.结论 != null || value.完备度 != null) {
+    return renderAfTile(keyHint || "项", value);
+  }
+  if (value.已知 != null || value.待探 != null) {
+    return renderAfTile(keyHint || "项", value);
+  }
+
+  // 美学纲领：体验内核通栏；诊断块可瓷砖；呈现要点等散文块通栏堆叠
+  if (keyHint === "美学纲领" || value.体验内核 != null) {
+    const parts = [];
+    if (value.体验内核 != null) {
+      parts.push(
+        `<div class="artifact-kernel qcard-assessment"><div class="artifact-aside-label">体验内核</div>${renderProseHtml(String(value.体验内核))}</div>`,
+      );
+    }
+    const rest = { ...value };
+    delete rest.体验内核;
+    const restEntries = Object.entries(rest).filter(([, v]) => v != null && v !== "");
+    if (restEntries.length) {
+      const tiles = restEntries.filter(([, v]) => isDiagnosticNode(v));
+      const prose = restEntries.filter(([, v]) => !isDiagnosticNode(v));
+      if (tiles.length) {
+        parts.push(
+          `<div class="af-tile-grid">${tiles.map(([k, v]) => renderAfTile(k, v)).join("")}</div>`,
+        );
+      }
+      if (prose.length) {
+        parts.push(
+          `<div class="af-stack">${prose
+            .map(([k, v]) => {
+              if (v && typeof v === "object" && !Array.isArray(v)) {
+                return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(k)}</div>${renderAestheticsNodeHtml(v, k, depth + 1)}</div>`;
+              }
+              return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(k)}</div>${renderScalarOrPctHtml(v, k)}</div>`;
+            })
+            .join("")}</div>`,
+        );
+      }
+    }
+    return parts.join("");
+  }
+
+  // 呈现要点等：子键多为长文 → 通栏 KV（标签在上）
+  if (keyHint === "呈现要点" || isProseHeavyObject(value)) {
+    return renderObjectKvHtml(value, depth);
+  }
+
+  if (depth > 4) return renderStructuredValueHtml(value, depth);
+
+  const entries = Object.entries(value).filter(([, v]) => v != null && v !== "");
+  if (!entries.length) return `<span class="ws-muted">（空）</span>`;
+
+  // 仅同构短诊断块进瓷砖网格
+  const allDiagnostic = entries.every(([, v]) => isDiagnosticNode(v));
+  if (allDiagnostic && entries.length >= 2) {
+    return `<div class="af-tile-grid">${entries.map(([k, v]) => renderAfTile(k, v)).join("")}</div>`;
+  }
+
+  // 混合：分组标题 + 内部再网格/kv（通栏）
+  const nestedGroups = entries.filter(
+    ([, v]) =>
+      v &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      !isDiagnosticNode(v),
+  );
+  if (nestedGroups.length >= 1 && depth < 3) {
+    return `<div class="af-stack">${entries
+      .map(([k, v]) => {
+        if (isDiagnosticNode(v)) {
+          return renderAfTile(k, v);
+        }
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(k)}</div>${renderAestheticsNodeHtml(v, k, depth + 1)}</div>`;
+        }
+        return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(k)}</div>${renderScalarOrPctHtml(v, k)}</div>`;
+      })
+      .join("")}</div>`;
+  }
+
+  const allLeaf = entries.every(
+    ([, v]) => v == null || typeof v !== "object" || Array.isArray(v),
+  );
+  if (allLeaf) {
+    return renderObjectKvHtml(value, depth);
+  }
+  return renderObjectKvHtml(value, depth);
+}
+
+function renderSelfScoreHtml(自评) {
+  if (!自评 || typeof 自评 !== "object") return "";
+  const dims = Array.isArray(自评.维度) ? 自评.维度 : [];
+  const bars = dims
+    .map((d) => {
+      if (!d || typeof d !== "object") return "";
+      const name = d.名 || d.维度 || d.name || "?";
+      const pct = parseCompleteness(d.分数);
+      const note = d.说明
+        ? `<p class="artifact-score-note">${esc(clampPreviewText(String(d.说明), 80))}</p>`
+        : "";
+      if (pct == null) {
+        return `<div class="artifact-score"><div class="pct-meter-head"><span class="pct-meter-label">${esc(String(name))}</span><span class="ws-muted">未评分</span></div>${note}</div>`;
+      }
+      return `<div class="artifact-score">${renderPctMeterHtml(pct, String(name))}${note}</div>`;
+    })
+    .filter(Boolean);
+  let weak = "";
+  if (自评.薄弱点) {
+    weak = `<p class="artifact-weak"><span class="ws-badge ws-badge-warn">薄弱点</span> ${esc(String(自评.薄弱点))}</p>`;
+  }
+  if (!bars.length && !weak) return "";
+  return `<section class="artifact-block artifact-scores-block"><h4>自评</h4><div class="artifact-scores af-score-grid">${bars.join("")}</div>${weak}</section>`;
+}
+
+function renderProbeHtml(追问) {
+  if (!追问 || typeof 追问 !== "object") return "";
+  const qs = Array.isArray(追问.题目) ? 追问.题目 : [];
+  const cards = [];
+  if (追问.导语) {
+    cards.push(`<p class="artifact-probe-lead">${esc(String(追问.导语))}</p>`);
+  }
+  qs.forEach((q, i) => {
+    if (!q || typeof q !== "object") return;
+    const letter = String.fromCharCode(65 + (i % 26));
+    const opts =
+      Array.isArray(q.建议选项) && q.建议选项.length
+        ? `<ul class="qcard-options artifact-probe-opts">${q.建议选项
+            .map((o, j) => {
+              const L = String.fromCharCode(65 + (j % 26));
+              return `<li class="qcard-opt"><span class="qcard-letter" aria-hidden="true">${L}</span><span class="qcard-label">${esc(String(o))}</span></li>`;
+            })
+            .join("")}</ul>`
+        : "";
+    const ex = q.示例 ? `<p class="qcard-optional-note">示例：${esc(String(q.示例))}</p>` : "";
+    cards.push(
+      `<div class="artifact-probe-q"><div class="qcard-prompt"><span class="artifact-q-idx">${letter}</span>${esc(String(q.问 || "?"))}</div>${opts}${ex}</div>`,
+    );
+  });
+  if (!cards.length) return "";
+  return `<section class="artifact-block artifact-probe-block"><h4>追问</h4>${cards.join("")}</section>`;
+}
+
+function renderContextOrderHtml(doc) {
+  if (!Array.isArray(doc.slots) || !doc.slots.length) return null;
+  const parts = [];
+  if (doc.brief) {
+    parts.push(
+      `<section class="ws-section ws-headline"><h4>概要</h4><p>${esc(String(doc.brief))}</p></section>`,
+    );
+  }
+  for (const slot of doc.slots) {
+    if (!slot || typeof slot !== "object") continue;
+    const title = slot.label || slot.ref || "槽";
+    const inserts = Array.isArray(slot.inserts) ? slot.inserts : [];
+    if (!inserts.length && Array.isArray(slot.order)) {
+      // 扁平序：直接是条目列表
+      const rows = slot.order
+        .map((i, idx) => renderContextInsertRow(i, idx))
+        .filter(Boolean);
+      if (rows.length) {
+        parts.push(
+          `<section class="ws-section"><h4>${esc(String(title))}</h4><ol class="artifact-order-list">${rows.join("")}</ol></section>`,
+        );
+      }
+      continue;
+    }
+    const rows = inserts
+      .slice()
+      .sort((a, b) => (Number(a?.order) || 0) - (Number(b?.order) || 0))
+      .map((i, idx) => renderContextInsertRow(i, idx))
+      .filter(Boolean);
+    if (rows.length) {
+      parts.push(
+        `<section class="ws-section"><h4>${esc(String(title))}</h4><ol class="artifact-order-list">${rows.join("")}</ol></section>`,
+      );
+    }
+  }
+  // 顶层扁平 slots 即 inserts
+  if (!parts.length && doc.slots.every((s) => s && (s.ref || s.anchor != null))) {
+    const rows = doc.slots.map((i, idx) => renderContextInsertRow(i, idx)).filter(Boolean);
+    if (rows.length) {
+      parts.push(
+        `<section class="ws-section"><h4>投影序</h4><ol class="artifact-order-list">${rows.join("")}</ol></section>`,
+      );
+    }
+  }
+  if (!parts.length) return null;
+  return `<div class="artifact-friendly artifact-context-order">${parts.join("")}</div>`;
+}
+
+function renderContextInsertRow(item, idx) {
+  if (item == null) return "";
+  if (typeof item !== "object") {
+    return `<li><span class="artifact-order-idx">${idx + 1}</span> ${esc(String(item))}</li>`;
+  }
+  const isHistory = item.ref === "对话.历史" || item.ref === "history";
+  const anchor =
+    item.anchor === "post_history" || item.anchor === "历史后"
+      ? "历史后"
+      : item.anchor === "pre_history" || item.anchor === "历史前"
+        ? "历史前"
+        : item.anchor
+          ? String(item.anchor)
+          : "";
+  const proj =
+    item.projection && item.projection !== "full" ? String(item.projection) : "";
+  const note = item.note ? String(item.note) : "";
+  const ref = item.ref || item.label || "?";
+  const meta = [anchor, proj].filter(Boolean).map((t) => `<span class="artifact-chip muted">${esc(t)}</span>`).join("");
+  return `<li class="${isHistory ? "is-history" : ""}"><span class="artifact-order-idx">${item.order ?? idx + 1}</span><span class="artifact-order-ref">${esc(String(ref))}</span>${meta}${note ? `<span class="ws-muted"> — ${esc(note)}</span>` : ""}</li>`;
+}
+
+function renderStructuredDocHtml(doc) {
+  if (Array.isArray(doc)) {
+    return `<div class="artifact-friendly">${renderStructuredValueHtml(doc, 0)}</div>`;
+  }
+  const parts = [];
+  if (typeof doc.brief === "string" && doc.brief.trim()) {
+    parts.push(
+      `<section class="ws-section ws-headline"><h4>概要</h4><p>${esc(doc.brief)}</p></section>`,
+    );
+  }
+  const body = { ...doc };
+  delete body.brief;
+  delete body.schema;
+  if (body.自评) {
+    const score = renderSelfScoreHtml(body.自评);
+    delete body.自评;
+    const rest = renderObjectSectionsHtml(body, 0);
+    if (rest) parts.push(rest);
+    if (score) parts.push(score);
+  } else {
+    const rest = renderObjectSectionsHtml(body, 0);
+    if (rest) parts.push(rest);
+  }
+  if (!parts.length) {
+    parts.push(renderStructuredValueHtml(doc, 0));
+  }
+  return `<div class="artifact-friendly">${parts.join("")}</div>`;
+}
+
+function renderObjectSectionsHtml(obj, depth) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return "";
+  const entries = Object.entries(obj).filter(
+    ([k, v]) => !ARTIFACT_SKIP_KEYS.has(k) && v != null && v !== "",
+  );
+  if (!entries.length) return "";
+  // 浅层：每键一节；深层：kv
+  if (depth === 0) {
+    return entries
+      .map(([k, v]) => {
+        if (k === "自评") return renderSelfScoreHtml(v);
+        if (k === "追问") return renderProbeHtml(v);
+        return `<section class="ws-section"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, depth + 1)}</section>`;
+      })
+      .join("");
+  }
+  return renderStructuredValueHtml(obj, depth);
+}
+
+function renderStructuredValueHtml(value, depth) {
+  if (value == null || value === "") return `<span class="ws-muted">—</span>`;
+  if (typeof value === "string") return renderProseHtml(value);
+  if (typeof value === "number" || typeof value === "boolean") {
+    return `<span class="artifact-scalar">${esc(String(value))}</span>`;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) return `<span class="ws-muted">（空）</span>`;
+    const allScalar = value.every(
+      (v) => v == null || ["string", "number", "boolean"].includes(typeof v),
+    );
+    if (allScalar) {
+      return `<ul class="artifact-list">${value
+        .map((v) => `<li>${esc(String(v))}</li>`)
+        .join("")}</ul>`;
+    }
+    return `<div class="artifact-cards af-tile-grid">${value
+      .map((item, i) => renderArrayItemCard(item, i, depth))
+      .join("")}</div>`;
+  }
+  if (typeof value === "object") {
+    if (depth > 5) {
+      return `<details class="artifact-raw nested"><summary>嵌套对象</summary><pre class="json-pretty"><code>${highlightJson(JSON.stringify(value, null, 2))}</code></pre></details>`;
+    }
+    return renderObjectKvHtml(value, depth);
+  }
+  return `<span class="artifact-scalar">${esc(String(value))}</span>`;
+}
+
+function renderProseHtml(text) {
+  const t = String(text);
+  if (!t.trim()) return `<span class="ws-muted">—</span>`;
+  if (t.includes("\n") || t.length > 160) {
+    return `<div class="artifact-prose">${esc(t).replace(/\n/g, "<br>")}</div>`;
+  }
+  return `<p class="artifact-inline">${esc(t)}</p>`;
+}
+
+function pickArtifactTitle(obj, fallbackIndex) {
+  if (!obj || typeof obj !== "object") return `#${fallbackIndex + 1}`;
+  for (const k of ARTIFACT_TITLE_KEYS) {
+    if (obj[k] != null && String(obj[k]).trim()) return String(obj[k]);
+  }
+  const first = Object.keys(obj)[0];
+  if (first && typeof obj[first] !== "object") return `${first}：${obj[first]}`;
+  return `#${fallbackIndex + 1}`;
+}
+
+function renderArrayItemCard(item, index, depth) {
+  if (item == null || typeof item !== "object") {
+    return `<div class="artifact-card"><div class="artifact-card-body">${esc(String(item))}</div></div>`;
+  }
+  const title = pickArtifactTitle(item, index);
+  const rest = { ...item };
+  for (const k of ARTIFACT_TITLE_KEYS) delete rest[k];
+  // 保留标题键若还有其它信息价值：名/类型等同屏展示
+  const keepMeta = {};
+  for (const k of ["类型", "顺序", "生命周期", "填充方", "内容形态", "用途", "通道"]) {
+    if (item[k] != null && item[k] !== "") keepMeta[k] = item[k];
+  }
+  const metaBits = Object.entries(keepMeta)
+    .map(([k, v]) => {
+      if (typeof v === "object") return "";
+      return `<span class="artifact-chip muted">${esc(k)}：${esc(String(v))}</span>`;
+    })
+    .filter(Boolean)
+    .join("");
+  for (const k of Object.keys(keepMeta)) delete rest[k];
+  const body = Object.keys(rest).length
+    ? renderObjectKvHtml(rest, depth + 1)
+    : "";
+  return `<div class="artifact-card"><div class="artifact-card-title">${esc(title)}</div>${metaBits ? `<div class="artifact-chip-row">${metaBits}</div>` : ""}${body}</div>`;
+}
+
+function renderObjectKvHtml(obj, depth) {
+  const entries = Object.entries(obj).filter(
+    ([k, v]) => !ARTIFACT_SKIP_KEYS.has(k) && v != null && v !== "",
+  );
+  if (!entries.length) return `<span class="ws-muted">（空）</span>`;
+  const rows = entries
+    .map(([k, v]) => {
+      const isComplex = v != null && typeof v === "object";
+      if (!isComplex) {
+        const leaf = renderScalarOrPctHtml(v, k);
+        // 百分比条自带标签，不再并排挤「完备度」键名
+        if (isPctFieldKey(k) && parseCompleteness(v) != null) {
+          return `<div class="artifact-kv-row complex"><div class="artifact-kv-val">${leaf}</div></div>`;
+        }
+        // 长文：标签在上，吃满横向宽度（避免窄列硬折行）
+        const longProse =
+          typeof v === "string" && (v.length > 40 || v.includes("\n"));
+        if (longProse) {
+          return `<div class="artifact-kv-row complex"><div class="artifact-kv-key">${esc(k)}</div><div class="artifact-kv-val">${leaf}</div></div>`;
+        }
+        return `<div class="artifact-kv-row"><div class="artifact-kv-key">${esc(k)}</div><div class="artifact-kv-val">${leaf}</div></div>`;
+      }
+      return `<div class="artifact-kv-row complex"><div class="artifact-kv-key">${esc(k)}</div><div class="artifact-kv-val">${renderStructuredValueHtml(v, depth + 1)}</div></div>`;
+    })
+    .join("");
+  return `<div class="artifact-kv">${rows}</div>`;
+}
+
+function isSettlementLike(doc) {
+  const keys = ["player_action", "visible_now", "resolved", "npc_moves", "variable_changes"];
+  let hits = 0;
+  for (const k of keys) if (k in doc) hits += 1;
+  return hits >= 2;
+}
+
+function renderSettlementSectionsHtml(doc) {
+  const sections = [];
+  const push = (title, lines) => {
+    if (!lines || !lines.length) return;
+    sections.push(
+      `<section class="ws-section"><h4>${esc(title)}</h4><ul class="artifact-list">${lines
+        .map((l) => `<li>${esc(String(l))}</li>`)
+        .join("")}</ul></section>`,
+    );
+  };
+  const pushHtml = (title, html) => {
+    if (!html) return;
+    sections.push(`<section class="ws-section"><h4>${esc(title)}</h4>${html}</section>`);
+  };
+  if (doc.player_action) push("玩家行动", [doc.player_action]);
+  if (Array.isArray(doc.resolved) && doc.resolved.length) push("已落地", doc.resolved);
+  if (doc.visible_now) push("可见现状", [doc.visible_now]);
+  if (Array.isArray(doc.npc_moves) && doc.npc_moves.length) {
+    pushHtml("角色动作", renderStructuredValueHtml(doc.npc_moves, 0));
+  }
+  if (Array.isArray(doc.variable_changes) && doc.variable_changes.length) {
+    pushHtml("变量变更", renderStructuredValueHtml(doc.variable_changes, 0));
+  }
+  if (doc.tone_hint) push("语气", [doc.tone_hint]);
+  if (Array.isArray(doc.do_not_say) && doc.do_not_say.length) {
+    push("勿写入正文", doc.do_not_say);
+  }
+  if (Array.isArray(doc.suggested_actions) && doc.suggested_actions.length) {
+    push("建议行动", doc.suggested_actions);
+  }
+  if (!sections.length) return null;
+  return `<div class="artifact-friendly artifact-settlement">${sections.join("")}</div>`;
+}
+
+function renderVariableDesignHtml(doc) {
+  const parts = [];
+  if (doc.brief) {
+    parts.push(
+      `<section class="ws-section ws-headline"><h4>概要</h4><p>${esc(String(doc.brief))}</p></section>`,
+    );
+  }
+  const body = doc.正文 && typeof doc.正文 === "object" ? doc.正文 : doc;
+  const keys = [
+    "依据的体验",
+    "真值",
+    "Data映射索引",
+    "维护语句约定",
+    "side_effects",
+    "旁观汇总意图",
+    "不立变量的理由",
+  ];
+  const used = new Set();
+  for (const k of keys) {
+    if (body[k] == null) continue;
+    used.add(k);
+    parts.push(
+      `<section class="ws-section"><h4>${esc(k)}</h4>${renderStructuredValueHtml(body[k], 0)}</section>`,
+    );
+  }
+  if (body === doc) {
+    for (const [k, v] of Object.entries(doc)) {
+      if (used.has(k) || ARTIFACT_SKIP_KEYS.has(k) || k === "brief" || k === "正文") continue;
+      if (v == null || v === "") continue;
+      if (k === "自评") {
+        const s = renderSelfScoreHtml(v);
+        if (s) parts.push(s);
+        continue;
+      }
+      parts.push(
+        `<section class="ws-section"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, 0)}</section>`,
+      );
+    }
+  } else {
+    for (const [k, v] of Object.entries(body)) {
+      if (used.has(k) || v == null || v === "") continue;
+      parts.push(
+        `<section class="ws-section"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, 0)}</section>`,
+      );
+    }
+  }
+  if (!parts.length) return null;
+  return `<div class="artifact-friendly artifact-variable-design">${parts.join("")}</div>`;
 }
 
 /** 极简 JSON 着色（仅 key / string / 其它） */
@@ -991,17 +2012,83 @@ function formatFlowParams(params) {
   return parts.length ? parts.join(" · ") : "";
 }
 
-function renderReviewFeedCard(review) {
+function wireContextOrderEditor(root, sessionId) {
+  if (!root || !sessionId) return;
+  const post = (body) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-order`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "编排失败");
+        window.dispatchEvent(new CustomEvent("wa:session-updated", { detail: data }));
+      })
+      .catch((err) => alert(err.message || String(err)));
+
+  root.querySelectorAll("[data-ctx-order]").forEach((el) => {
+    const action = el.getAttribute("data-ctx-order");
+    const row = el.closest(".ctx-order-row");
+    if (!row || !action) return;
+    const slotRef = row.getAttribute("data-slot-ref");
+    const index = Number(row.getAttribute("data-index"));
+    if (!slotRef || !Number.isFinite(index)) return;
+
+    if (el.tagName === "SELECT") {
+      el.addEventListener("change", () => {
+        void post({
+          action: "set_projection",
+          slotRef,
+          index,
+          projection: el.value,
+        });
+      });
+      return;
+    }
+
+    el.addEventListener("click", () => {
+      if (action === "move") {
+        const delta = Number(el.getAttribute("data-delta"));
+        if (delta !== 1 && delta !== -1) return;
+        void post({ action: "move", slotRef, index, delta });
+        return;
+      }
+      if (action === "set_anchor") {
+        const anchor = el.getAttribute("data-anchor");
+        if (anchor !== "pre_history" && anchor !== "post_history") return;
+        void post({ action: "set_anchor", slotRef, index, anchor });
+      }
+    });
+  });
+}
+
+function renderReviewFeedCard(review, opts = {}) {
   const flowHtml = review.creationFlowView
     ? renderCreationFlowView(review.creationFlowView)
     : "";
-  const structured = !flowHtml && review.workerSetView
-    ? renderWorkerSetUserView(review.workerSetView)
-    : "";
-  const jsonHtml = formatArtifactBodyHtml(review.body);
+  // 模块产物直接出产物卡；完整 Worker 集 / 流程才展开规格视图
+  const wsHint = `${review.summary || ""} ${review.workerId || ""}`;
+  const showFullWorkerSet =
+    Boolean(review.workerSetView) &&
+    /worker集|refine|worker-spec|游玩拓扑|细化终稿/i.test(wsHint);
+  let structured = "";
+  if (flowHtml) {
+    structured = flowHtml;
+  } else if (showFullWorkerSet && review.workerSetView) {
+    structured = renderWorkerSetUserView(review.workerSetView, {
+      editable: false,
+      compact: true,
+      omitFocusBody: true,
+    });
+  }
+  const artifactHtml = formatArtifactBodyHtml(review.body, {
+    defaultOpen: true,
+    hideAskSidecar: opts.hideAskSidecar === true,
+  });
   const contextId = review.sourceMessageId || review.id || "";
   const hasContext = review.contextTrace ? "1" : "0";
-  const structuredBlock = flowHtml || structured;
+  const label = displayWorkerLabel(review.workerId) || "产物";
 
   return `
     <article class="msg msg-assistant-row msg-review" data-review="1" data-message-id="${esc(contextId)}" data-can-edit="0" data-has-context="${hasContext}">
@@ -1009,31 +2096,24 @@ function renderReviewFeedCard(review) {
         <header class="msg-head">
           <div class="msg-head-main">
             <span class="msg-tag">待验收</span>
-            <span class="msg-subtitle">${esc(displayWorkerLabel(review.workerId) || "产物")}</span>
+            <span class="msg-subtitle">${esc(label)}</span>
           </div>
         </header>
-        ${review.summary ? `<p class="review-feed-summary">${esc(review.summary)}</p>` : ""}
-        <p class="review-hint">接受后：本单位过程讨论会折叠，产物进入前情。确认请用底栏「接受目前产物」；要改则在底栏输入修改意见后发送。</p>
-        ${structuredBlock ? `<div class="review-worker-set">${structuredBlock}</div>` : ""}
+        ${structured ? `<div class="review-worker-set">${structured}</div>` : ""}
         <section class="review-json-block">
-          <h4 class="review-json-title">${structuredBlock ? "规格 JSON" : "产物正文"}</h4>
-          ${jsonHtml}
+          ${artifactHtml}
         </section>
       </div>
     </article>`;
 }
 
-/** 侧栏验收 Tab 已弃用：验收改在主对话；此处仅隐藏 Tab */
-export function renderReviewPanel(view, _handlers = {}) {
-  const tabBtn = document.getElementById("agent-tab-btn-review");
-  const panel = document.getElementById("review-artifact-panel");
-  if (!tabBtn || !panel) return;
-  tabBtn.hidden = true;
-  panel.innerHTML = "";
-  if (activeAgentTab === "review") setAgentTab("timeline");
-}
+/** @deprecated 验收已在主对话；无侧栏面板 */
+export function renderReviewPanel(_view, _handlers = {}) {}
 
 export function renderAgentPanel(view, loading) {
+  wireRailChrome();
+  maybeSyncRail(view);
+
   const focusEl = document.getElementById("agent-focus");
   const traceEl = document.getElementById("tool-trace");
   const timelineEl = document.getElementById("agent-timeline");
@@ -1126,6 +2206,10 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     return;
   }
 
+  const reviewingNow =
+    view.waitingReason?.kind === "review_artifact" && Boolean(view.reviewArtifact);
+  document.body.classList.toggle("is-reviewing", reviewingNow);
+
   const intake =
     view.waitingReason?.kind === "intake" && view.intake?.fields?.length;
   const showIntakePanel = intake && hasUserMessages(view);
@@ -1204,7 +2288,13 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         ${!isUser && kind === "worker_questions" ? `<div class="msg-questions-banner">需要你回答</div>` : ""}
         ${isUser ? "" : `<header class="msg-head">${headInner}</header>`}
         ${!isUser && msg.thinking ? renderThinkingBlock(msg.thinking) : ""}
-        <div class="msg-body">${kind === "worker_questions" ? formatQuestionsHtml(body) : esc(body)}</div>
+        <div class="msg-body">${
+          kind === "worker_questions"
+            ? formatQuestionsHtml(body)
+            : kind === "worker_output"
+              ? formatArtifactBodyHtml(body)
+              : esc(body)
+        }</div>
         ${isUser ? `<footer class="msg-foot">${headInner}</footer>` : ""}
       </div>`;
     feed.appendChild(card);
@@ -1219,7 +2309,9 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     !loading
   ) {
     const wrap = document.createElement("div");
-    wrap.innerHTML = renderReviewFeedCard(view.reviewArtifact);
+    wrap.innerHTML = renderReviewFeedCard(view.reviewArtifact, {
+      hideAskSidecar: Boolean(getActiveQuestions(view)),
+    });
     const card = wrap.firstElementChild;
     if (card) feed.appendChild(card);
   }
@@ -1329,7 +2421,6 @@ export function renderBoardPanel(view) {
 export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
   renderLifecycle(view);
   renderSkillPicker(view);
-  maybeAutoSwitchTab(view);
   const qHost = document.getElementById("questions-card-host");
   if (qHost) {
     renderQuestionsCard(qHost, view, {
@@ -1337,9 +2428,6 @@ export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
     });
   }
   renderMessageFeed(view, loading, handlers);
-  renderSkillGuide(view);
-  renderReviewPanel(view, handlers);
-  renderBoardPanel(view);
   renderAgentPanel(view, loading);
 }
 

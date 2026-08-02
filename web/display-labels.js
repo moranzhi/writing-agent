@@ -26,7 +26,8 @@ const WORKER_LABELS = {
   "agent-burst": "编排器调度",
   narrator: "叙事转述",
   "role-decide": "角色决策",
-  "world-simulator": "世界推演",
+  "world-simulator": "主世界层",
+  chance: "机遇裁定",
   "round-present": "回合呈现",
   outline: "大纲 / 细纲",
   "chapter-writer": "章节正文",
@@ -35,7 +36,7 @@ const WORKER_LABELS = {
 const FIXED_TOPIC_LABELS = {
   "aesthetics-interaction": "美学纲领与交互范式",
   interaction: "交互范式",
-  narrative_guide: "叙事指南",
+  narrative_guide: "叙事指南与故事推进",
   input_protocol: "输入协议",
   core_premise: "核心前提",
   aesthetics: "美学纲领",

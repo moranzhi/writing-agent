@@ -47,7 +47,9 @@ describe("formatWorkerSetForUser", () => {
     expect(view.headline).toContain("西幻");
     expect(view.playModeLabel).toBe("行动–反应循环");
     expect(view.workers).toHaveLength(2);
-    expect(view.workers[0].displayName).toBe("世界模拟");
+    expect(view.workers[0].displayName).toBe("主世界层");
+    expect(view.playSlots?.some((s) => s.id === "gm" && s.enabled)).toBe(true);
+    expect(view.contextOrder?.slots?.length).toBeGreaterThan(0);
     expect(view.creationUnits?.map((u) => u.id)).toEqual(
       expect.arrayContaining([
         "fixed:aesthetics", // sample 含 narrator.presentation
@@ -121,9 +123,13 @@ workers:
     expect(view.interactionParadigm).toContain("旁观");
     expect(view.coreWorker).toBe("world-simulator");
     expect(view.reasoning).toContain("信息隔绝");
-    expect(view.workers[0].roleLabel).toBe("核心");
-    expect(view.workers[0].rationale).toContain("裁决");
-    expect(view.workers[1].mergeConsidered).toContain("NPC");
+    // 推断 play_slots 后顺序为 perspective → gm；角色用槽位中文名
+    const gm = view.workers.find((w) => w.id === "world-simulator");
+    const perspective = view.workers.find((w) => w.id === "role-decide");
+    expect(gm?.roleLabel).toBe("主世界层");
+    expect(gm?.rationale).toContain("裁决");
+    expect(perspective?.roleLabel).toBe("角色视角");
+    expect(perspective?.mergeConsidered).toContain("NPC");
   });
 
   it("merges default context when explicit context omitted", () => {
@@ -134,9 +140,14 @@ workers:
     when: 世界机之后
 `)!;
     const view = formatWorkerSetForUser(parsed)!;
-    expect(view.workers[0].context.staticTags.some((t) => t.tag.includes("变量.目录"))).toBe(
-      true,
-    );
+    expect(
+      view.workers[0].context.staticTags.some(
+        (t) =>
+          t.tag.includes("变量.目录") ||
+          t.tag.includes("变量设计") ||
+          t.tag.includes("设计.变量"),
+      ),
+    ).toBe(true);
     expect(view.workers[0].context.explicit).toBe(false);
     expect(view.workers[0].writes).toContain("变量.当前");
   });

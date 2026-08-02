@@ -18,6 +18,7 @@ import {
   normalizeQuestions,
   type QuestionItem,
 } from "../skills/question-protocol.js";
+import { extractFragmentAskSidecar } from "../skills/context-fragment.js";
 
 export type WorkerRunParams = {
   skillName: string;
@@ -40,6 +41,8 @@ export type WorkerRunResult = {
   summary: string;
   preview: string;
   askUser?: QuestionItem[];
+  /** 来自 context-fragment 自评/导语，挂到验收询问卡评估区 */
+  askAssessment?: string;
 };
 
 const WORKER_SET_OUTPUT_TAGS = new Set(["设计.worker集", "设计.worker集.草稿"]);
@@ -210,6 +213,28 @@ function parseWorkerResponse(
     }
   }
 
+  // context-fragment.v1：正文内 追问/自评 → 挂到询问卡（不必再抄一份 askUser）
+  let askAssessment: string | undefined;
+  const fragQuestions: QuestionItem[] = [];
+  for (const content of Object.values(outputs)) {
+    const side = extractFragmentAskSidecar(content);
+    if (side.assessment && !askAssessment) askAssessment = side.assessment;
+    for (const q of side.questions) {
+      if (!fragQuestions.some((x) => x.prompt === q.prompt)) {
+        fragQuestions.push(q);
+      }
+    }
+  }
+  if (fragQuestions.length) {
+    if (!askUser?.length) {
+      askUser = fragQuestions;
+    } else {
+      for (const q of fragQuestions) {
+        if (!askUser.some((x) => x.prompt === q.prompt)) askUser.push(q);
+      }
+    }
+  }
+
   const summary =
     typeof obj.summary === "string" && obj.summary.trim()
       ? obj.summary.trim()
@@ -226,6 +251,7 @@ function parseWorkerResponse(
     summary,
     preview,
     askUser: askUser?.length ? askUser : undefined,
+    askAssessment,
   });
 }
 
@@ -233,6 +259,7 @@ function parseWorkerResponse(
 export function sanitizeWorkerSetOutputs(result: WorkerRunResult): WorkerRunResult {
   const outputs = { ...result.outputs };
   const askUser = [...(result.askUser ?? [])];
+  const askAssessment = result.askAssessment;
   let droppedProse = false;
 
   for (const tag of [...Object.keys(outputs)]) {
@@ -292,6 +319,7 @@ export function sanitizeWorkerSetOutputs(result: WorkerRunResult): WorkerRunResu
     summary,
     preview,
     askUser: askUser.length ? askUser : undefined,
+    askAssessment: askAssessment?.trim() || undefined,
   };
 }
 

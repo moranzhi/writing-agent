@@ -39,6 +39,16 @@ Worker / skill 执行时，Runtime 将黑板 tag 与固定体裁说明拼成 LLM
 越增量、每轮变 → 越靠下（dynamic）
 ```
 
+创作期若产出了 `context_order`（见 `context-fragment-design.md`）：
+
+```text
+按 inserts 扁平 order 顺序拼装（不再按 static/dynamic 重排）
+「对话.历史」是排序表中的普通标签，按 projection 动态裁剪后插入
+```
+
+`order 0` 建议为槽位人设（`worker.persona`）。  
+`tier` 仅缓存提示；权威顺序是投影排序表。
+
 **不是** agent 在游玩时自由往 prompt 里插段落；agent 只决定 **invoke 哪个 skill**；该 skill 的契约决定看见什么。
 
 ---

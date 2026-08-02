@@ -686,6 +686,10 @@ export function applyEvent(
       const mode = session.acceptanceMode ?? "user_confirmed";
       if (mode === "user_confirmed" && result.session.pendingArtifactId) {
         const sidecar = asOptionalSidecarQuestions(event.payload.questions);
+        const assessment =
+          typeof event.payload.assessment === "string"
+            ? event.payload.assessment.trim()
+            : "";
         const effects = [...result.effects];
         if (sidecar?.length) {
           effects.push({
@@ -700,6 +704,7 @@ export function applyEvent(
             kind: "review_artifact",
             artifactId: result.session.pendingArtifactId,
             questions: sidecar,
+            assessment: assessment || undefined,
           }),
         };
       }

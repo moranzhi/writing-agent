@@ -598,17 +598,25 @@ function slugFromName(name: string): string {
     交互范式: "interaction",
     美学纲领: "aesthetics",
     叙事指南: "narrative",
+    叙事指南与故事推进: "narrative",
     实现机制: "mechanism",
-    世界蓝图与人文地理: "world-blueprint",
+    舞台骨架: "world-blueprint",
+    世界蓝图与人文地理: "world-blueprint", // 旧称
+    世界蓝图: "world-blueprint", // 旧简称
     生成规则: "generation-rules",
     具体实例: "concrete-instances",
     拓扑图谱: "topology",
     设计状态栏: "status-bar",
+    设计监控栏: "status-bar",
     变量设计与更新规则: "variable-design",
     变量控制上下文: "variable-context",
     设计回复格式: "reply-format",
-    "Worker 规格": "worker-spec",
+    正文组成: "reply-format",
+    游玩拓扑: "worker-spec",
+    "Worker 规格": "worker-spec", // 旧称，等同游玩拓扑
     细化终稿: "refine",
+    开场白与开场变量: "opening-setup",
+    开场白: "opening-setup",
   };
   return map[name] ?? name;
 }

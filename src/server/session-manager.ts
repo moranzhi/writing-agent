@@ -68,6 +68,15 @@ import {
   type WorkerSetUserView,
 } from "../skills/worker-set-view.js";
 import {
+  CONTEXT_ORDER_TAG,
+  applyContextOrderEdit,
+  mergeContextOrderIntoWorkerSetJson,
+  parseContextOrder,
+  serializeContextOrder,
+  synthesizeContextOrderFromWorkers,
+  type ContextOrderEdit,
+} from "../skills/context-order.js";
+import {
   CREATION_FLOW_TAG,
   CREATION_SELECTED_RECIPE_TAG,
   findRecipeCatalogEntry,
@@ -288,6 +297,80 @@ export class SessionManager {
       content: content ?? "",
       source: "user",
     });
+    if (s.bookId) this.persist(s);
+    return this.toView(sessionId);
+  }
+
+  /**
+   * 编排上下文投影排序：写入 设计.worker集.context_order（若有规格），
+   * 并同步 设计.上下文投影排序。下次声明驱动拼装即按新序。
+   */
+  patchContextOrder(sessionId: string, edit: ContextOrderEdit): SessionView {
+    const s = this.require(sessionId);
+    const bb = s.runtime.getBlackboard();
+    const workerSetRaw =
+      bb.getContentByTag("设计.worker集")?.trim() ||
+      bb.getContentByTag("设计.worker集.草稿")?.trim() ||
+      "";
+    const orderTagRaw = bb.getContentByTag(CONTEXT_ORDER_TAG)?.trim() || "";
+
+    let current = parseContextOrder(
+      workerSetRaw
+        ? parseWorkerSetYaml(workerSetRaw).context_order
+        : undefined,
+    );
+    if (!current) current = parseContextOrder(orderTagRaw);
+    if (!current && workerSetRaw) {
+      const parsed = parseWorkerSetYaml(workerSetRaw);
+      // 与检查器合成逻辑一致：缺 context 时用包内默认契约（视图侧也会合成）
+      current = synthesizeContextOrderFromWorkers(
+        parsed.workers.map((w) => ({
+          ref: w.ref,
+          name: w.name,
+          context: w.context,
+        })),
+        parsed.play_slots,
+      );
+    }
+    if (!current && edit.action !== "replace") {
+      throw new Error("尚无上下文投影排序可编辑；请先完成游玩拓扑/细化终稿，或提交完整 replace");
+    }
+    if (!current && edit.action === "replace") {
+      current = parseContextOrder(edit.context_order);
+      if (!current) throw new Error("context_order 无法解析");
+    }
+
+    const next = applyContextOrderEdit(current!, edit);
+    const serialized = serializeContextOrder(next);
+
+    bb.write({
+      tag: CONTEXT_ORDER_TAG,
+      content: serialized,
+      source: "user",
+    });
+
+    if (workerSetRaw) {
+      const targetTag = bb.getContentByTag("设计.worker集")?.trim()
+        ? "设计.worker集"
+        : bb.getContentByTag("设计.worker集.草稿")?.trim()
+          ? "设计.worker集.草稿"
+          : null;
+      if (targetTag) {
+        bb.write({
+          tag: targetTag,
+          content: mergeContextOrderIntoWorkerSetJson(workerSetRaw, next),
+          source: "user",
+        });
+      }
+    } else {
+      // 尚无规格：至少落下排序表，供细化终稿合并
+      bb.write({
+        tag: CONTEXT_ORDER_TAG,
+        content: serialized,
+        source: "user",
+      });
+    }
+
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
   }

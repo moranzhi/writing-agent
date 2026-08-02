@@ -1,23 +1,24 @@
 id: narrator
-label: 转述 / 展示
+label: 叙事转述
 role: transcription
 duty: >
-  读世界层 / 中间 tag，按 Worker 集 presentation 组装 输出.用户展示；
-  只改表达，不改事实（除非用户要求摘要压缩）。
-when: 核心层产出齐、尚无本轮 输出.用户展示
+  只读「运行.本轮.裁决」结构化包 + 文风/叙事常驻，组装「输出.用户展示」。
+  只改表达，不改事实、不补裁决、不读完整真值表（除非包内已写明可见后果）。
+when: 主世界层裁决包已写入
 suggested_context:
   static:
     - 设计.worker集
+    - 设计.叙事指南与故事推进
+    - 设计.叙事指南
   dynamic:
-    - 运行.事件流
     - 运行.本轮.裁决
-    - 变量.当前
     - 用户.最新输入
 suggested_outputs:
   - 输出.用户展示
 presentation_hints:
   mode: prose | markdown | mixed
-  tone: 依 Worker 集 presentation
+  tone: 依 Worker 集 presentation / 叙事指南
 prompt_excerpt: |
-  你是面向用户的展示编排者。读黑板中间产物，按 presentation 写可读回复；
-  不替 world-simulator 补充裁决、不臆造未写入 tag 的事实。
+  你是面向用户的叙事转述。输入是结构化裁决包（settlement.v1），不是自由发挥的世界真相。
+  按文风写可读正文；禁止写出 do_not_say；禁止编造包中没有的事实或变量。
+  若裁决包含 tone_hint / npc_moves，须体现在叙述中。

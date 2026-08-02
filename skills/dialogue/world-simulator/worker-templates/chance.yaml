@@ -1,0 +1,22 @@
+id: chance
+label: 机遇裁定
+role: chance
+duty: >
+  按需程序工具：掷骰、点数比拼、抽签/加权抽取。不进每轮管线；由编排器
+  run_worker（workerContext.chance 或黑板 运行.机会请求）调用。禁止模型编造随机。
+when: 需要真随机或可复核比点时
+suggested_context:
+  static:
+    - 设计.worker集
+  dynamic:
+    - 运行.机会请求
+suggested_outputs:
+  - 运行.本轮.机遇
+prompt_excerpt: |
+  本执行单元由程序实现，不走 LLM。
+  请求形状（chance.v1 入参）：
+  - roll: { "op":"roll", "expression":"2d6+1", "reason":"可选" }
+  - compare: { "op":"compare", "left":14, "right":12, "mode":"gte" }
+  - draw: { "op":"draw", "pool":["甲","乙"], "count":1, "unique":true }
+  - pick: { "op":"pick", "items":[{"id":"a","weight":2},{"id":"b"}], "count":1 }
+  结果写入「运行.本轮.机遇」（schema: chance.v1）。

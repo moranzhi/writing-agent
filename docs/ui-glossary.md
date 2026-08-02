@@ -101,6 +101,7 @@
 | `design-flow` | **创作 · 流程编排** | 以已选【配方】为起点，编排/增量修订工作流计划（可变 DAG） |
 | `design-step` | **创作 · 执行步骤** | 按工作流计划执行当前【技能】 |
 | `opening-generator` | **开局 · 开场白** | 创作末尾可选 |
+| `worker-spec`（技能） | **游玩拓扑** | 勾选固定槽；旧称「Worker 规格」，勿再当自由发明演员 |
 | `design-core` 等 | （已废弃） | 旧分步 skill；勿再调度 |
 
 标题动作后缀（拼在中文名后）：
@@ -122,12 +123,28 @@
 |---------|----------|
 | `narrator` | **叙事转述** |
 | `role-decide` | **角色决策** |
-| `world-simulator` | **世界推演** |
+| `world-simulator` | **主世界层**（旧称：世界推演） |
+| `chance` | **机遇裁定**（按需：骰子/抽签/比点；程序工具） |
 | `round-present` | **回合呈现** |
 
 配方选项展示名示例：`world-simulator`（recipe）→ **世界模拟器**；`expand-assistant` → **扩写助手**。
 
 **创造执行单元时**：规格里另写 `name`（中文展示名）。`ref` 仍用英文 kebab；UI 优先 `name`。
+
+### 5.1 游玩拓扑称呼（作者文档）
+
+内部调度单位仍叫 **执行单元（Worker）**——一次上场调用，这个词准确，**不要废除**。
+
+作者讨论职责时可用与酒馆主 GM 同构的说法（对用户 UI 仍用上表）：
+
+| 作者可用 | 典型 ref | 含义 |
+|----------|----------|------|
+| **主世界层** | `world-simulator` | 读变量与 Progressive 投影、按规则改真值/交事件；多数世界观与查表归这里 |
+| **叙事转述** | `narrator` | 把裁决写成用户可见正文（若规格拆了呈现） |
+| **机遇裁定** | `chance` | 按需程序工具（掷骰/比点/抽签）；不进每轮管线；结果 tag `运行.本轮.机遇` |
+| **旁观 / 审计** | 可选自建 | 只出意见，不写 canon；不为「更聪明」而拆 |
+
+默认少拆：百科、分档性格、章大纲投影 → 主世界层 + 表副作用，**不要**再拆「世界观执行单元」「性格执行单元」。详见 `docs/progressive-data-design.md` §5。
 
 ---
 
@@ -147,7 +164,7 @@
 |-------|----------|
 | `aesthetics-interaction` | 美学纲领与交互范式 |
 | `interaction` | 交互范式（旧；已并入上一行） |
-| `narrative_guide` | 叙事指南 |
+| `narrative_guide` | 叙事指南与故事推进 |
 | `input_protocol` | 输入协议 |
 | `core_premise` | 核心前提 |
 | `aesthetics` | 美学纲领（旧；已并入美学纲领与交互范式） |
@@ -190,3 +207,4 @@
 | `creation-playbook.md` | 创作/游玩流程概念 |
 | `design-orchestrator-guide.md` | 创作方法（可继续写英文 id，面向作者） |
 | `briefs/capability-authoring-brief.md` | 技能撰写交接（术语须与本文一致） |
+| `context-fragment-design.md` | 上下文片段格式、固定槽、投影排序与双锚点 |

@@ -351,7 +351,8 @@ task 必须写：禁止重复同一开场；在首答上补洞。
 - **键名对人友好**（中文或稳定中文标签）。  
 - 机器 id（如 `ref`）若需要，与中文名成对出现。  
 - 写清「本步完成的定义」；未决放 `开放问题`，不要假完备。  
-- 不要在本技能产物里偷偷交下游能力该交的终稿（除非本技能就是收成步）。
+- 不要在本技能产物里偷偷交下游能力该交的终稿（除非本技能就是收成步）。  
+- **中段「上下文创作」技能**须输出 §4.9 的 `context-fragment.v1`（含 `schema` / `brief` / `正文`）；收成类技能用自有 schema（见 `docs/context-fragment-design.md`）。
 
 ## 4.8 追问（`probe`）通用要求
 
@@ -360,15 +361,62 @@ task 必须写：禁止重复同一开场；在首答上补洞。
 - 能推断则先写入再复述；只问影响本步核心且不能瞎填的点。  
 - 依赖产物已钉死的内容禁止重问。
 
+## 4.9 上下文片段公共头（`context-fragment.v1`）
+
+中段技能（美学、机制、世界、叙事、变量…）的产物**不是**自由发明执行单元，而是可挂载的上下文片段。完整说明见 **`docs/context-fragment-design.md`**。
+
+**所有上下文创作技能**共用三段外壳（键名固定）；**正文内部维度**与**自评维度名**按技能自定，但两块都必须有。
+
+```json
+{
+  "schema": "context-fragment.v1",
+  "技能": "{与 catalog 一致的中文名}",
+  "brief": "一句话概括",
+  "mount": ["world-simulator"],
+  "稳变": "stable",
+  "正文": { },
+  "自评": {
+    "维度": [{ "名": "…", "分数": 0, "说明": "…" }],
+    "薄弱点": "…"
+  },
+  "追问": {
+    "导语": "…",
+    "题目": [
+      {
+        "问": "…",
+        "建议选项": ["…", "其它（请写明）"],
+        "示例": "可选短钩子"
+      }
+    ]
+  },
+  "开放问题": []
+}
+```
+
+| 段 | 说明 |
+|----|------|
+| `正文` | **产物主体**。技能自定内部结构（如美学步＝设定逻辑 + 交互范式 + 美学纲领）；须含「详细各个方面」。禁止整份只交散文。 |
+| `自评` | **自评评分**。`维度[]` 名目按技能定（美学步常用：交互范式 / 美学纲领 / 整体协调）；可含 `薄弱点`。 |
+| `追问` | **示例 + 建议选项**。给用户的下一问；`题目` 可空数组。与程序 askUser 可并存，但产物里要留结构化题面。 |
+
+| 规则 | 说明 |
+|------|------|
+| `schema` | 必须原样写出，供前端友好渲染 |
+| `mount` | 挂哪些槽/ref；**不要**写最终数字 `order` |
+| `稳变` | `stable` \| `semi` \| `volatile`，供「上下文投影排序」 |
+| 收成例外 | 游玩拓扑 / 上下文投影排序 / 细化终稿用自有 schema，不套本头 |
+
+范例对齐：`modules/aesthetics-interaction/prompt.md`（output 块）。
+
 ---
 
 # 第五部分：撰写任一能力时的工作步骤
 
 1. **定身份**：中文名、id、artifact；写清 when / when_not / boundary。  
 2. **看邻接**：上/下游能力各定什么；禁止重叠问卷。  
-3. **定产物形状**：先定 `output` JSON，再写 task/probe 如何填满它。  
+3. **定产物形状**：先定 `output` JSON（中段须含 §4.9 公共头），再写 task/probe 如何填满它。  
 4. **定 opening**：需要程序先问再 LLM → 写 opening；否则留空。  
-5. **写 principles / probe / checklist**：正推、缩减、禁止套件。  
+5. **写 principles / probe / checklist**：正推、缩减、禁止套件；checklist 含 schema/brief/正文。  
 6. **对照范例**：深度不低于 `aesthetics-interaction`。  
 7. **自检**：§4 块齐全；name 与 catalog 一致；用户文案无裸英文 id。
 
@@ -411,17 +459,18 @@ artifact：
 |------|-----|-------------------|
 | 美学纲领与交互范式 | `aesthetics-interaction` | 范例 |
 | 实现机制 | `mechanism` | 已写 |
-| 世界蓝图与人文地理 | `world-blueprint` | 已写 |
-| 生成规则 | `generation-rules` | 已写（可反复） |
-| 具体实例 | `concrete-instances` | 已写（可反复） |
-| 叙事指南 | `narrative` | 已写 |
+| 舞台骨架 | `world-blueprint` | 已写（`context-fragment.v1`；社会结构 + 世界状况） |
+| 生成规则 | `generation-rules` | 已写（`context-fragment.v1`；可反复；合同严、正文可长） |
+| 具体实例 | `concrete-instances` | 已写（`context-fragment.v1`；可反复；只按规则执行） |
+| 叙事指南与故事推进 | `narrative` | 已写（`context-fragment.v1`；遣词/笔墨/禁忌+推进；旧称叙事指南） |
+| 正文组成 | `reply-format` | 已写（用户可见版式+隐藏段+前端拆分；旧称设计回复格式） |
+| 设计监控栏 | `status-bar` | 已写（只盯会变信息；旧称设计状态栏） |
+| 开场白与开场变量 | `opening-setup` | 已写（开场正文+初值；守正文组成） |
 | 拓扑图谱 | `topology` | 待细写 |
-| 变量设计与更新规则 | `variable-design` | 待细写 |
-| 变量控制上下文 | `variable-context` | 待细写 |
-| 设计状态栏 | `status-bar` | 待细写 |
-| 设计回复格式 | `reply-format` | 待细写 |
-| Worker 规格 | `worker-spec` | 已写（可反复） |
-| 细化终稿 | `refine` | 已写 |
+| 变量设计与更新规则 | `variable-design` | 已写；见 progressive-data-design.md |
+| 变量控制上下文 | `variable-context` | 已写 |
+| 游玩拓扑 | `worker-spec` | 已写（勾选固定槽，不可反复发明） |
+| 细化终稿 | `refine` | 已写（按槽收成） |
 
 配方：世界模拟器、扩写助手（见 `recipes/`；写 `core`/`process`/`principles` + 起步 steps）。
 
@@ -433,6 +482,7 @@ artifact：
 |------|------|
 | 本文 | **泛用**能力撰写 + 项目/称呼；给外部 AI 的主交接 |
 | `world-simulator-modules.md` | 仓库内清单与格式摘要 |
+| `context-fragment-design.md` | 片段 schema、槽位、投影排序与拼装阶段 |
 | `ui-glossary.md` | 用户可见文案权威 |
 | `architecture.md` | 运行内核；写能力时不必复述实现细节 |
 | （已删）单能力特例简报 | 以本文为准；勿再恢复特例交接文 |

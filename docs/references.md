@@ -43,6 +43,13 @@
 - **可借鉴**：角色卡产品概念、世界书编辑体验、聊天存档与分支心流、角色扮演工作方式、导入导出与兼容性概念
 - **不照搬**：Prompt 拼接逻辑；世界书检索与权限由 Context Compiler 实现
 
+### tavern2agent（方法层）
+
+- 仓库：<https://github.com/Xerxes-2/tavern2agent>
+- **可借鉴**：卡语义拆解中的 data / progressive 去向、真值与派生分离、主 GM + 旁观审计（少拆执行单元）、承重才立可变概念
+- **落本地文档**：`progressive-data-design.md`；技能 `variable-design` / `variable-context`
+- **不借鉴为内核**：Pi 宿主、per-card TS engine/reducer 代码生成、CodeAct 万能入口
+
 ### LangGraph.js
 
 - 仓库：<https://github.com/langchain-ai/langgraphjs>
@@ -81,6 +88,8 @@
 |------------|----------------|
 | Runtime / 调度 / 恢复 | LangGraph.js、AutoGen、OpenHands、Mastra（边界） |
 | 上下文与记忆 | Letta、Mastra Memory 接口形态 |
+| 真值 / Data / Progressive 设计方法 | tavern2agent（方法层）、SillyTavern 世界书概念 |
+| 上下文片段 / 双锚点插入序 | SillyTavern prompt_order / injection 概念（只借鉴形态，见 `context-fragment-design.md`） |
 | 聊天与 HITL UI | assistant-ui、CopilotKit、LobeChat |
 | 角色卡 / 世界书 / 存档体验 | SillyTavern、LobeChat |
 | 模型接入与可观测 | Mastra |

@@ -11,6 +11,17 @@ import {
   residentTagFor,
   type ResidentContextEntry,
 } from "./resident-context.js";
+import {
+  PLAY_SLOT_META,
+  PLAY_SLOT_ORDER,
+  refForSlot,
+  type PlaySlotId,
+} from "./play-slots.js";
+import {
+  contextOrderToView,
+  parseContextOrder,
+  synthesizeContextOrderFromWorkers,
+} from "./context-order.js";
 
 export type TagLineView = {
   tag: string;
@@ -93,6 +104,30 @@ export type WorkerSetUserView = {
   reasoning?: string;
   playModeLabel?: string;
   playModeHint?: string;
+  /** 固定游玩槽位勾选摘要（世界模拟路径） */
+  playSlots?: Array<{ id: string; label: string; enabled: boolean; ref: string }>;
+  /** 投影排序（可编排）；无表时可由 workers.context 合成 */
+  contextOrder?: {
+    brief?: string;
+    editable?: boolean;
+    /** 是否由声明合成（尚未写入规格） */
+    synthesized?: boolean;
+    slots: Array<{
+      ref: string;
+      label?: string;
+      lines: string[];
+      inserts?: Array<{
+        index: number;
+        order: number;
+        anchor: string;
+        ref: string;
+        projection: string;
+        note?: string;
+        label?: string;
+        line: string;
+      }>;
+    }>;
+  };
   inputProtocol?: PresentationLineView[];
   workers: WorkerCardView[];
   /**
@@ -183,16 +218,21 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "设计.worker集",
         "世界.蓝图.确认稿",
         "世界.拓扑.*",
-        "变量.目录.确认稿",
-        "变量.变化规则.确认稿",
+        "设计.变量设计与更新规则",
       ],
-      dynamic: ["变量.当前", "运行.事件流", "用户.最新输入"],
+      dynamic: [
+        "变量.当前",
+        "运行.事件流",
+        "用户.最新输入",
+        "上下文.角色态度",
+        "大纲.当前章",
+      ],
     },
-    outputs: ["运行.本轮.裁决", "运行.事件流"],
+    outputs: ["运行.本轮.裁决", "运行.事件流", "运行.本轮.变量变更"],
   },
   "variable-update": {
     context: {
-      static: ["变量.目录.确认稿", "变量.变化规则.确认稿"],
+      static: ["设计.变量设计与更新规则"],
       dynamic: ["运行.本轮.裁决", "变量.当前"],
     },
     outputs: ["运行.本轮.变量变更", "变量.当前"],
@@ -201,11 +241,10 @@ const DEFAULT_WORKER_CONTRACTS: Record<
     context: {
       static: [
         "设计.worker集",
-        "叙事.指南.确认稿",
-        "语料.场景策略集.确认稿",
-        "输出.回复格式.规范",
+        "设计.叙事指南与故事推进",
+        "设计.叙事指南",
       ],
-      dynamic: ["运行.事件流", "变量.当前", "运行.本轮.变量变更"],
+      dynamic: ["运行.本轮.裁决", "用户.最新输入"],
     },
     outputs: ["输出.用户展示"],
   },
@@ -230,6 +269,13 @@ const DEFAULT_WORKER_CONTRACTS: Record<
     },
     outputs: ["运行.本轮.角色决策"],
   },
+  chance: {
+    context: {
+      static: ["设计.worker集"],
+      dynamic: ["运行.机会请求"],
+    },
+    outputs: ["运行.本轮.机遇"],
+  },
 };
 
 const INPUT_PROTOCOL_LABELS: Record<string, string> = {
@@ -243,6 +289,10 @@ const WORKER_ROLE_LABELS: Record<string, string> = {
   core: "核心",
   auxiliary: "辅助",
   transcription: "转述",
+  gm: "主世界层",
+  narrator: "叙事转述",
+  perspective: "角色视角",
+  chance: "机遇裁定",
 };
 
 function tagMatchesPattern(tag: string, pattern: string): boolean {
@@ -692,6 +742,36 @@ export function formatWorkerSetForUser(
     reasoning: parsed.reasoning,
     playModeLabel: morph?.label ?? morphKey,
     playModeHint: morph?.hint,
+    playSlots: parsed.play_slots
+      ? PLAY_SLOT_ORDER.map((id: PlaySlotId) => ({
+          id,
+          label: PLAY_SLOT_META[id].label,
+          enabled: Boolean(parsed.play_slots![id]),
+          ref: refForSlot(parsed.play_slots!, id),
+        }))
+      : undefined,
+    contextOrder: (() => {
+      const order = parseContextOrder(parsed.context_order);
+      if (order) return contextOrderToView(order);
+      const workersForSynth = parsed.workers.map((w) => {
+        const ref = w.ref?.trim() ?? "";
+        const def = ref ? DEFAULT_WORKER_CONTRACTS[ref] : undefined;
+        return {
+          ref: w.ref,
+          name: w.name,
+          context: {
+            static: w.context?.static ?? def?.context.static,
+            dynamic: w.context?.dynamic ?? def?.context.dynamic,
+          },
+        };
+      });
+      const synth = synthesizeContextOrderFromWorkers(
+        workersForSynth,
+        parsed.play_slots,
+      );
+      if (!synth) return undefined;
+      return { ...contextOrderToView(synth), synthesized: true };
+    })(),
     inputProtocol,
     workers,
     contextTags,

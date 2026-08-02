@@ -24,6 +24,13 @@ import {
   parseResidentContext,
   residentTagFor,
 } from "./resident-context.js";
+import {
+  CONTEXT_ORDER_TAG,
+  contextOrderToSegments,
+  parseContextOrder,
+  slotOrderForRef,
+} from "./context-order.js";
+import type { ContextSegmentDef } from "./context-segments.js";
 
 type WorkerTemplateDoc = {
   id?: string;
@@ -106,7 +113,14 @@ export async function resolveRunnableWorker(params: {
   }
 
   const raw = readWorkerSetYamlForDeclaration(params.blackboard, params.session);
-  const parsed = raw ? parseWorkerSetYaml(raw.yaml) : null;
+  let parsed = raw ? parseWorkerSetYaml(raw.yaml) : null;
+  // 用户编排的排序表优先：规格内 context_order → 独立 tag
+  if (parsed && !parseContextOrder(parsed.context_order)) {
+    const fromTag = parseContextOrder(
+      params.blackboard.getContentByTag(CONTEXT_ORDER_TAG),
+    );
+    if (fromTag) parsed = { ...parsed, context_order: fromTag };
+  }
   const entry = parsed?.workers.find(
     (w) => w.ref?.trim() === params.workerId.trim(),
   );
@@ -190,16 +204,6 @@ export function buildDeclaredWorkerSkill(params: {
     .filter((e) => e.position === "dynamic")
     .map(residentTagFor);
 
-  const inputTags = [
-    ...new Set([
-      ...staticTags,
-      ...residentStaticTags,
-      ...dynamicTags,
-      ...residentDynamicTags,
-      CONTEXT_BRIEF_TAG,
-    ]),
-  ];
-
   const duty =
     params.entry.duty?.trim() ||
     params.template?.duty?.trim() ||
@@ -211,6 +215,59 @@ export function buildDeclaredWorkerSkill(params: {
   const narrative = params.workerSet?.narrative_guide?.trim() || "";
   const premises = (params.workerSet?.core_premises ?? []).filter(Boolean);
   const residentSection = formatResidentPromptSection(resident, id);
+
+  const personaText = [duty, excerpt].filter(Boolean).join("\n\n");
+  const orderDoc = parseContextOrder(params.workerSet?.context_order);
+  const orderSlot = slotOrderForRef(orderDoc, id);
+  let contextSegments: ContextSegmentDef[] | undefined;
+  if (orderSlot && orderSlot.inserts.length) {
+    contextSegments = contextOrderToSegments({
+      slot: orderSlot,
+      personaText,
+    });
+  }
+
+  const orderTags = (contextSegments ?? []).flatMap((s) => s.tags);
+  const inputTags = [
+    ...new Set([
+      ...staticTags,
+      ...residentStaticTags,
+      ...dynamicTags,
+      ...residentDynamicTags,
+      ...orderTags,
+      CONTEXT_BRIEF_TAG,
+    ]),
+  ];
+
+  // 无 context_order 时：沿用模板 static→dynamic 两档 segments
+  if (!contextSegments?.length) {
+    contextSegments = [
+      ...staticTags.map((tag, i) => ({
+        id: `static-${i}`,
+        tier: "static" as const,
+        tags: [tag],
+        label: `## ${tag}`,
+      })),
+      ...residentStaticTags.map((tag, i) => ({
+        id: `resident-s-${i}`,
+        tier: "static" as const,
+        tags: [tag],
+        label: `## ${tag}`,
+      })),
+      ...dynamicTags.map((tag, i) => ({
+        id: `dynamic-${i}`,
+        tier: "dynamic" as const,
+        tags: [tag],
+        label: `## ${tag}`,
+      })),
+      ...residentDynamicTags.map((tag, i) => ({
+        id: `resident-d-${i}`,
+        tier: "dynamic" as const,
+        tags: [tag],
+        label: `## ${tag}`,
+      })),
+    ];
+  }
 
   const body = [
     `# ${params.template?.label ?? id}`,
@@ -248,6 +305,7 @@ export function buildDeclaredWorkerSkill(params: {
     inputMerge: "latest",
     path: `declaration:${id}`,
     body,
+    contextSegments,
   };
 
   const promptBody = [

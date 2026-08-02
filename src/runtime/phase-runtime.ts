@@ -32,6 +32,10 @@ import { toActiveSkillSnapshot } from "../skills/snapshot.js";
 import { runWorkerSkill } from "../worker/executor.js";
 import { resolveWorkerId } from "../worker/resolve-id.js";
 import { resolveWorkerLlmProvider } from "../skills/worker-llm.js";
+import {
+  DIALOGUE_HISTORY_TAG,
+  appendDialogueHistoryTurn,
+} from "../skills/dialogue-history.js";
 import { extractIntakeFromMessage } from "../intake/extract.js";
 import { readIntakeValues } from "../intake/intake.js";
 import { compressAfterWorkerAccept } from "./compress-after-worker.js";
@@ -65,6 +69,10 @@ import {
 } from "../skills/creation-flow.js";
 import { normalizeQuestions } from "../skills/question-protocol.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
+import {
+  executeChance,
+  resolveChanceRequest,
+} from "../skills/chance-tools.js";
 import {
   resolveAcceptanceModeForWorker,
   resolveRunnableWorker,
@@ -385,6 +393,10 @@ export class PhaseRuntime {
         content: latestInput.trim(),
         source: "user",
       });
+      // 游玩期把用户话追加进可投影的「对话.历史」标签
+      if (inferLifecycleStage(session) === "play") {
+        this.appendDialogueHistory("用户", latestInput.trim());
+      }
     }
     const workerReply = session.slots["用户.worker答复"];
     if (typeof workerReply === "string" && workerReply.trim()) {
@@ -501,6 +513,7 @@ export class PhaseRuntime {
           sourceTag: declaration.sourceTag,
           accepted: declaration.accepted,
           playWorkerIds: declaration.playWorkerIds,
+          onDemandWorkerIds: declaration.onDemandWorkerIds,
           designEndWorkerIds: declaration.designEndWorkerIds,
           activeWorkerIds: declaration.activeWorkerIds,
         },
@@ -715,11 +728,18 @@ export class PhaseRuntime {
     if (!activeSkill?.name) {
       throw new Error("当前没有 active skill，无法运行 worker");
     }
+
+    const workerId = resolveWorkerId(effect.workerId);
+
+    // 机遇裁定：纯程序，不走 LLM
+    if (workerId === "chance") {
+      await this.runChanceWorker(effect);
+      return;
+    }
+
     if (!this.llm) {
       throw new Error("未配置 LLM，无法运行 worker");
     }
-
-    const workerId = resolveWorkerId(effect.workerId);
     this.lastWorkerRunSnapshot = {
       workerId,
       runtimeSession: structuredClone(this.session),
@@ -842,12 +862,90 @@ export class PhaseRuntime {
         artifactId: artifact.id,
         // 有产物时 askUser 挂到验收态，不阻断 Accept
         questions: result.askUser?.length ? result.askUser : undefined,
+        assessment: result.askAssessment?.trim() || undefined,
       },
     });
     this.maybeCompressAcceptedArtifact(artifact.id);
     } finally {
       this.onWorkerStreamDone?.(workerId);
     }
+  }
+
+  /** 机遇裁定：程序掷骰/比点/抽签，写入 运行.本轮.机遇 */
+  private async runChanceWorker(
+    effect: Extract<PhaseEffect, { type: "run_worker" }>,
+  ): Promise<void> {
+    const workerId = "chance";
+    this.lastWorkerRunSnapshot = {
+      workerId,
+      runtimeSession: structuredClone(this.session),
+      blackboardItems: this.blackboard.exportItems(),
+    };
+
+    const acceptanceMode = resolveAcceptanceModeForWorker({
+      session: this.session,
+      blackboard: this.blackboard,
+      workerId: effect.workerId,
+    });
+
+    this.session = (
+      await this.dispatch({
+        type: "worker_started",
+        payload: {
+          workerId: effect.workerId,
+          stepId: this.session.currentStepId,
+          acceptanceMode:
+            this.session.resumeContext?.acceptanceMode ?? acceptanceMode,
+        },
+      })
+    ).session;
+
+    const boardRaw = this.blackboard.getContentByTag("运行.机会请求");
+    const request = resolveChanceRequest({
+      workerContext: effect.workerContext ?? null,
+      blackboardRequestJson: boardRaw,
+    });
+
+    const result = request
+      ? executeChance(request)
+      : {
+          schema: "chance.v1" as const,
+          op: "roll" as const,
+          ok: false,
+          summary: "机遇失败：缺少请求（workerContext.chance 或 运行.机会请求）",
+          detail: {},
+          error: "missing_request",
+        };
+
+    const content = JSON.stringify(result, null, 2);
+    const written = this.writeWorkerTagContent(
+      "运行.本轮.机遇",
+      content,
+      workerId,
+    );
+    this.session = {
+      ...this.session,
+      slots: { ...this.session.slots, "运行.本轮.机遇": written },
+    };
+
+    const artifact = createArtifact({
+      workerId: effect.workerId,
+      stepId: this.session.currentStepId,
+      outputTags: ["运行.本轮.机遇"],
+      summary: result.summary,
+    });
+    this.session = {
+      ...this.session,
+      artifacts: [...this.session.artifacts, artifact],
+    };
+
+    this.onMessage(`[机遇裁定] ${result.summary}\n\n${content}`);
+
+    await this.dispatch({
+      type: "worker_completed",
+      payload: { artifactId: artifact.id },
+    });
+    this.maybeCompressAcceptedArtifact(artifact.id);
   }
 
   /**
@@ -951,10 +1049,41 @@ export class PhaseRuntime {
       content: toWrite,
       source: workerId,
     });
+    if (
+      inferLifecycleStage(this.session) === "play" &&
+      (tag === "输出.用户展示" || tag === "输出.开场白")
+    ) {
+      this.appendDialogueHistory("助手", toWrite);
+    }
     if (nextDoc) {
       this.applyTableSideEffects(prevDoc, nextDoc, workerId);
     }
     return toWrite;
+  }
+
+  /** 避免 syncSlots 重复把同一句用户输入追加进历史 */
+  private lastAppendedUserHistory = "";
+
+  /** 追加一轮到黑板「对话.历史」（排序表可投影裁剪） */
+  private appendDialogueHistory(role: "用户" | "助手" | "系统", text: string): void {
+    const body = text.trim();
+    if (!body) return;
+    if (role === "用户") {
+      if (this.lastAppendedUserHistory === body) return;
+      this.lastAppendedUserHistory = body;
+    }
+    const prev = this.blackboard.getContentByTag(DIALOGUE_HISTORY_TAG) ?? "";
+    const next = appendDialogueHistoryTurn(prev, { role, text: body });
+    if (next === prev.trim()) return;
+    this.blackboard.write({
+      tag: DIALOGUE_HISTORY_TAG,
+      content: next,
+      source: "runtime",
+    });
+    this.session = {
+      ...this.session,
+      slots: { ...this.session.slots, [DIALOGUE_HISTORY_TAG]: next },
+    };
   }
 
   /** 从 Worker 集 tables.side_effects 算边沿触发并写 tag / 记 fired */

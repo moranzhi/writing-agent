@@ -2,6 +2,7 @@ import type { Blackboard } from "../blackboard/blackboard.js";
 import type { RuntimeSession } from "../types/runtime.js";
 import {
   deriveDesignStageScope,
+  deriveOnDemandWorkerScope,
   deriveRunWorkerScope,
   parseWorkerSetYaml,
   runWorkerMeta,
@@ -19,8 +20,10 @@ export type InstanceWorkerDeclaration = {
   parsed: ParsedWorkerSet | null;
   /** 当前 lifecycle 下总管可 run_worker 的 id 列表 */
   activeWorkerIds: string[];
-  /** play 阶段声明（deriveRunWorkerScope） */
+  /** play 阶段声明（deriveRunWorkerScope；每轮管线） */
   playWorkerIds: string[];
+  /** play 按需调度（chance 等；不进自动回合序） */
+  onDemandWorkerIds: string[];
   /** 创作末尾声明（如 opening-generator） */
   designEndWorkerIds: string[];
 };
@@ -81,6 +84,8 @@ export function buildInstanceWorkerDeclaration(
   const raw = readWorkerSetYamlForDeclaration(blackboard, session);
   const parsed = raw ? parseWorkerSetYaml(raw.yaml) : null;
   const playWorkerIds = accepted && parsed ? deriveRunWorkerScope(parsed) : [];
+  const onDemandWorkerIds =
+    accepted && parsed ? deriveOnDemandWorkerScope(parsed) : [];
   const designEndWorkerIds =
     accepted && parsed ? deriveDesignStageScope(parsed) : [];
 
@@ -89,7 +94,13 @@ export function buildInstanceWorkerDeclaration(
   let activeWorkerIds: string[];
 
   if (lifecycle === "play") {
-    activeWorkerIds = [...playWorkerIds];
+    activeWorkerIds = [...playWorkerIds, ...onDemandWorkerIds];
+    const seen = new Set<string>();
+    activeWorkerIds = activeWorkerIds.filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
   } else if (!accepted) {
     activeWorkerIds = [...designStepIds];
   } else {
@@ -109,6 +120,7 @@ export function buildInstanceWorkerDeclaration(
     parsed,
     activeWorkerIds,
     playWorkerIds,
+    onDemandWorkerIds,
     designEndWorkerIds,
   };
 }

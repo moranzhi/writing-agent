@@ -112,7 +112,7 @@ export const FIXED_CONTEXT_CATALOG: Array<{
   {
     id: "fixed:narrative_guide",
     flavor: "narrative_guide",
-    label: "叙事指南",
+    label: "叙事指南与故事推进",
     weighty: true,
     hint: "世界态度与体验边界（残酷/不有求必应/随机危险等）；≠ 文风",
   },

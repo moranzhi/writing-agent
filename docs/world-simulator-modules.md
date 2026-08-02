@@ -3,7 +3,10 @@
 > 给作者用。用户侧术语：**`docs/ui-glossary.md` §0**。  
 > 运行：选配方 → 编排**增量**工作流计划 DAG → `design-step` 执行技能；可再扩步反复调用。  
 > **标准范例**：`modules/aesthetics-interaction/prompt.md`。  
-> **给外部 AI 的完整泛用规范**：**`docs/briefs/capability-authoring-brief.md`**（项目概述 + 称呼 + 格式契约）。
+> **真值 / Data / Progressive（变量与门控）**：**`docs/progressive-data-design.md`**。  
+> **上下文片段 / 槽位 / 投影排序**：**`docs/context-fragment-design.md`**。  
+> **提示词待改清单**：**`docs/briefs/prompt-revision-inventory.md`**。  
+> **给外部 AI 的完整泛用规范**：**`docs/briefs/capability-authoring-brief.md`**（含 `context-fragment.v1`）。
 
 ## 两层
 
@@ -122,27 +125,29 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 能力 | id | 状态 |
 |------|-----|------|
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写** |
-| 实现机制 | `mechanism` | **已写** |
-| 世界蓝图与人文地理 | `world-blueprint` | **已写** |
-| 生成规则 | `generation-rules` | **已重写**，可反复；双门槛 + schema + 生命周期；编排必填 `params.target` |
-| 具体实例 | `concrete-instances` | **已重写**，可反复；执行预生成规则；编排必填 `params.rule_id` |
-| 叙事指南 | `narrative` | **已写** |
+| 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm` |
+| 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况 |
+| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；`params.target` |
+| 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；`params.rule_id` |
+| 叙事指南与故事推进 | `narrative` | **已写**：遣词/笔墨焦点/禁忌与不偏好 + 推进；挂转述 |
 | 拓扑图谱 | `topology` | 骨架，待细写 |
-| 设计状态栏 | `status-bar` | 骨架，待细写 |
-| 变量设计与更新规则 | `variable-design` | 骨架，待细写 |
-| 变量控制上下文 | `variable-context` | 骨架，待细写 |
-| 设计回复格式 | `reply-format` | 骨架，待细写 |
+| 设计监控栏 | `status-bar` | **已写**：只盯会变信息；旧称状态栏 |
+| 正文组成 | `reply-format` | **已写**：用户可见版式+隐藏段+前端拆分；旧称回复格式 |
+| 变量设计与更新规则 | `variable-design` | **已写**：真值+维护语句+Data映射索引+side_effects |
+| 变量控制上下文 | `variable-context` | **已写**：挂载+旁观汇总 |
+| 开场白与开场变量 | `opening-setup` | **已写**：开场守版式+同真相初值 |
 
 共用收成（池内保留，按需）：
 
 | 能力 | id | 状态 |
 |------|-----|------|
-| Worker 规格 | `worker-spec` | **已写**，可反复 |
-| 细化终稿 | `refine` | **已写**（产物=`设计.worker集`） |
+| 游玩拓扑 | `worker-spec` | **已写**：勾选固定槽，禁止自由发明 worker（旧称 Worker 规格） |
+| 上下文投影排序 | `context-order` | **已写**：扁平投影序（含对话.历史）；收成进 `context_order`；Runtime 已拼装 |
+| 细化终稿 | `refine` | **已写**：按 `play_slots`（及排序表）收成 `设计.worker集` |
 
 | 编排器 | 状态 |
 |------|------|
-| 世界模拟器 | 方法论已写（core/process/principles）；起点：美学纲领与交互范式 |
+| 世界模拟器 | 链路已写：体验→挂槽写上下文→投影排序→终稿；起点：美学纲领与交互范式 |
 | 扩写助手 | 方法论已写；起点：美学纲领与交互范式；勿默认套世界模拟全套 |
 
 ---

@@ -29,19 +29,18 @@ modules:
 
   # —— 世界与内容 ——
   - id: world-blueprint
-    name: 世界蓝图与人文地理
+    name: 舞台骨架
     declaration: >-
-      当体验需要可引用的「舞台背景」时使用：钉舞台尺度、熟悉基底与变造、
-      关键格局与人文地理；只细化舞台上会出现的部分，不做设定百科或纸面地图
-    artifact: 设计.世界蓝图与人文地理
+      体验需要可引用舞台时：钉尺度、基底与变造、关键舞台区，以及社会结构与世界状况；
+      只细化会上台部分，不做地图百科
+    artifact: 设计.舞台骨架
 
   - id: generation-rules
     name: 生成规则
     repeatable: true
     declaration: >-
-      仅当某类内容既对游玩重要、又无法凭世界基底稳定生成时使用：
-      定义严格 schema、生成约束与仅动态/仅预生成/预生成并动态三种生命周期；
-      可按生成对象反复调用
+      仅当某类内容既重要又无法凭基底稳定生成时：写出规则
+      （怎么描写/生成 + 产物格式 + 可选多池，池绑 JSON 字段）；可按对象反复调用
     artifact: 设计.生成规则
     params:
       - key: target
@@ -61,8 +60,7 @@ modules:
     name: 具体实例
     repeatable: true
     declaration: >-
-      执行一条要求预生成的生成规则，直接产出符合其 schema 与约束的具体实例；
-      仅动态规则不调用，可按 rule_id 或批次反复调用
+      按预生成规则原样产出实际产物；不设计、不改合同；可按 rule_id/批次反复调用
     artifact: 设计.具体实例
     params:
       - key: rule_id
@@ -79,16 +77,18 @@ modules:
         hint: 数字或「按规则」；contextual 时写清规模依据
 
   - id: narrative
-    name: 叙事指南
-    declaration: 世界/助手态度与体验边界（不等于文风；契约已写清的态度勿重复问卷）
-    artifact: 设计.叙事指南
+    name: 叙事指南与故事推进
+    declaration: >-
+      钉转述写法与故事推进：纲领、遣词造句、笔墨焦点、禁忌/不偏好、示范与备用、
+      推进决策（可含变量钩子）；美学写感觉，本步写怎么写、往哪推
+    artifact: 设计.叙事指南与故事推进
 
   # —— 机制与数据 ——
   - id: mechanism
     name: 实现机制
     declaration: >-
-      当核心体验已经明确，需要识别由哪些角色、世界、关系、规则或情境切面支撑，
-      并把体验落成可供后续设定工作的核心支点时使用
+      核心体验已明时：识别承重切面（如何支撑 / 缺失后果），产出可挂主世界层的上下文片段；
+      不重定体验、不写百科或执行单元
     artifact: 设计.实现机制
 
   - id: topology
@@ -98,33 +98,60 @@ modules:
 
   - id: variable-design
     name: 变量设计与更新规则
-    declaration: 钉变量字段、初值与更新时机/规则；与表副作用对齐
+    declaration: >-
+      钉真值字段、写入源（执行单元/用户/程序）、更新规则，以及按真值门控的
+      side_effects（Progressive 投影）；与运行规格 tables 对齐
     artifact: 设计.变量设计与更新规则
 
   - id: variable-context
     name: 变量控制上下文
-    declaration: 钉哪些变量如何挂进常驻上下文 / 控制生成口径（可见性与措辞）
+    declaration: >-
+      钉真值与投影如何挂进主世界层等上下文：可见性、措辞、未解锁不注入
     artifact: 设计.变量控制上下文
 
   # —— 呈现 ——
   - id: status-bar
-    name: 设计状态栏
-    declaration: 钉用户可见状态栏：字段、刷新时机、与正文如何拼装
-    artifact: 设计.状态栏
+    name: 设计监控栏
+    declaration: >-
+      钉用户可见监控栏字段：只留会变、影响决策或沉浸的信息
+      （主角/攻略目标/场景交互物等）；旧称设计状态栏
+    artifact: 设计.监控栏
 
   - id: reply-format
-    name: 设计回复格式
-    declaration: 钉单轮可见输出的结构（正文块、面板、拼接顺序），服务体验契约
-    artifact: 设计.回复格式
+    name: 正文组成
+    declaration: >-
+      钉用户可见的一轮回复由哪些块、何顺序组成（含监控栏位置、隐藏变量段、前端拆分）；
+      不是程序报文格式；旧称设计回复格式
+    artifact: 设计.正文组成
+
+  # —— 开局（创作偏晚） ——
+  - id: opening-setup
+    name: 开场白与开场变量
+    declaration: >-
+      写出遵循正文组成/叙事等契约的开场一小段，并钉同真相的开场变量初值；
+      开场为主、填表为辅；可与 opening-generator 落库
+    artifact: 设计.开场白与开场变量
 
   # —— 收成 / 钉声明（共用；世界模拟器按需） ——
   - id: worker-spec
-    name: Worker 规格
-    repeatable: true
-    declaration: 钉一个游玩期执行单元（职责、读写、挂载）；多演员时可多次调用
+    name: 游玩拓扑
+    repeatable: false
+    declaration: >-
+      勾选固定游玩槽位（主世界层/叙事转述/可选角色视角/可选机遇裁定，或写手大纲+章节）；
+      禁止自由发明执行单元
     artifact: 设计.worker规格
+
+  - id: context-order
+    name: 上下文投影排序
+    repeatable: false
+    declaration: >-
+      根据各上游上下文概括，为启用槽写出扁平投影序（含对话.历史与 projection）；
+      挂谁已定、排第几在本步；不发明执行单元、不重写长文
+    artifact: 设计.上下文投影排序
 
   - id: refine
     name: 细化终稿
-    declaration: 钉死关键前提、表与副作用，收成可进游玩的规格
+    declaration: >-
+      按已勾选固定槽与投影排序表收成运行规格（play_slots、常驻、表副作用）；
+      不发明新执行单元
     artifact: 设计.worker集

@@ -85,4 +85,38 @@ describe("sanitizeWorkerSetOutputs", () => {
     expect(result.outputs["设计.worker集.草稿"]).toContain("narrator");
     expect(result.askUser).toBeUndefined();
   });
+
+  it("lifts fragment 追问/自评 into askUser + askAssessment", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: {
+          "设计.美学纲领与交互范式": {
+            schema: "context-fragment.v1",
+            brief: "孤立免疫",
+            正文: { 美学纲领: { 体验内核: "特权与惊惶" } },
+            自评: {
+              维度: [{ 名: "美学纲领", 分数: 60, 说明: "边界未锁" }],
+              薄弱点: "尺度",
+            },
+            追问: {
+              导语: "还需确认：",
+              题目: [
+                {
+                  问: "血腥如何用？",
+                  建议选项: ["少而锋利", "常态压抑"],
+                  示例: "锈迹即可",
+                },
+              ],
+            },
+          },
+        },
+        summary: "美学纲领 · 孤立免疫",
+      }),
+      ["设计.美学纲领与交互范式"],
+    );
+    expect(result.askUser?.length).toBe(1);
+    expect(result.askUser?.[0]?.options?.length).toBe(2);
+    expect(result.askAssessment).toContain("美学纲领 60%");
+    expect(result.askAssessment).toContain("还需确认");
+  });
 });

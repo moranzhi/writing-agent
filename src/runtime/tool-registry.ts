@@ -79,12 +79,24 @@ export function toolCallToDecision(call: ParsedToolCall): MainAgentDecision {
       const reason = requireString(args, "reason");
       const requiresApproval = Boolean(args.requiresApproval);
       const roleId = optionalString(args, "roleId");
+      const chanceRaw = args.chance;
+      const chance =
+        chanceRaw && typeof chanceRaw === "object" && !Array.isArray(chanceRaw)
+          ? (chanceRaw as Record<string, unknown>)
+          : undefined;
+      const workerContext =
+        roleId || chance
+          ? {
+              ...(roleId ? { roleId } : {}),
+              ...(chance ? { chance } : {}),
+            }
+          : undefined;
       return {
         id: randomUUID(),
         action: "run_worker",
         reason,
         workerId,
-        workerContext: roleId ? { roleId } : undefined,
+        workerContext,
         requiresApproval,
         statePatchAllowed: false,
       };

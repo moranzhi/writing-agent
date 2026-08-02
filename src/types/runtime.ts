@@ -41,6 +41,8 @@ export type WaitingReason =
        * 有值时不阻断验收：用户可直接 Accept，也可先作答再 Accept。
        */
       questions?: QuestionItem[];
+      /** 自评/导语，随追问展示在询问卡顶部 */
+      assessment?: string;
       pageSize?: number;
     } // worker 产物待验收
   | {
@@ -144,8 +146,15 @@ export type MainAgentDecision = {
   action: MainAgentAction;
   reason: string;
   workerId?: string;
-  /** 调度 role-decide 等时指定当前决策角色，Runtime 写入 世界.当前角色.id */
-  workerContext?: { roleId?: string };
+  /**
+   * 调度附加上下文：
+   * - roleId：role-decide 等
+   * - chance：机遇裁定请求（op=roll|compare|draw|pick）
+   */
+  workerContext?: {
+    roleId?: string;
+    chance?: Record<string, unknown>;
+  };
   /** ask_user：给用户看的内容完备度评价（写入 waitingReason.message） */
   assessment?: string;
   /** ask_user 结构化追问（有则前端询问卡） */
@@ -228,6 +237,8 @@ export type RuntimeEvent =
         artifactId: string;
         /** 有产物时的可选追问，挂到 review_artifact */
         questions?: QuestionItem[] | string[];
+        /** 自评摘要，挂到询问卡 */
+        assessment?: string;
       };
     }
   | {
@@ -295,7 +306,14 @@ export type RuntimeSession = {
  */
 export type PhaseEffect =
   | { type: "invoke_main_agent" }
-  | { type: "run_worker"; workerId: string; workerContext?: { roleId?: string } }
+  | {
+      type: "run_worker";
+      workerId: string;
+      workerContext?: {
+        roleId?: string;
+        chance?: Record<string, unknown>;
+      };
+    }
   | { type: "resume_worker" }
   | { type: "run_programmatic_review"; artifactId: string }
   | { type: "emit_message"; message: string };

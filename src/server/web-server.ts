@@ -291,6 +291,96 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/context-order") {
+        const body = JSON.parse(await readBody(req)) as {
+          action?: string;
+          slotRef?: string;
+          index?: number;
+          delta?: number;
+          anchor?: string;
+          projection?: string;
+          context_order?: unknown;
+        };
+        try {
+          const action = body.action?.trim();
+          if (action === "replace") {
+            const view = sessionManager.patchContextOrder(sessionId, {
+              action: "replace",
+              context_order: body.context_order,
+            });
+            json(res, 200, view);
+            return;
+          }
+          if (action === "move") {
+            const delta = body.delta === 1 || body.delta === -1 ? body.delta : 0;
+            if (!body.slotRef?.trim() || typeof body.index !== "number" || !delta) {
+              json(res, 400, { error: "move 需要 slotRef、index、delta(±1)" });
+              return;
+            }
+            const view = sessionManager.patchContextOrder(sessionId, {
+              action: "move",
+              slotRef: body.slotRef.trim(),
+              index: body.index,
+              delta,
+            });
+            json(res, 200, view);
+            return;
+          }
+          if (action === "set_anchor") {
+            if (
+              !body.slotRef?.trim() ||
+              typeof body.index !== "number" ||
+              (body.anchor !== "pre_history" && body.anchor !== "post_history")
+            ) {
+              json(res, 400, {
+                error: "set_anchor 需要 slotRef、index、anchor(pre_history|post_history)",
+              });
+              return;
+            }
+            const view = sessionManager.patchContextOrder(sessionId, {
+              action: "set_anchor",
+              slotRef: body.slotRef.trim(),
+              index: body.index,
+              anchor: body.anchor,
+            });
+            json(res, 200, view);
+            return;
+          }
+          if (action === "set_projection") {
+            const proj = body.projection;
+            if (
+              !body.slotRef?.trim() ||
+              typeof body.index !== "number" ||
+              (proj !== "fixed" &&
+                proj !== "full" &&
+                proj !== "summary" &&
+                proj !== "fields")
+            ) {
+              json(res, 400, {
+                error: "set_projection 需要 slotRef、index、projection",
+              });
+              return;
+            }
+            const view = sessionManager.patchContextOrder(sessionId, {
+              action: "set_projection",
+              slotRef: body.slotRef.trim(),
+              index: body.index,
+              projection: proj,
+            });
+            json(res, 200, view);
+            return;
+          }
+          json(res, 400, {
+            error: "action 须为 move | set_anchor | set_projection | replace",
+          });
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "编排失败",
+          });
+        }
+        return;
+      }
+
       if (req.method === "POST" && sub === "/context-traces/prune") {
         try {
           const result = sessionManager.pruneSessionContextTraces(sessionId);

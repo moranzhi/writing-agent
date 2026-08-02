@@ -133,7 +133,7 @@ export const MAIN_AGENT_TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "run_worker",
       description:
-        "调度 worker 执行任务。只传 workerId，inputTags/outputTags 由 Runtime 从 Worker Skill 读取。",
+        "调度 worker。常规只传 workerId。调度 chance（机遇裁定）时传 chance 请求对象（程序掷骰/比点/抽签，禁止让模型编随机）。",
       parameters: {
         type: "object",
         properties: {
@@ -146,6 +146,11 @@ export const MAIN_AGENT_TOOL_DEFINITIONS: ToolDefinition[] = [
           roleId: {
             type: "string",
             description: "role-decide 等 worker 的当前角色 id",
+          },
+          chance: {
+            type: "object",
+            description:
+              "仅 workerId=chance：{ op:'roll'|'compare'|'draw'|'pick', ... }。例 roll:{expression:'2d6+1'}；draw:{pool:['a','b'],count:1}",
           },
         },
         required: ["workerId", "reason", "requiresApproval"],

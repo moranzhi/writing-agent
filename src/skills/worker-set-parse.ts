@@ -1,4 +1,12 @@
 import { parse as parseYaml } from "yaml";
+import {
+  inferPlaySlotsFromWorkers,
+  mergeWorkersWithPlaySlots,
+  onDemandRefsFromPlaySlots,
+  parsePlaySlots,
+  refsFromPlaySlots,
+  type PlaySlotsConfig,
+} from "./play-slots.js";
 
 export type WorkerSetPresentation = {
   tone?: string;
@@ -14,6 +22,9 @@ export type WorkerSetContext = {
 };
 
 export type WorkerAcceptance = "review" | "continue";
+
+/** turn = 每轮管线；on_demand = 仅显式 run_worker / toolcall */
+export type WorkerInvocation = "turn" | "on_demand";
 
 export type WorkerSetEntry = {
   ref: string | null;
@@ -31,6 +42,8 @@ export type WorkerSetEntry = {
    * review = 用户验收；continue = 可连跑下一 worker。
    */
   acceptance?: WorkerAcceptance;
+  /** 缺省 turn；chance 等程序工具为 on_demand */
+  invocation?: WorkerInvocation;
   merge_considered?: string;
   gap?: string | null;
   presentation?: WorkerSetPresentation | null;
@@ -60,6 +73,13 @@ export type ParsedWorkerSet = {
   play_morphology?: string;
   input_protocol?: Record<string, string>;
   workers: WorkerSetEntry[];
+  /**
+   * 固定游玩槽位勾选（世界模拟路径首选）。
+   * 若存在，解析时会与 workers 合并：槽位定骨架，条目可覆盖 context/outputs。
+   */
+  play_slots?: PlaySlotsConfig;
+  /** 投影排序表（context-order.v1）；拼装优先于此 */
+  context_order?: unknown;
   tag_flow?: string[];
   resident_context?: unknown[];
   tables?: Record<string, unknown>;
@@ -86,7 +106,7 @@ export const DESIGN_STAGE_SKILL_META: Record<
   "opening-generator": {
     label: "开局 · 开场白",
     purpose:
-      "创作末尾：结合已定世界/故事写开场白（主）；表初值与开场对齐，能推则推。",
+      "创作末尾：优先落库设计.开场白与开场变量；否则现写开场；初值与开场同真相。",
   },
 };
 
@@ -108,8 +128,8 @@ export const INSTANTIATE_SKILL_META: Record<
   { label: string; purpose: string }
 > = {
   "world-blueprint": {
-    label: "世界蓝图",
-    purpose: "背景板与核心设定，供 world-simulator 等读取。",
+    label: "舞台骨架",
+    purpose: "可引用舞台（尺度、基底变造、关键舞台区），供主世界层等读取。",
   },
   topology: {
     label: "拓扑 / 关系",
@@ -120,8 +140,8 @@ export const INSTANTIATE_SKILL_META: Record<
     purpose: "元规则：如何生成 NPC、物品等实例内容。",
   },
   "narrative-guide": {
-    label: "叙事 / 描写指南",
-    purpose: "正文 POV、时态、文风（narrator 等 static 上下文）。",
+    label: "叙事指南与故事推进",
+    purpose: "遣词、笔墨焦点、禁忌与推进口径（narrator / gm 上下文）。",
   },
   "variable-catalog": {
     label: "变量目录",
@@ -162,6 +182,10 @@ export const RUN_WORKER_META: Record<string, { label: string; purpose: string }>
     "round-present": {
       label: "回合陈述",
       purpose: "结构化陈述本轮事件与各方行动/思考摘要。",
+    },
+    chance: {
+      label: "机遇裁定",
+      purpose: "程序掷骰/比点/抽签；按需调用，不进每轮管线。",
     },
   };
 
@@ -214,6 +238,11 @@ function parseWorkers(raw: unknown): WorkerSetEntry[] {
       acceptanceRaw === "review" || acceptanceRaw === "continue"
         ? acceptanceRaw
         : undefined;
+    const invocationRaw = asString(row.invocation);
+    const invocation: WorkerInvocation | undefined =
+      invocationRaw === "turn" || invocationRaw === "on_demand"
+        ? invocationRaw
+        : undefined;
     return {
       ref,
       name: asString(row.name),
@@ -222,6 +251,7 @@ function parseWorkers(raw: unknown): WorkerSetEntry[] {
       when: asString(row.when),
       rationale: asString(row.rationale),
       acceptance,
+      invocation,
       merge_considered: asString(row.merge_considered),
       gap: ref == null ? asString(row.gap) ?? null : asString(row.gap) ?? null,
       presentation: parsePresentation(row.presentation),
@@ -256,6 +286,13 @@ function parseWorkerSetObject(row: Record<string, unknown>): ParsedWorkerSet {
       ? (interactionRaw as ParsedWorkerSetInteraction)
       : undefined;
 
+  const workersRaw = parseWorkers(row.workers);
+  let play_slots = parsePlaySlots(row.play_slots ?? row.playSlots);
+  if (!play_slots) {
+    play_slots = inferPlaySlotsFromWorkers(workersRaw);
+  }
+  const workers = mergeWorkersWithPlaySlots(workersRaw, play_slots);
+
   return {
     version: typeof row.version === "number" ? row.version : undefined,
     form_summary: asString(row.form_summary),
@@ -280,7 +317,18 @@ function parseWorkerSetObject(row: Record<string, unknown>): ParsedWorkerSet {
               .filter(([, v]) => v),
           )
         : undefined,
-    workers: parseWorkers(row.workers),
+    play_slots,
+    workers,
+    context_order:
+      row.context_order &&
+      typeof row.context_order === "object" &&
+      !Array.isArray(row.context_order)
+        ? row.context_order
+        : row.contextOrder &&
+            typeof row.contextOrder === "object" &&
+            !Array.isArray(row.contextOrder)
+          ? row.contextOrder
+          : undefined,
     tag_flow: asStringList(row.tag_flow),
     resident_context: Array.isArray(row.resident_context)
       ? row.resident_context
@@ -401,6 +449,9 @@ export function looksLikeProseNotSpec(text: string): boolean {
 export function isUsableWorkerSet(parsed: ParsedWorkerSet | null | undefined): boolean {
   if (!parsed || parsed.parseError) return false;
   if ((parsed.workers?.length ?? 0) > 0) return true;
+  if (parsed.play_slots && (parsed.play_slots.gm || parsed.play_slots.narrator)) {
+    return true;
+  }
   if (parsed.interaction && Object.keys(parsed.interaction).length > 0) return true;
   if (parsed.form_summary?.trim() || parsed.interaction_paradigm?.trim()) return true;
   if (parsed.narrative_guide?.trim() || (parsed.core_premises?.length ?? 0) > 0) {
@@ -458,15 +509,63 @@ export function deriveInstantiateScope(workerSet: ParsedWorkerSet | null): strin
   return deriveDesignStageScope(workerSet);
 }
 
-/** play 阶段启用的 run worker ref 列表（保序、去重；不含 opening-generator 等 design-end skill） */
+function isOnDemandWorker(worker: WorkerSetEntry): boolean {
+  if (worker.invocation === "on_demand") return true;
+  if (worker.invocation === "turn") return false;
+  // 未标注时：chance 默认按需
+  return worker.ref?.trim() === "chance";
+}
+
+/** play 阶段每轮管线 refs（保序、去重；不含按需槽与 design-end） */
 export function deriveRunWorkerScope(workerSet: ParsedWorkerSet | null): string[] {
   if (!workerSet) return [];
+  // 固定槽位：按 perspective → gm → narrator 顺序
+  if (workerSet.play_slots) {
+    const fromSlots = refsFromPlaySlots(workerSet.play_slots);
+    if (fromSlots.length) {
+      const seen = new Set(fromSlots);
+      const ordered = [...fromSlots];
+      for (const worker of workerSet.workers) {
+        const ref = worker.ref?.trim();
+        if (!ref || seen.has(ref) || DESIGN_STAGE_SKILL_META[ref]) continue;
+        if (isOnDemandWorker(worker)) continue;
+        seen.add(ref);
+        ordered.push(ref);
+      }
+      return ordered;
+    }
+  }
   const seen = new Set<string>();
   const ordered: string[] = [];
   for (const worker of workerSet.workers) {
     const ref = worker.ref?.trim();
     if (!ref || seen.has(ref)) continue;
     if (DESIGN_STAGE_SKILL_META[ref]) continue;
+    if (isOnDemandWorker(worker)) continue;
+    seen.add(ref);
+    ordered.push(ref);
+  }
+  return ordered;
+}
+
+/** play 阶段可显式调度的按需 refs（dice/抽签等） */
+export function deriveOnDemandWorkerScope(
+  workerSet: ParsedWorkerSet | null,
+): string[] {
+  if (!workerSet) return [];
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  if (workerSet.play_slots) {
+    for (const ref of onDemandRefsFromPlaySlots(workerSet.play_slots)) {
+      if (seen.has(ref)) continue;
+      seen.add(ref);
+      ordered.push(ref);
+    }
+  }
+  for (const worker of workerSet.workers) {
+    const ref = worker.ref?.trim();
+    if (!ref || seen.has(ref) || DESIGN_STAGE_SKILL_META[ref]) continue;
+    if (!isOnDemandWorker(worker)) continue;
     seen.add(ref);
     ordered.push(ref);
   }
