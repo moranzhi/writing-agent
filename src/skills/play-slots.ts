@@ -1,15 +1,20 @@
 /**
  * 固定游玩槽位：世界模拟路径不再自由发明 workers[]，
- * 以勾选 gm / narrator / perspective 展开为声明条目。
+ * 以勾选 auditor / gm / narrator / perspective 展开为声明条目。
  * `chance` 为按需程序槽：不进每轮管线，可被 run_worker / toolcall 调用。
  */
 import type { WorkerAcceptance, WorkerSetEntry } from "./worker-set-parse.js";
 
-export type PlaySlotId = "gm" | "narrator" | "perspective";
-/** 按需槽（不进入 perspective→gm→narrator 管线） */
+export type PlaySlotId = "auditor" | "gm" | "narrator" | "perspective";
+/** 按需槽（不进入 auditor→perspective→gm→narrator 管线） */
 export type OnDemandSlotId = "chance";
 
 export type PlaySlotsConfig = {
+  /**
+   * 旁观维护（副 LLM：表/规则检查，默认空操作）；默认 true。
+   * 每轮可上场，但不等于每轮改表。缺省键视为开启。
+   */
+  auditor?: boolean;
   /** 主世界层（裁决）；默认 true */
   gm: boolean;
   /** 叙事转述；默认 true */
@@ -26,6 +31,7 @@ export type PlaySlotsConfig = {
 };
 
 export const DEFAULT_PLAY_SLOT_REFS: Record<PlaySlotId, string> = {
+  auditor: "auditor",
   gm: "world-simulator",
   narrator: "narrator",
   perspective: "role-decide",
@@ -39,6 +45,12 @@ export const PLAY_SLOT_META: Record<
   PlaySlotId,
   { label: string; purpose: string; defaultAcceptance: WorkerAcceptance }
 > = {
+  auditor: {
+    label: "旁观维护",
+    purpose:
+      "副 LLM：检查表与生成规则是否需补充；默认空操作；不写正文、不写真相权威。",
+    defaultAcceptance: "continue",
+  },
   gm: {
     label: "主世界层",
     purpose: "读真值与 Progressive 投影，输出结构化裁决包；可提议变量变更。",
@@ -69,21 +81,47 @@ export const ON_DEMAND_SLOT_META: Record<
 };
 
 /** 推荐回合顺序（启用的槽按此排序；不含按需槽） */
-export const PLAY_SLOT_ORDER: PlaySlotId[] = ["perspective", "gm", "narrator"];
+export const PLAY_SLOT_ORDER: PlaySlotId[] = [
+  "auditor",
+  "perspective",
+  "gm",
+  "narrator",
+];
+
+/** 这些槽的默认上下文不注入「对话.历史」长聊 */
+export const PLAY_SLOTS_WITHOUT_DIALOGUE_HISTORY: ReadonlySet<PlaySlotId> =
+  new Set(["auditor"]);
+
+export function playSlotIdForRef(ref: string): PlaySlotId | undefined {
+  const trimmed = ref.trim();
+  for (const id of Object.keys(DEFAULT_PLAY_SLOT_REFS) as PlaySlotId[]) {
+    if (DEFAULT_PLAY_SLOT_REFS[id] === trimmed) return id;
+  }
+  return undefined;
+}
 
 export function defaultPlaySlots(): PlaySlotsConfig {
-  return { gm: true, narrator: true, perspective: false, chance: false };
+  return {
+    auditor: true,
+    gm: true,
+    narrator: true,
+    perspective: false,
+    chance: false,
+  };
 }
 
 export function parsePlaySlots(raw: unknown): PlaySlotsConfig | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const row = raw as Record<string, unknown>;
   const base = defaultPlaySlots();
+  if (typeof row.auditor === "boolean") base.auditor = row.auditor;
+  // 兼容旧键名 / 别名
+  if (typeof row.maintain === "boolean") base.auditor = row.maintain;
+  if (typeof row.旁观 === "boolean") base.auditor = row.旁观;
   if (typeof row.gm === "boolean") base.gm = row.gm;
   if (typeof row.narrator === "boolean") base.narrator = row.narrator;
   if (typeof row.perspective === "boolean") base.perspective = row.perspective;
   if (typeof row.chance === "boolean") base.chance = row.chance;
-  // 兼容旧键名
   if (typeof row.world === "boolean") base.gm = row.world;
   if (typeof row.transcription === "boolean") base.narrator = row.transcription;
   if (typeof row.oracle === "boolean") base.chance = row.oracle;
@@ -116,7 +154,10 @@ export function refForSlot(
 }
 
 export function enabledPlaySlotIds(slots: PlaySlotsConfig): PlaySlotId[] {
-  return PLAY_SLOT_ORDER.filter((id) => Boolean(slots[id]));
+  return PLAY_SLOT_ORDER.filter((id) => {
+    if (id === "auditor") return slots.auditor !== false;
+    return Boolean(slots[id]);
+  });
 }
 
 export function enabledOnDemandSlotIds(slots: PlaySlotsConfig): OnDemandSlotId[] {
@@ -153,17 +194,21 @@ export function workerEntryForSlot(
     role: id,
     duty: meta.purpose,
     when:
-      id === "perspective"
-        ? "强信息隔离且本轮需要该角色独立反应时"
-        : id === "gm"
-          ? "每轮用户输入后"
-          : "主世界层裁决包就绪后",
+      id === "auditor"
+        ? "每轮用户输入后、主世界层之前"
+        : id === "perspective"
+          ? "强信息隔离且本轮需要该角色独立反应时"
+          : id === "gm"
+            ? "每轮用户输入后（旁观维护与可选视角之后）"
+            : "主世界层裁决包就绪后",
     rationale:
-      id === "perspective"
-        ? "知密内容不能进主世界层上下文"
-        : id === "gm"
-          ? "裁决与真值变更需要独立推理槽"
-          : "用户可见正文与裁决分离，避免文风与规则互相挤压",
+      id === "auditor"
+        ? "表与规则补充与主裁决分槽，避免挤占对话历史上下文"
+        : id === "perspective"
+          ? "知密内容不能进主世界层上下文"
+          : id === "gm"
+            ? "裁决与真值变更需要独立推理槽"
+            : "用户可见正文与裁决分离，避免文风与规则互相挤压",
     acceptance: meta.defaultAcceptance,
     invocation: "turn",
   };
@@ -251,12 +296,23 @@ export function inferPlaySlotsFromWorkers(
   const refs = new Set(
     workers.map((w) => w.ref?.trim()).filter((r): r is string => Boolean(r)),
   );
+  const hasAuditor = refs.has(DEFAULT_PLAY_SLOT_REFS.auditor);
   const hasGm = refs.has(DEFAULT_PLAY_SLOT_REFS.gm);
   const hasNarrator = refs.has(DEFAULT_PLAY_SLOT_REFS.narrator);
   const hasPerspective = refs.has(DEFAULT_PLAY_SLOT_REFS.perspective);
   const hasChance = refs.has(DEFAULT_ON_DEMAND_REFS.chance);
-  if (!hasGm && !hasNarrator && !hasPerspective && !hasChance) return undefined;
+  if (
+    !hasAuditor &&
+    !hasGm &&
+    !hasNarrator &&
+    !hasPerspective &&
+    !hasChance
+  ) {
+    return undefined;
+  }
   return {
+    // 旧规格无 auditor ref → 视为关，避免强行插入
+    auditor: hasAuditor,
     gm: hasGm,
     narrator: hasNarrator,
     perspective: hasPerspective,

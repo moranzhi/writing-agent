@@ -2,6 +2,10 @@
  * 主世界层 → 叙事转述的裁决包（settlement / direction packet）。
  * 存黑板 tag：运行.本轮.裁决
  */
+import {
+  createTableFromValues,
+  type TableDoc,
+} from "../blackboard/table-cells.js";
 import { extractJsonObjectText } from "./worker-set-parse.js";
 
 export const SETTLEMENT_SCHEMA = "settlement.v1" as const;
@@ -228,4 +232,38 @@ export function isSettlementLikeObject(doc: unknown): boolean {
   let hits = 0;
   for (const k of keys) if (k in row) hits += 1;
   return hits >= 2;
+}
+
+/**
+ * 将 variable_changes 编成 TableDoc patch，供合并进「变量.当前」。
+ * - 有 `to` → 写绝对值
+ * - 仅有 `delta` → 在现有数值上加减（无现值则从 0）
+ */
+export function settlementChangesToTablePatch(
+  changes: SettlementVariableChange[],
+  current: TableDoc | null,
+): TableDoc | null {
+  if (!changes.length) return null;
+  const byKey = new Map((current?.rows ?? []).map((r) => [r.key, r]));
+  const values: Record<string, unknown> = {};
+  const meta: Record<string, { note?: string }> = {};
+
+  for (const c of changes) {
+    const key = c.key.trim();
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (c.to !== undefined) {
+      values[key] = c.to;
+    } else if (c.delta != null) {
+      const cur = existing?.value;
+      const n = typeof cur === "number" ? cur : Number(cur);
+      values[key] = Number.isFinite(n) ? (n as number) + c.delta : c.delta;
+    } else {
+      continue;
+    }
+    if (c.note) meta[key] = { note: c.note };
+  }
+
+  if (!Object.keys(values).length) return null;
+  return createTableFromValues(values, "system", meta);
 }

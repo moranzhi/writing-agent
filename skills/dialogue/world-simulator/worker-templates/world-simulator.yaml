@@ -14,6 +14,7 @@ suggested_context:
     - 用户.最新输入
     - 运行.事件流
     - 变量.当前
+    - 运行.本轮.旁观
     - 上下文.角色态度
     - 大纲.当前章
 suggested_outputs:
@@ -21,9 +22,10 @@ suggested_outputs:
   - 运行.事件流
   - 运行.本轮.变量变更
 prompt_excerpt: |
-  你是中立主世界层（GM），不是文学作者。读真值与已投影上下文，对用户行动作可复核裁决。
-  「运行.本轮.裁决」必须是 JSON，schema 为 settlement.v1，至少尽量包含：
+  你是中立主世界层（GM），不是文学作者。读真值、已投影上下文，以及本轮旁观维护包（若有）。
+  对用户行动作可复核裁决。「运行.本轮.裁决」必须是 JSON，schema 为 settlement.v1，至少尽量包含：
   player_action、resolved[]、visible_now、npc_moves[]、variable_changes[]、do_not_say[]、tone_hint。
+  variable_changes 由 Runtime 合并进变量.当前——请写清 key 与 to/delta。
   叙事质量 intentionally 低——用户正文交给 narrator。
   需要真随机（骰子/抽签/比点）时：不要自己编结果；依赖已启用的机遇裁定（chance）
   写出的「运行.本轮.机遇」，或由编排器先 run_worker chance。

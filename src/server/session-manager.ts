@@ -62,6 +62,7 @@ import type { ActiveSkillSnapshot } from "../types/runtime.js";
 import type { BlackboardItem } from "../types/blackboard.js";
 import { Blackboard } from "../blackboard/blackboard.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
+import { parseShellAdaptationFromReplyFormat } from "../skills/present-packet.js";
 import { parseAcceptedUnits, isDesignDiskWorker } from "../skills/creation-units.js";
 import {
   formatWorkerSetForUser,
@@ -185,6 +186,14 @@ export type SessionView = {
   selectedRecipe?: { id: string; name: string; declaration: string } | null;
   /** 黑板与定稿上下文（强可读） */
   boardPanel?: BoardPanelView;
+  /** 游玩呈现壳微调（来自设计.正文组成） */
+  presentationTweaks?: {
+    shell_id?: string;
+    tone_chrome?: string;
+    show_suggested_actions?: boolean;
+    block_labels?: Record<string, string>;
+    empty_states?: Record<string, string>;
+  };
   /** 总管正在输出的思维链（流式，轮询用） */
   agentThinking?: string;
   /** Agent / Worker 流式输出（轮询用） */
@@ -1691,6 +1700,10 @@ export class SessionManager {
       lifecycleStage,
       { workerSetYaml },
     );
+    const shellAdapt = parseShellAdaptationFromReplyFormat(
+      s.runtime.getBlackboard().getContentByTag("设计.正文组成") ??
+        s.runtime.getBlackboard().getContentByTag("设计.回复格式"),
+    );
 
     return {
       id,
@@ -1735,6 +1748,12 @@ export class SessionManager {
         s.recipeOptions,
       ),
       boardPanel: buildBoardPanelFromRuntime(s.runtime.getBlackboard()),
+      presentationTweaks: shellAdapt
+        ? {
+            shell_id: shellAdapt.shell_id,
+            ...shellAdapt.tweaks,
+          }
+        : undefined,
       liveStream: this.buildLiveStreamView(id),
       agentThinking: this.agentThinkingLive.get(id),
       resumed: resumed || undefined,

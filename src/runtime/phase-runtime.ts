@@ -92,6 +92,16 @@ import {
   stringifyFiredRegistry,
 } from "../blackboard/table-side-effects.js";
 import {
+  SETTLEMENT_TAG,
+  parseSettlementPacket,
+  settlementChangesToTablePatch,
+} from "../skills/settlement-packet.js";
+import {
+  MAINTAIN_TAG,
+  maintainOpsToTablePatch,
+  parseMaintainPacket,
+} from "../skills/maintain-packet.js";
+import {
   mountResidentContextForWorker as writeResidentContextTags,
   parseResidentContext,
 } from "../skills/resident-context.js";
@@ -1058,7 +1068,59 @@ export class PhaseRuntime {
     if (nextDoc) {
       this.applyTableSideEffects(prevDoc, nextDoc, workerId);
     }
+    // 裁决包 / 旁观维护包 → 合并进变量.当前（可触发 side_effects）
+    if (tag === SETTLEMENT_TAG) {
+      this.applySettlementVariableChanges(toWrite, workerId);
+    } else if (tag === MAINTAIN_TAG) {
+      this.applyMaintainTableOps(toWrite, workerId);
+    }
     return toWrite;
+  }
+
+  /** settlement.v1.variable_changes → 变量.当前 */
+  private applySettlementVariableChanges(
+    settlementRaw: string,
+    workerId: string,
+  ): void {
+    const view = parseSettlementPacket(settlementRaw);
+    const changes = view.packet?.variable_changes;
+    if (!view.ok || !changes?.length) return;
+    const current = parseTableDoc(
+      this.blackboard.getContentByTag("变量.当前"),
+    );
+    const patch = settlementChangesToTablePatch(changes, current);
+    if (!patch) return;
+    this.writeWorkerTagContent(
+      "变量.当前",
+      stringifyTableDoc(patch),
+      workerId,
+    );
+    this.onMessage(
+      `[裁决合并] 变量.当前 ← ${changes.map((c) => c.key).join("、")}`,
+    );
+  }
+
+  /** maintain.v1.table_ops → 变量.当前（及其他已支持表） */
+  private applyMaintainTableOps(maintainRaw: string, workerId: string): void {
+    const view = parseMaintainPacket(maintainRaw);
+    const ops = view.packet?.table_ops;
+    if (!view.ok || !ops?.length) return;
+    const current = parseTableDoc(
+      this.blackboard.getContentByTag("变量.当前"),
+    );
+    const patch = maintainOpsToTablePatch(ops, current, "变量.当前");
+    if (!patch) return;
+    this.writeWorkerTagContent(
+      "变量.当前",
+      stringifyTableDoc(patch),
+      workerId,
+    );
+    const keys = ops
+      .filter((o) => (o.tag?.trim() || "变量.当前") === "变量.当前")
+      .map((o) => o.key);
+    if (keys.length) {
+      this.onMessage(`[旁观维护] 变量.当前 ← ${keys.join("、")}`);
+    }
   }
 
   /** 避免 syncSlots 重复把同一句用户输入追加进历史 */

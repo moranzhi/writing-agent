@@ -1,6 +1,12 @@
 import { renderIntakePanel } from "./intake-ui.js";
 import { getActiveQuestions, renderQuestionsCard } from "./questions-ui.js";
 import { displayWorkerLabel, formatWorkerDisplayTitle } from "./display-labels.js";
+import {
+  PRESENT_SHELL_IDS,
+  parsePresentDoc,
+  presentFromPlain,
+  renderPresentShellHtml,
+} from "./present-shells.js";
 
 const HIDE_KINDS = new Set(["worker_stub"]);
 
@@ -339,6 +345,44 @@ function formatQuestionsHtml(body) {
     return `<p class="msg-q-lead">${esc(body)}</p>`;
   }
   return `<ol class="msg-q-list">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ol>`;
+}
+
+/** play 期助手终稿（含已验收的用户展示）用呈现壳渲染 */
+function shouldRenderPlayPresent(msg, view) {
+  if (view?.lifecycleStage !== "play") return false;
+  if (msg.role === "user") return false;
+  const kind = msg.kind ?? "";
+  if (kind === "worker_questions" || kind === "orchestrator_thinking") return false;
+  if (kind === "worker_output") return false; // 已走 formatArtifactBodyHtml
+  const actor = String(msg.actor ?? "");
+  if (actor === "narrator" || /用户展示|开场白/.test(String(msg.title ?? ""))) {
+    return true;
+  }
+  // 助手可见终稿：无特殊 kind 的长文
+  return kind === "system_info" || kind === "worker_stub" || !kind;
+}
+
+function formatPlayPresentHtml(body, view) {
+  const trimmed = (body || "").trim();
+  if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
+  const tweaks = view?.presentationTweaks;
+  const fallbackShell =
+    tweaks?.shell_id && PRESENT_SHELL_IDS?.includes?.(tweaks.shell_id)
+      ? tweaks.shell_id
+      : tweaks?.shell_id &&
+          ["prose", "chat_monitor", "turn_panel", "chapter_reader"].includes(
+            tweaks.shell_id,
+          )
+        ? tweaks.shell_id
+        : "prose";
+  const parsed = tryParseJsonDoc(trimmed);
+  const presentView = parsed ? parsePresentDoc(parsed, fallbackShell) : null;
+  if (presentView) {
+    return renderPresentShellHtml(presentView.packet, esc, { tweaks });
+  }
+  return renderPresentShellHtml(presentFromPlain(trimmed, fallbackShell), esc, {
+    tweaks,
+  });
 }
 
 /** 旧会话 skill 选择提示，新流程不再展示 */
@@ -985,6 +1029,13 @@ function splitTaggedArtifactSections(text) {
   });
 }
 
+/** 轻度修复模型常出的尾逗号，便于友好渲染而不是整墙原文 */
+function softenJsonText(s) {
+  return String(s || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/,\s*([\]}])/g, "$1");
+}
+
 function tryParseJsonDoc(text) {
   const tryParse = (s) => {
     try {
@@ -993,7 +1044,7 @@ function tryParseJsonDoc(text) {
       return null;
     }
   };
-  const cleaned = stripCodeFences(text);
+  const cleaned = softenJsonText(stripCodeFences(text));
   let parsed = tryParse(cleaned);
   if (parsed != null) return parsed;
   const objStart = cleaned.indexOf("{");
@@ -1082,9 +1133,9 @@ function summarizeArtifactDoc(doc, tagTitle = "") {
       .map((d) => {
         if (!d || typeof d !== "object") return "";
         const name = d.名 || d.维度 || "?";
-        const pct = parseCompleteness(d.分数);
-        if (pct == null) return "";
-        return `<span class="pct-pill tone-${pctTone(pct)}">${esc(String(name))} ${Math.round(pct)}%</span>`;
+        const ten = parseTenScore(d.分数);
+        if (ten == null) return "";
+        return `<span class="pct-pill tone-${tenTone(ten)}">${esc(String(name))} ${formatTenScore(ten)}/10</span>`;
       })
       .filter(Boolean);
     if (pills.length) scoresHtml = pills.join("");
@@ -1125,6 +1176,10 @@ function renderArtifactCompactCard(doc, tagTitle, rawSlice, opts = {}) {
 function renderPlainCompactCard(title, content, opts = {}) {
   const preview = clampPreviewText(content, 160);
   const openAttr = opts.open ? " open" : "";
+  const looksJson = /^\s*[{\[]/.test(String(content || ""));
+  const body = looksJson
+    ? `<p class="ws-muted artifact-parse-hint">未能解析为 JSON，以下为原文（可展开原始块排查）。</p><pre class="review-feed-plain">${esc(content)}</pre>`
+    : `<pre class="review-feed-plain">${esc(content)}</pre>`;
   return `<details class="artifact-compact"${openAttr}>
     <summary class="artifact-compact-sum">
       <div class="artifact-compact-row">
@@ -1135,7 +1190,7 @@ function renderPlainCompactCard(title, content, opts = {}) {
         <span class="artifact-compact-toggle" aria-hidden="true"></span>
       </div>
     </summary>
-    <div class="artifact-compact-body"><pre class="review-feed-plain">${esc(content)}</pre></div>
+    <div class="artifact-compact-body">${body}</div>
   </details>`;
 }
 
@@ -1159,6 +1214,14 @@ function formatArtifactBodyHtml(body, opts = {}) {
       if (parsed != null && typeof parsed === "object") {
         return renderArtifactCompactCard(parsed, sec.title, sec.content, cardOpts);
       }
+      const presentTag =
+        /用户展示|开场白/.test(sec.title || "") || opts.asPresentFallback;
+      if (presentTag) {
+        return `<div class="artifact-compact-list">${renderPresentShellHtml(
+          presentFromPlain(sec.content, "prose"),
+          esc,
+        )}</div>`;
+      }
       return renderPlainCompactCard(sec.title || "产物", sec.content, cardOpts);
     });
     return `<div class="artifact-compact-list">${cards.join("")}</div>`;
@@ -1167,6 +1230,10 @@ function formatArtifactBodyHtml(body, opts = {}) {
   const parsed = tryParseJsonDoc(trimmed);
   if (parsed != null && typeof parsed === "object") {
     return `<div class="artifact-compact-list">${renderArtifactCompactCard(parsed, "", trimmed, cardOpts)}</div>`;
+  }
+
+  if (opts.asPresentFallback) {
+    return renderPresentShellHtml(presentFromPlain(trimmed, "prose"), esc);
   }
 
   return `<div class="artifact-compact-list">${renderPlainCompactCard("产物", trimmed, cardOpts)}</div>`;
@@ -1178,6 +1245,12 @@ function renderKnownArtifactHtml(doc, opts = {}) {
     return `<div class="artifact-friendly">${renderStructuredValueHtml(doc, 0)}</div>`;
   }
   const schema = doc.schema;
+  const presentView = parsePresentDoc(doc);
+  if (presentView) {
+    return renderPresentShellHtml(presentView.packet, esc, {
+      tweaks: opts.shellTweaks,
+    });
+  }
   if (schema === "settlement.v1" || isSettlementLike(doc)) {
     return renderSettlementSectionsHtml(doc);
   }
@@ -1199,6 +1272,7 @@ function renderKnownArtifactHtml(doc, opts = {}) {
 
 function renderPlaySlotsHtml(doc) {
   const slotLabels = {
+    auditor: "旁观维护",
     gm: "主世界层",
     "world-simulator": "主世界层",
     narrator: "叙事转述",
@@ -1301,14 +1375,41 @@ function renderContextFragmentHtml(doc, opts = {}) {
   return `<div class="artifact-friendly artifact-context-fragment">${parts.join("")}</div>`;
 }
 
-/** 美学纲领等：顶层板块并排 mosaic，子项用瓷砖网格 */
+/** 按技能分流正文视图；无专用模板则返回 ""（调用方走通用结构化） */
 function renderSpecialtyBodyHtml(body, skill) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const skillName = typeof skill === "string" ? skill : "";
+
+  if (
+    body.rules != null ||
+    body.必要性判断 != null ||
+    skillName.includes("生成规则")
+  ) {
+    const html = renderGenerationRulesBodyHtml(body);
+    if (html) return html;
+  }
+  if (
+    body.社会结构 != null ||
+    body.世界状况 != null ||
+    skillName.includes("舞台骨架")
+  ) {
+    const html = renderWorldBlueprintBodyHtml(body);
+    if (html) return html;
+  }
+  if (
+    body.支撑点 != null ||
+    (Array.isArray(body.依据的核心体验) && body.覆盖检验 != null) ||
+    skillName.includes("实现机制")
+  ) {
+    const html = renderMechanismBodyHtml(body);
+    if (html) return html;
+  }
+
   const looksAesthetics =
     body.设定逻辑 != null ||
     body.交互范式 != null ||
     body.美学纲领 != null ||
-    (typeof skill === "string" && skill.includes("美学"));
+    skillName.includes("美学");
   if (!looksAesthetics) return "";
 
   const order = ["设定逻辑", "交互范式", "美学纲领"];
@@ -1331,6 +1432,361 @@ function renderSpecialtyBodyHtml(body, skill) {
   return parts.length ? `<div class="af-mosaic">${parts.join("")}</div>` : "";
 }
 
+function skillSection(title, inner, cls = "") {
+  if (!inner) return "";
+  return `<section class="skill-card-section${cls ? ` ${cls}` : ""}"><h4>${esc(title)}</h4>${inner}</section>`;
+}
+
+function skillChipRow(items) {
+  const chips = (items || []).filter(Boolean).map((t) => `<span class="ws-badge ws-badge-continue">${esc(String(t))}</span>`);
+  return chips.length ? `<div class="artifact-chip-row">${chips.join("")}</div>` : "";
+}
+
+function skillProseList(arr) {
+  if (!Array.isArray(arr) || !arr.length) return "";
+  return `<ul class="artifact-list">${arr.map((x) => `<li>${esc(String(x))}</li>`).join("")}</ul>`;
+}
+
+function skillKvBlock(obj, keys) {
+  if (!obj || typeof obj !== "object") return "";
+  const entries = (keys && keys.length ? keys.map((k) => [k, obj[k]]) : Object.entries(obj)).filter(
+    ([, v]) => v != null && v !== "",
+  );
+  if (!entries.length) return "";
+  return `<div class="skill-kv">${entries
+    .map(([k, v]) => {
+      if (Array.isArray(v)) {
+        return `<div class="skill-kv-row"><span class="skill-kv-key">${esc(String(k))}</span><div class="skill-kv-val">${skillProseList(v)}</div></div>`;
+      }
+      if (v && typeof v === "object") {
+        return `<div class="skill-kv-row"><span class="skill-kv-key">${esc(String(k))}</span><div class="skill-kv-val">${renderStructuredValueHtml(v, 1)}</div></div>`;
+      }
+      return `<div class="skill-kv-row"><span class="skill-kv-key">${esc(String(k))}</span><div class="skill-kv-val">${renderProseHtml(String(v))}</div></div>`;
+    })
+    .join("")}</div>`;
+}
+
+/** 生成规则 · 专用正文卡 */
+function renderGenerationRulesBodyHtml(body) {
+  const parts = [];
+  if (body.本步参数 && typeof body.本步参数 === "object") {
+    const p = body.本步参数;
+    parts.push(
+      skillSection(
+        "本步参数",
+        skillChipRow([
+          p.target && `对象：${p.target}`,
+          p.rule_id && `rule_id：${p.rule_id}`,
+          p.lifecycle_intent && `生命周期：${p.lifecycle_intent}`,
+        ]) || skillKvBlock(p),
+      ),
+    );
+  }
+  if (body.必要性判断 && typeof body.必要性判断 === "object") {
+    const n = body.必要性判断;
+    const verdict = n.结论 != null ? String(n.结论) : "";
+    const tone = /无需|跳过/.test(verdict) ? "warn" : "ok";
+    parts.push(
+      skillSection(
+        "必要性判断",
+        `${verdict ? `<p class="skill-verdict tone-${tone}">${esc(verdict)}</p>` : ""}${skillKvBlock(n, [
+          "生成对象",
+          "对游玩的重要性",
+          "基础生成的不足",
+        ])}`,
+      ),
+    );
+  }
+
+  const rules = Array.isArray(body.rules) ? body.rules : [];
+  if (rules.length) {
+    const cards = rules.map((rule, i) => renderOneGenerationRuleCard(rule, i)).filter(Boolean);
+    parts.push(skillSection("规则", `<div class="skill-rule-stack">${cards.join("")}</div>`));
+  } else if (body.必要性判断) {
+    parts.push(skillSection("规则", `<p class="ws-muted">本步未建立专门规则（rules 为空）</p>`));
+  }
+
+  if (body.增量说明 != null && String(body.增量说明).trim()) {
+    parts.push(skillSection("增量说明", renderProseHtml(String(body.增量说明))));
+  }
+
+  const used = new Set(["本步参数", "必要性判断", "rules", "增量说明"]);
+  for (const [k, v] of Object.entries(body)) {
+    if (used.has(k) || v == null || v === "") continue;
+    parts.push(skillSection(k, renderStructuredValueHtml(v, 0)));
+  }
+  return parts.length ? `<div class="skill-view skill-view-generation-rules">${parts.join("")}</div>` : "";
+}
+
+function renderOneGenerationRuleCard(rule, index) {
+  if (!rule || typeof rule !== "object") return "";
+  const title = rule.对象 || rule.rule_id || `规则 ${index + 1}`;
+  const head = `<header class="skill-rule-head">
+    <div class="skill-rule-title">${esc(String(title))}</div>
+    ${skillChipRow([
+      rule.rule_id && `id · ${rule.rule_id}`,
+      rule.生命周期 && String(rule.生命周期),
+    ])}
+  </header>`;
+
+  const blocks = [];
+  if (rule.上下文策略 && typeof rule.上下文策略 === "object") {
+    const flags = Object.entries(rule.上下文策略)
+      .map(([k, v]) => `<span class="ws-slot-chip ${v ? "ws-slot-on" : "ws-slot-off"}">${esc(k)}</span>`)
+      .join("");
+    blocks.push(`<div class="skill-sub"><div class="skill-sub-title">上下文策略</div><div class="ws-slot-row">${flags}</div></div>`);
+  }
+  if (rule.数量 != null) {
+    blocks.push(`<div class="skill-sub"><div class="skill-sub-title">数量</div>${skillKvBlock(typeof rule.数量 === "object" ? rule.数量 : { 值: rule.数量 })}</div>`);
+  }
+  if (rule.生成与描写 && typeof rule.生成与描写 === "object") {
+    const g = rule.生成与描写;
+    const methodKeys = ["依据", "方法", "硬约束", "字段间约束", "变化维度", "禁止项", "去重规则", "校验"];
+    blocks.push(
+      `<div class="skill-sub"><div class="skill-sub-title">生成与描写</div>${methodKeys
+        .filter((k) => Array.isArray(g[k]) && g[k].length)
+        .map(
+          (k) =>
+            `<div class="skill-method"><span class="skill-method-label">${esc(k)}</span>${skillProseList(g[k])}</div>`,
+        )
+        .join("")}</div>`,
+    );
+  }
+  if (rule.产物格式 && typeof rule.产物格式 === "object") {
+    blocks.push(renderProductSchemaCard(rule.产物格式));
+  }
+  const pools = Array.isArray(rule.池) ? rule.池 : [];
+  if (pools.length) {
+    blocks.push(
+      `<div class="skill-sub"><div class="skill-sub-title">池（${pools.length}）</div><div class="skill-pool-grid">${pools
+        .map((p) => {
+          if (!p || typeof p !== "object") return "";
+          const n = Array.isArray(p.条目) ? p.条目.length : 0;
+          return `<article class="skill-pool-card">
+            <div class="skill-pool-name">${esc(String(p.名称 || p.pool_id || "池"))}</div>
+            ${skillChipRow([
+              p.绑定字段 && `绑 · ${p.绑定字段}`,
+              p.用途 && String(p.用途),
+              n ? `${n} 条` : "",
+            ])}
+            ${p.说明 ? `<p class="skill-pool-desc">${esc(clampPreviewText(String(p.说明), 120))}</p>` : ""}
+          </article>`;
+        })
+        .join("")}</div></div>`,
+    );
+  }
+
+  return `<article class="skill-rule-card">${head}${blocks.join("")}</article>`;
+}
+
+function renderProductSchemaCard(fmt) {
+  const schema = fmt.schema && typeof fmt.schema === "object" ? fmt.schema : null;
+  const fields = schema
+    ? Object.entries(schema)
+        .map(([name, spec]) => {
+          if (!spec || typeof spec !== "object") {
+            return `<tr><td>${esc(name)}</td><td colspan="3">${esc(String(spec))}</td></tr>`;
+          }
+          const type = spec.type != null ? String(spec.type) : "—";
+          const req = spec.required === true ? "必填" : spec.required === false ? "可选" : "—";
+          const desc = spec.description != null ? clampPreviewText(String(spec.description), 80) : "";
+          const extra = [];
+          if (Array.isArray(spec.allowed_values) && spec.allowed_values.length) {
+            extra.push(
+              `枚举 ${spec.allowed_values
+                .slice(0, 6)
+                .map((x) => (x && typeof x === "object" ? x.value : x))
+                .map(String)
+                .join("/")}${spec.allowed_values.length > 6 ? "…" : ""}`,
+            );
+          }
+          if (spec.minimum != null || spec.maximum != null) {
+            extra.push(`[${spec.minimum ?? "…"}, ${spec.maximum ?? "…"}]`);
+          }
+          return `<tr>
+            <td><code>${esc(name)}</code></td>
+            <td>${esc(type)}</td>
+            <td>${esc(req)}</td>
+            <td>${esc(desc)}${extra.length ? `<div class="ws-muted">${esc(extra.join(" · "))}</div>` : ""}</td>
+          </tr>`;
+        })
+        .join("")
+    : "";
+
+  return `<div class="skill-sub">
+    <div class="skill-sub-title">产物格式</div>
+    ${skillChipRow([fmt.格式 && String(fmt.格式), fmt.批量时 && `批量 · ${fmt.批量时}`])}
+    ${
+      fields
+        ? `<div class="skill-table-wrap"><table class="skill-field-table"><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>${fields}</tbody></table></div>`
+        : ""
+    }
+    ${
+      fmt.示例形状 && typeof fmt.示例形状 === "object"
+        ? `<details class="skill-example"><summary>示例形状</summary><pre class="json-pretty"><code>${highlightJson(JSON.stringify(fmt.示例形状, null, 2))}</code></pre></details>`
+        : ""
+    }
+  </div>`;
+}
+
+/** 舞台骨架 · 专用正文卡 */
+function renderWorldBlueprintBodyHtml(body) {
+  const parts = [];
+  if (Array.isArray(body.依据的体验) && body.依据的体验.length) {
+    parts.push(skillSection("依据的体验", skillProseList(body.依据的体验)));
+  }
+  if (body.舞台尺度) {
+    parts.push(skillSection("舞台尺度", skillKvBlock(body.舞台尺度)));
+  }
+  if (body.基底与变造) {
+    parts.push(skillSection("基底与变造", skillKvBlock(body.基底与变造)));
+  }
+
+  const social = Array.isArray(body.社会结构) ? body.社会结构 : [];
+  if (social.length) {
+    parts.push(
+      skillSection(
+        "社会结构",
+        `<div class="skill-entity-grid">${social
+          .map((s) => {
+            if (!s || typeof s !== "object") return "";
+            return `<article class="skill-entity-card">
+              <div class="skill-entity-name">${esc(String(s.名称 || "?"))}</div>
+              ${skillChipRow([s.性质, s.细化程度])}
+              ${s.在舞台上的位置 ? `<p>${esc(clampPreviewText(String(s.在舞台上的位置), 140))}</p>` : ""}
+              ${s.服务体验 ? `<p class="ws-muted">服务：${esc(clampPreviewText(String(s.服务体验), 100))}</p>` : ""}
+            </article>`;
+          })
+          .join("")}</div>`,
+      ),
+    );
+  }
+
+  const status = Array.isArray(body.世界状况) ? body.世界状况 : [];
+  if (status.length) {
+    parts.push(
+      skillSection(
+        "世界状况",
+        `<div class="skill-entity-grid">${status
+          .map((s) => {
+            if (!s || typeof s !== "object") return "";
+            return `<article class="skill-entity-card">
+              <div class="skill-entity-name">${esc(String(s.名称 || "?"))}</div>
+              ${skillChipRow([s.性质, s.作用范围, s.节奏或触发])}
+              ${s.是什么 ? `<p>${esc(clampPreviewText(String(s.是什么), 140))}</p>` : ""}
+              ${s.如何影响运转 ? `<p class="ws-muted">${esc(clampPreviewText(String(s.如何影响运转), 120))}</p>` : ""}
+            </article>`;
+          })
+          .join("")}</div>`,
+      ),
+    );
+  }
+
+  const zones = Array.isArray(body.关键舞台区) ? body.关键舞台区 : [];
+  if (zones.length) {
+    parts.push(
+      skillSection(
+        "关键舞台区",
+        `<div class="skill-entity-grid">${zones
+          .map((z) => {
+            if (!z || typeof z !== "object") return "";
+            return `<article class="skill-entity-card">
+              <div class="skill-entity-name">${esc(String(z.名称 || "?"))}</div>
+              ${z.是什么 ? `<p>${esc(clampPreviewText(String(z.是什么), 120))}</p>` : ""}
+              ${z.为何需要 ? `<p class="ws-muted">${esc(clampPreviewText(String(z.为何需要), 100))}</p>` : ""}
+              ${Array.isArray(z.格局要点) && z.格局要点.length ? skillProseList(z.格局要点) : ""}
+            </article>`;
+          })
+          .join("")}</div>`,
+      ),
+    );
+  }
+
+  if (Array.isArray(body.未展开范围) && body.未展开范围.length) {
+    parts.push(skillSection("未展开范围", skillProseList(body.未展开范围)));
+  }
+  if (body.覆盖检验 && typeof body.覆盖检验 === "object") {
+    parts.push(skillSection("覆盖检验", skillKvBlock(body.覆盖检验)));
+  }
+
+  const used = new Set([
+    "依据的体验",
+    "舞台尺度",
+    "基底与变造",
+    "社会结构",
+    "世界状况",
+    "关键舞台区",
+    "未展开范围",
+    "覆盖检验",
+  ]);
+  for (const [k, v] of Object.entries(body)) {
+    if (used.has(k) || v == null || v === "") continue;
+    parts.push(skillSection(k, renderStructuredValueHtml(v, 0)));
+  }
+  return parts.length ? `<div class="skill-view skill-view-world-blueprint">${parts.join("")}</div>` : "";
+}
+
+/** 实现机制 · 专用正文卡 */
+function renderMechanismBodyHtml(body) {
+  const parts = [];
+  if (Array.isArray(body.依据的核心体验) && body.依据的核心体验.length) {
+    parts.push(skillSection("依据的核心体验", skillProseList(body.依据的核心体验)));
+  }
+  const points = Array.isArray(body.支撑点) ? body.支撑点 : [];
+  if (points.length) {
+    parts.push(
+      skillSection(
+        "支撑点",
+        `<div class="skill-entity-grid">${points
+          .map((p) => {
+            if (!p || typeof p !== "object") return "";
+            const pct = parseCompleteness(p.完备度);
+            const mini = pct != null ? renderMiniPctHtml(pct) : "";
+            const morph = p.切面形态 && typeof p.切面形态 === "object" ? p.切面形态 : null;
+            return `<article class="skill-entity-card">
+              <header class="skill-entity-head"><div class="skill-entity-name">${esc(String(p.名称 || "?"))}</div>${mini}</header>
+              ${skillChipRow([p.归属元素, p.支撑切面])}
+              ${morph?.概述 ? `<p>${esc(clampPreviewText(String(morph.概述), 140))}</p>` : ""}
+              ${p.如何支撑 ? `<p class="ws-muted">${esc(clampPreviewText(String(p.如何支撑), 120))}</p>` : ""}
+              ${p.缺失后果 ? `<p class="artifact-fact pending">缺失：${esc(clampPreviewText(String(p.缺失后果), 100))}</p>` : ""}
+            </article>`;
+          })
+          .join("")}</div>`,
+      ),
+    );
+  }
+  const rels = Array.isArray(body.支撑点关系) ? body.支撑点关系 : [];
+  if (rels.length) {
+    parts.push(
+      skillSection(
+        "支撑点关系",
+        `<ul class="artifact-list">${rels
+          .map((r) => {
+            if (!r || typeof r !== "object") return "";
+            const who = Array.isArray(r.涉及) ? r.涉及.join(" · ") : "";
+            return `<li><strong>${esc(String(r.关系 || "关系"))}</strong>${who ? ` · ${esc(who)}` : ""}${
+              r.体验作用 ? `<div class="ws-muted">${esc(String(r.体验作用))}</div>` : ""
+            }</li>`;
+          })
+          .join("")}</ul>`,
+      ),
+    );
+  }
+  if (body.覆盖检验 && typeof body.覆盖检验 === "object") {
+    parts.push(skillSection("覆盖检验", skillKvBlock(body.覆盖检验)));
+  }
+  const used = new Set(["依据的核心体验", "支撑点", "支撑点关系", "覆盖检验"]);
+  for (const [k, v] of Object.entries(body)) {
+    if (used.has(k) || v == null || v === "") continue;
+    parts.push(skillSection(k, renderStructuredValueHtml(v, 0)));
+  }
+  return parts.length ? `<div class="skill-view skill-view-mechanism">${parts.join("")}</div>` : "";
+}
+
+/**
+ * 完备度等：0–100 百分制（正文诊断块仍用 %）。
+ * 自评维度请用 parseTenScore。
+ */
 function parseCompleteness(v) {
   if (v == null) return null;
   if (typeof v === "number" && Number.isFinite(v)) {
@@ -1347,6 +1803,38 @@ function parseCompleteness(v) {
     if (n >= 0 && n <= 100) return n;
   }
   return null;
+}
+
+/** 自评分数：0–10；兼容旧百分数（>10…100 → /10） */
+function parseTenScore(v) {
+  if (v == null) return null;
+  const fromNumber = (n) => {
+    if (!Number.isFinite(n) || n < 0) return null;
+    if (n <= 10) return Math.round(n * 10) / 10;
+    if (n <= 100) return Math.round((n / 10) * 10) / 10;
+    return null;
+  };
+  if (typeof v === "number") return fromNumber(v);
+  const s = String(v).trim();
+  if (!s) return null;
+  const slash = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*10$/i);
+  if (slash) return fromNumber(Number(slash[1]));
+  const withPct = s.match(/^(\d+(?:\.\d+)?)\s*%$/);
+  if (withPct) return fromNumber(Number(withPct[1]));
+  const bare = s.match(/^(\d+(?:\.\d+)?)$/);
+  if (bare) return fromNumber(Number(bare[1]));
+  return null;
+}
+
+function formatTenScore(ten) {
+  if (ten == null || !Number.isFinite(ten)) return "?";
+  return Number.isInteger(ten) ? String(ten) : String(Math.round(ten * 10) / 10);
+}
+
+function tenTone(ten) {
+  if (ten < 4) return "low";
+  if (ten < 7) return "mid";
+  return "high";
 }
 
 function pctTone(pct) {
@@ -1366,6 +1854,22 @@ function renderPctMeterHtml(pct, label = "完备度") {
       <span class="pct-meter-value">${n}%</span>
     </div>
     <div class="pct-meter-track"><i style="width:${n}%"></i></div>
+  </div>`;
+}
+
+/** 自评十分制条 */
+function renderTenMeterHtml(ten, label = "评分") {
+  if (ten == null || !Number.isFinite(ten)) return "";
+  const score = Math.max(0, Math.min(10, ten));
+  const width = Math.round(score * 10);
+  const tone = tenTone(score);
+  const shown = formatTenScore(score);
+  return `<div class="pct-meter tone-${tone}" role="meter" aria-valuenow="${score}" aria-valuemin="0" aria-valuemax="10" aria-label="${esc(label)} ${shown}/10">
+    <div class="pct-meter-head">
+      <span class="pct-meter-label">${esc(label)}</span>
+      <span class="pct-meter-value">${shown}/10</span>
+    </div>
+    <div class="pct-meter-track"><i style="width:${width}%"></i></div>
   </div>`;
 }
 
@@ -1559,14 +2063,14 @@ function renderSelfScoreHtml(自评) {
     .map((d) => {
       if (!d || typeof d !== "object") return "";
       const name = d.名 || d.维度 || d.name || "?";
-      const pct = parseCompleteness(d.分数);
+      const ten = parseTenScore(d.分数);
       const note = d.说明
         ? `<p class="artifact-score-note">${esc(clampPreviewText(String(d.说明), 80))}</p>`
         : "";
-      if (pct == null) {
+      if (ten == null) {
         return `<div class="artifact-score"><div class="pct-meter-head"><span class="pct-meter-label">${esc(String(name))}</span><span class="ws-muted">未评分</span></div>${note}</div>`;
       }
-      return `<div class="artifact-score">${renderPctMeterHtml(pct, String(name))}${note}</div>`;
+      return `<div class="artifact-score">${renderTenMeterHtml(ten, String(name))}${note}</div>`;
     })
     .filter(Boolean);
   let weak = "";
@@ -2085,6 +2589,10 @@ function renderReviewFeedCard(review, opts = {}) {
   const artifactHtml = formatArtifactBodyHtml(review.body, {
     defaultOpen: true,
     hideAskSidecar: opts.hideAskSidecar === true,
+    asPresentFallback:
+      review.workerId === "narrator" ||
+      review.workerId === "opening-generator" ||
+      /用户展示|开场白/.test(review.body || ""),
   });
   const contextId = review.sourceMessageId || review.id || "";
   const hasContext = review.contextTrace ? "1" : "0";
@@ -2293,7 +2801,9 @@ export function renderMessageFeed(view, loading, handlers = {}) {
             ? formatQuestionsHtml(body)
             : kind === "worker_output"
               ? formatArtifactBodyHtml(body)
-              : esc(body)
+              : shouldRenderPlayPresent(msg, view)
+                ? formatPlayPresentHtml(body, view)
+                : esc(body)
         }</div>
         ${isUser ? `<footer class="msg-foot">${headInner}</footer>` : ""}
       </div>`;

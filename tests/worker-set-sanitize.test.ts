@@ -95,7 +95,7 @@ describe("sanitizeWorkerSetOutputs", () => {
             brief: "孤立免疫",
             正文: { 美学纲领: { 体验内核: "特权与惊惶" } },
             自评: {
-              维度: [{ 名: "美学纲领", 分数: 60, 说明: "边界未锁" }],
+              维度: [{ 名: "美学纲领", 分数: 6, 说明: "边界未锁" }],
               薄弱点: "尺度",
             },
             追问: {
@@ -116,7 +116,7 @@ describe("sanitizeWorkerSetOutputs", () => {
     );
     expect(result.askUser?.length).toBe(1);
     expect(result.askUser?.[0]?.options?.length).toBe(2);
-    expect(result.askAssessment).toContain("美学纲领 60%");
+    expect(result.askAssessment).toContain("美学纲领 6/10");
     expect(result.askAssessment).toContain("还需确认");
   });
 });

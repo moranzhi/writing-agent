@@ -57,6 +57,14 @@ ${workerLines}
 - **禁止**替用户猜测或改选配方
 - **禁止**一次编排排死全程固定 DAG
 
+## play 优先顺序（lifecycleStage=play）
+- 严格按声明管线顺序调度（play_slots 展开序）：**auditor（旁观维护）→ perspective? → gm（主世界层）→ narrator（转述）**
+- auditor / gm / perspective 的 acceptance 多为 continue：跑完立刻调度下一槽，不要中途 ask_user
+- 仅 narrator（或规格标明 review 的终稿槽）停下来等人看
+- chance 仅在需要真随机时按需 run_worker，不插入每轮固定序
+- slots.pendingSideEffectWorkers 非空时优先调度其中 workerId
+- **禁止**发明未声明的 play ref；**禁止**把旁观维护当成正文作者
+
 输出必须是 JSON 对象，字段：
 {
   "action": "ask_user" | "run_worker" | "create_temp_worker" | "review_blackboard" | "finish",
@@ -102,15 +110,19 @@ export class MainAgent {
 
 export function buildMainAgentUserPrompt(context: MainAgentContext): string {
   const { session, blackboardIndex, availableWorkers } = context;
+  const stage = String(session.slots?.uiLifecycleStage ?? "design");
+  const pendingSide = session.slots?.pendingSideEffectWorkers;
   return JSON.stringify(
     {
       runtimePhase: session.phase,
       waitingReason: session.waitingReason,
+      lifecycleStage: stage,
       flowId: session.flowId,
       currentStepId: session.currentStepId,
       currentWorkerId: session.currentWorkerId,
       acceptanceMode: session.acceptanceMode,
       slots: session.slots,
+      pendingSideEffectWorkers: pendingSide ?? null,
       pendingDecision: session.pendingDecision
         ? {
             id: session.pendingDecision.id,
@@ -129,7 +141,9 @@ export function buildMainAgentUserPrompt(context: MainAgentContext): string {
       blackboardIndex,
       availableWorkers,
       instruction:
-        "根据当前状态决定下一步。尚无设计.创作流程 → design-flow；有未完成步骤 → design-step；steps 做完但 status=open → 再 design-flow；禁止旧 design-core/fixed/worker/refine。已 accept 且需开局 → opening-generator。进 play 由用户手动。",
+        stage === "play"
+          ? "play：按声明序 auditor→perspective?→gm→narrator；continue 槽连跑；仅终稿 review 停；pendingSideEffectWorkers 优先；禁止未声明 ref。"
+          : "根据当前状态决定下一步。尚无设计.创作流程 → design-flow；有未完成步骤 → design-step；steps 做完但 status=open → 再 design-flow；禁止旧 design-core/fixed/worker/refine。已 accept 且需开局 → opening-generator。进 play 由用户手动。",
     },
     null,
     2,

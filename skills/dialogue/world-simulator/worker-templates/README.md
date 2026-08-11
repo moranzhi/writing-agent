@@ -18,19 +18,21 @@ Runtime 执行时读 Worker 集条目，不直接读本目录。
 
 ```json
 {
-  "play_slots": { "gm": true, "narrator": true, "perspective": false, "chance": false },
+  "play_slots": { "auditor": true, "gm": true, "narrator": true, "perspective": false },
   "workers": []
 }
 ```
 
 | 槽 | 默认 ref | 模板 |
 |----|----------|------|
+| auditor | `auditor` | `auditor.yaml` — maintain.v1；默认空操作；无长对话史 |
 | gm | `world-simulator` | `world-simulator.yaml` — 裁决包 settlement.v1 |
 | narrator | `narrator` | `narrator.yaml` — 只读裁决包写正文 |
 | perspective | `role-decide` | `role-decide.yaml` — 可选知密视角 |
 | chance（按需） | `chance` | `chance.yaml` — 程序骰子/抽签/比点；不进每轮管线 |
 
-变量 / Progressive：**不是**独立 LLM 模板；见 `docs/progressive-data-design.md`（真值 + side_effects）。
+变量 / Progressive：**不是**独立 LLM 模板；见 `docs/progressive-data-design.md`（真值 + side_effects）。  
+Runtime：写入 `运行.本轮.裁决` 时自动合并 `variable_changes` → `变量.当前`；写入 `运行.本轮.旁观` 时按需合并 `table_ops`。
 
 ## 其它文件
 

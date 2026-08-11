@@ -212,6 +212,23 @@ const DEFAULT_WORKER_CONTRACTS: Record<
   string,
   { context: { static: string[]; dynamic: string[] }; outputs: string[] }
 > = {
+  auditor: {
+    context: {
+      static: [
+        "设计.worker集",
+        "设计.变量设计与更新规则",
+        "设计.生成规则",
+        "设计.变量控制上下文",
+      ],
+      dynamic: [
+        "用户.最新输入",
+        "变量.当前",
+        "上下文.旁观.状态摘要",
+        "运行.本轮.工单",
+      ],
+    },
+    outputs: ["运行.本轮.旁观"],
+  },
   "world-simulator": {
     context: {
       static: [
@@ -226,6 +243,7 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "用户.最新输入",
         "上下文.角色态度",
         "大纲.当前章",
+        "运行.本轮.旁观",
       ],
     },
     outputs: ["运行.本轮.裁决", "运行.事件流", "运行.本轮.变量变更"],
@@ -243,8 +261,10 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "设计.worker集",
         "设计.叙事指南与故事推进",
         "设计.叙事指南",
+        "设计.正文组成",
+        "设计.监控栏",
       ],
-      dynamic: ["运行.本轮.裁决", "用户.最新输入"],
+      dynamic: ["运行.本轮.裁决", "用户.最新输入", "变量.当前"],
     },
     outputs: ["输出.用户展示"],
   },
@@ -289,6 +309,7 @@ const WORKER_ROLE_LABELS: Record<string, string> = {
   core: "核心",
   auxiliary: "辅助",
   transcription: "转述",
+  auditor: "旁观维护",
   gm: "主世界层",
   narrator: "叙事转述",
   perspective: "角色视角",
@@ -746,7 +767,10 @@ export function formatWorkerSetForUser(
       ? PLAY_SLOT_ORDER.map((id: PlaySlotId) => ({
           id,
           label: PLAY_SLOT_META[id].label,
-          enabled: Boolean(parsed.play_slots![id]),
+          enabled:
+            id === "auditor"
+              ? parsed.play_slots!.auditor !== false
+              : Boolean(parsed.play_slots![id]),
           ref: refForSlot(parsed.play_slots!, id),
         }))
       : undefined,

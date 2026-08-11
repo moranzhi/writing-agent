@@ -45,8 +45,8 @@ describe("context-fragment.v1", () => {
       正文: { 美学纲领: { 体验内核: "…" } },
       自评: {
         维度: [
-          { 名: "交互范式", 分数: 70, 说明: "权限尚可" },
-          { 名: "美学纲领", 分数: 55, 说明: "边界未锁" },
+          { 名: "交互范式", 分数: 7, 说明: "权限尚可" },
+          { 名: "美学纲领", 分数: 5.5, 说明: "边界未锁" },
         ],
         薄弱点: "暴力尺度未定",
       },
@@ -61,7 +61,8 @@ describe("context-fragment.v1", () => {
         ],
       },
     });
-    expect(side.assessment).toContain("交互范式 70%");
+    expect(side.assessment).toContain("交互范式 7/10");
+    expect(side.assessment).toContain("美学纲领 5.5/10");
     expect(side.assessment).toContain("薄弱点：暴力尺度未定");
     expect(side.assessment).toContain("为贴近质感");
     expect(side.questions).toHaveLength(1);

@@ -817,6 +817,170 @@ body.rail-collapsed .af-mosaic {
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 5px;
 }
+
+/* 鎶�鑳戒笓鐢ㄦ鏂囧崱 */
+.skill-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.skill-card-section > h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.skill-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skill-kv-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 120px) 1fr;
+  gap: 8px 12px;
+  align-items: start;
+}
+.skill-kv-key {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.skill-kv-val {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+@media (max-width: 640px) {
+  .skill-kv-row { grid-template-columns: 1fr; gap: 2px; }
+}
+.skill-verdict {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.skill-verdict.tone-ok {
+  background: color-mix(in srgb, var(--ok) 14%, var(--surface));
+  color: var(--ok);
+}
+.skill-verdict.tone-warn {
+  background: color-mix(in srgb, var(--warn) 18%, var(--surface));
+  color: color-mix(in srgb, var(--warn) 80%, #000);
+}
+.skill-rule-stack,
+.skill-entity-grid,
+.skill-pool-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.skill-entity-grid,
+.skill-pool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.skill-rule-card,
+.skill-entity-card,
+.skill-pool-card {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+}
+.skill-rule-head,
+.skill-entity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.skill-rule-title,
+.skill-entity-name,
+.skill-pool-name {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.skill-sub {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+.skill-sub-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.skill-method {
+  margin-bottom: 8px;
+}
+.skill-method-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.skill-table-wrap {
+  overflow-x: auto;
+  margin-top: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.skill-field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.skill-field-table th,
+.skill-field-table td {
+  padding: 7px 9px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.skill-field-table th {
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+}
+.skill-field-table tr:last-child td { border-bottom: 0; }
+.skill-field-table code {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.skill-example {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.skill-example summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+}
+.skill-pool-desc {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.artifact-parse-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.skill-entity-card > p {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
 .pct-mini {
   display: inline-flex;
   align-items: center;
@@ -1835,4 +1999,83 @@ body.rail-collapsed .af-mosaic {
   body:not(.rail-collapsed) .rail-tab-label,
   body:not(.rail-collapsed) .path-bar { display: none !important; }
   body:not(.rail-collapsed) .rail-panels { display: none; }
+}
+
+/* —— 游玩呈现壳 present.v1（P2 最小） —— */
+.present-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.present-shell-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, rgba(0, 0, 0, 0.03));
+}
+.present-region {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.present-region-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.present-region-body {
+  margin: 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  font-size: 14px;
+}
+.present-region--monitor .present-region-body,
+.present-region--aside .present-region-body {
+  font-size: 13px;
+  color: var(--text, inherit);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, rgba(0, 0, 0, 0.03));
+}
+.present-shell--chat_monitor .present-region--monitor {
+  order: -1;
+}
+.present-shell--turn_panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.present-shell--chapter_reader .present-region--header .present-region-body {
+  font-size: 15px;
+  font-weight: 600;
+}
+.present-actions {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.45;
+  font-size: 13px;
+}
+.present-tone--messenger .present-region--body {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+}
+.present-tone--book .present-region--body {
+  max-width: 42rem;
+}
+.present-tone--terminal .present-region-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
 }

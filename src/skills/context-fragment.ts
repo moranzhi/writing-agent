@@ -40,6 +40,29 @@ function asStringList(v: unknown): string[] {
   return v.map((x) => asString(x)).filter((x): x is string => Boolean(x));
 }
 
+/** 自评分数展示：0–10；兼容旧百分数 */
+function formatSelfScoreLabel(score: unknown): string {
+  if (typeof score === "number" && Number.isFinite(score)) {
+    if (score >= 0 && score <= 10) {
+      const shown = Number.isInteger(score) ? String(score) : String(Math.round(score * 10) / 10);
+      return `${shown}/10`;
+    }
+    if (score > 10 && score <= 100) {
+      const ten = Math.round((score / 10) * 10) / 10;
+      const shown = Number.isInteger(ten) ? String(ten) : String(ten);
+      return `${shown}/10`;
+    }
+  }
+  if (typeof score === "string" && score.trim()) {
+    const s = score.trim();
+    if (/\/\s*10$/i.test(s)) return s.replace(/\s+/g, "");
+    const n = Number(s.replace(/%$/, ""));
+    if (Number.isFinite(n)) return formatSelfScoreLabel(n);
+    return s;
+  }
+  return "?";
+}
+
 function normalizeStability(v: unknown): ContextFragmentStability | undefined {
   if (v === "stable" || v === "semi" || v === "volatile") return v;
   if (v === "稳" || v === "少变") return "stable";
@@ -164,7 +187,7 @@ export function contextFragmentToView(raw: unknown): ContextFragmentView {
     const lines = dims.map((d) => {
       if (!d || typeof d !== "object") return String(d);
       const r = d as Record<string, unknown>;
-      return `${r.名 ?? "?"}：${r.分数 ?? "?"}%${r.说明 ? ` — ${r.说明}` : ""}`;
+      return `${r.名 ?? "?"}：${formatSelfScoreLabel(r.分数)}${r.说明 ? ` — ${r.说明}` : ""}`;
     });
     if (typeof row.薄弱点 === "string" && row.薄弱点.trim()) {
       lines.push(`薄弱点：${row.薄弱点.trim()}`);
@@ -233,10 +256,7 @@ export function extractFragmentAskSidecar(raw: unknown): {
       const name = asString(r.名) ?? asString(r.维度) ?? "?";
       const score = r.分数;
       const note = asString(r.说明);
-      const scoreText =
-        typeof score === "number" || typeof score === "string"
-          ? `${score}%`
-          : "?";
+      const scoreText = formatSelfScoreLabel(score);
       assessmentParts.push(
         note ? `${name} ${scoreText} — ${note}` : `${name} ${scoreText}`,
       );

@@ -5,7 +5,12 @@
  */
 import type { ContextSegmentDef } from "./context-segments.js";
 import { extractJsonObjectText } from "./worker-set-parse.js";
-import { parsePlaySlots, type PlaySlotsConfig } from "./play-slots.js";
+import {
+  parsePlaySlots,
+  playSlotIdForRef,
+  PLAY_SLOTS_WITHOUT_DIALOGUE_HISTORY,
+  type PlaySlotsConfig,
+} from "./play-slots.js";
 import {
   DIALOGUE_HISTORY_TAG,
   isDialogueHistoryRef,
@@ -430,8 +435,22 @@ export function mergeContextOrderIntoWorkerSetJson(
 /** 声明缺 context 时的兜底（与模板/检查器默认对齐的最小集） */
 const SYNTH_FALLBACK_CONTEXT: Record<
   string,
-  { static: string[]; dynamic: string[] }
+  { static: string[]; dynamic: string[]; /** 默认不注入对话.历史 */ skipHistory?: boolean }
 > = {
+  auditor: {
+    static: [
+      "设计.变量设计与更新规则",
+      "设计.生成规则",
+      "设计.变量控制上下文",
+    ],
+    dynamic: [
+      "用户.最新输入",
+      "变量.当前",
+      "上下文.旁观.状态摘要",
+      "运行.本轮.工单",
+    ],
+    skipHistory: true,
+  },
   "world-simulator": {
     static: ["设计.变量设计与更新规则"],
     dynamic: ["变量.当前", "运行.事件流", "用户.最新输入", "上下文.角色态度"],
@@ -460,7 +479,12 @@ export function synthesizeContextOrderFromWorkers(
     if (!ref) continue;
     const fallback = SYNTH_FALLBACK_CONTEXT[ref];
     const staticTags = w.context?.static ?? fallback?.static ?? [];
-    const dynamicTags = w.context?.dynamic ?? fallback?.dynamic ?? ["用户.最新输入"];
+    const dynamicTags =
+      w.context?.dynamic ?? fallback?.dynamic ?? ["用户.最新输入"];
+    const slotId = playSlotIdForRef(ref);
+    const skipHistory =
+      Boolean(fallback?.skipHistory) ||
+      (slotId != null && PLAY_SLOTS_WITHOUT_DIALOGUE_HISTORY.has(slotId));
     const inserts: ContextOrderInsert[] = [
       {
         order: 0,
@@ -479,16 +503,17 @@ export function synthesizeContextOrderFromWorkers(
         projection: tag.includes("事件流") ? "summary" : "full",
       });
     }
-    inserts.push({
-      order: o++,
-      ref: DIALOGUE_HISTORY_TAG,
-      projection: "summary",
-      note: "对话历史（按投影裁剪）",
-    });
+    if (!skipHistory) {
+      inserts.push({
+        order: o++,
+        ref: DIALOGUE_HISTORY_TAG,
+        projection: "summary",
+        note: "对话历史（按投影裁剪）",
+      });
+    }
     for (const tag of dynamicTags) {
       if (!tag?.trim()) continue;
       if (isDialogueHistoryRef(tag)) continue;
-      // 事件流已可由历史兜底；仍可单独挂
       inserts.push({
         order: o++,
         ref: tag.trim(),
@@ -504,8 +529,18 @@ export function synthesizeContextOrderFromWorkers(
   if (!slots.length) return undefined;
   return renumberContextOrder({
     schema: CONTEXT_ORDER_SCHEMA,
-    brief: "扁平投影序（含对话.历史标签，可编排）",
+    brief: skipHistoryBrief(slots)
+      ? "扁平投影序（旁观维护无对话.历史；主世界层等可含历史）"
+      : "扁平投影序（含对话.历史标签，可编排）",
     play_slots: playSlots,
     slots,
   });
+}
+
+function skipHistoryBrief(slots: ContextOrderSlot[]): boolean {
+  return slots.some(
+    (s) =>
+      !s.inserts.some((i) => isDialogueHistoryRef(i.ref)) &&
+      playSlotIdForRef(s.ref) === "auditor",
+  );
 }

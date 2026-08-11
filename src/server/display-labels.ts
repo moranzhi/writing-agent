@@ -28,6 +28,7 @@ const WORKER_LABELS: Record<string, string> = {
   narrator: "叙事转述",
   "role-decide": "角色决策",
   "world-simulator": "主世界层",
+  auditor: "旁观维护",
   chance: "机遇裁定",
   "round-present": "回合呈现",
   outline: "大纲 / 细纲",

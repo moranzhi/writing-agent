@@ -93,6 +93,14 @@ function buildToolLoopSystemPrompt(
 - 未声明开局、用户也未要求开场时，不要硬调 opening-generator。
 - **禁止**替用户猜测或改选配方。
 - **禁止**一次编排排死全程固定长链。
+
+## play 阶段提示（lifecycleStage=play 时优先）
+- 管线顺序：**auditor（旁观维护）→ perspective? → gm（主世界层）→ narrator**。
+- auditor/gm/perspective 多为 continue：写完立刻 run 下一槽，不要中途 ask_user。
+- 只在 narrator（或 review 终稿槽）停给人看。
+- chance 按需；pendingSideEffectWorkers 非空则优先调度。
+- 禁止未声明 play ref；旁观维护默认空操作，不是正文作者。
+
 当前 skill 可用 worker：
 ${workerLines}
 

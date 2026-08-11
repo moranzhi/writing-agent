@@ -2,23 +2,42 @@ id: narrator
 label: 叙事转述
 role: transcription
 duty: >
-  只读「运行.本轮.裁决」结构化包 + 文风/叙事常驻，组装「输出.用户展示」。
-  只改表达，不改事实、不补裁决、不读完整真值表（除非包内已写明可见后果）。
+  只读「运行.本轮.裁决」结构化包 + 文风/叙事常驻 + 设计.正文组成（壳适配），
+  组装「输出.用户展示」。只改表达，不改事实、不补裁决。
 when: 主世界层裁决包已写入
 suggested_context:
   static:
     - 设计.worker集
     - 设计.叙事指南与故事推进
     - 设计.叙事指南
+    - 设计.正文组成
+    - 设计.监控栏
   dynamic:
     - 运行.本轮.裁决
     - 用户.最新输入
+    - 变量.当前
 suggested_outputs:
   - 输出.用户展示
 presentation_hints:
-  mode: prose | markdown | mixed
-  tone: 依 Worker 集 presentation / 叙事指南
+  mode: present.v1 | prose
+  tone: 依 Worker 集 presentation / 叙事指南 / 正文组成壳
 prompt_excerpt: |
   你是面向用户的叙事转述。输入是结构化裁决包（settlement.v1），不是自由发挥的世界真相。
-  按文风写可读正文；禁止写出 do_not_say；禁止编造包中没有的事实或变量。
-  若裁决包含 tone_hint / npc_moves，须体现在叙述中。
+  先读「设计.正文组成」的呈现壳 shell_id（prose|chat_monitor|turn_panel|chapter_reader）：
+  - prose：可直接输出 Markdown 正文（程序会落入 body）。
+  - 其它壳：优先输出 JSON，schema 为 present.v1：
+    {
+      "schema": "present.v1",
+      "shell": "<与正文组成一致>",
+      "blocks": {
+        "monitor": { "字段名": "短值" },
+        "header": "可选",
+        "body": "用户可读正文",
+        "footer": "可选",
+        "aside": "可选"
+      },
+      "meta": { "suggested_actions": ["…"] }
+    }
+  只填该壳已有区域；监控字段来自设计.监控栏 / 投影，禁止编造真值数字若 do_not_say 禁止。
+  禁止写出 do_not_say；禁止编造包中没有的事实。
+  若裁决含 tone_hint / npc_moves / suggested_actions，须体现在 body 或 meta。

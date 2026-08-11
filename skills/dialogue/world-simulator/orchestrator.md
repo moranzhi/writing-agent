@@ -76,7 +76,12 @@ design
   → 用户手动进 play
 
 play
-  用户输入 → 声明内 worker → 终稿
+  用户输入
+    → auditor（旁观维护，默认空操作；无长对话史）
+    → perspective?（仅强信息隔离）
+    → gm / world-simulator（主世界层，settlement.v1；variable_changes 由 Runtime 合并）
+    → narrator（用户可见正文；通常在此 review）
+  chance 仅按需；禁止发明未声明 ref
 ```
 
 ## 启动（agent-first）
@@ -104,6 +109,8 @@ play
 |--------|------------------|----------------|
 | design-* | true | user_confirmed |
 | opening-generator | true | user_confirmed |
+| auditor / world-simulator / role-decide | false（play） | continue（声明默认） |
+| narrator | false（play 调度） | review（等人看终稿） |
 
 ## 总管优先行为
 
@@ -113,6 +120,7 @@ play
 4. `waiting_user(review_artifact)` → 引导验收
 5. reject → 收修订 → 重跑同一 worker（含修订流程 = 再调味）
 6. 终稿（含 `设计.worker集`）已 accept 且需开局 → `opening-generator`
+7. **play**：按 `play_slots` 序 `auditor → perspective? → gm → narrator`；`pendingSideEffectWorkers` 优先
 
 ## 禁用行为
 
@@ -121,3 +129,4 @@ play
 - 一次 design-flow 排死全程固定长链（应增量）
 - 调度声明未列出的 play ref
 - Agent 挑选模型
+- play 中把旁观维护当正文作者，或跳过 gm 直接 narrator
