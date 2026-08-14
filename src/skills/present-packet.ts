@@ -10,7 +10,10 @@ export const PRESENT_TAG = "输出.用户展示";
 export const PRESENT_SHELL_IDS = [
   "prose",
   "chat_monitor",
+  "spotlight",
   "turn_panel",
+  "split_board",
+  "choice_dock",
   "chapter_reader",
 ] as const;
 
@@ -70,7 +73,7 @@ export function defaultShellTweaks(
 ): PresentShellTweaks {
   return {
     tone_chrome: "default",
-    show_suggested_actions: shell === "turn_panel",
+    show_suggested_actions: shell === "turn_panel" || shell === "choice_dock",
     block_labels: {},
     empty_states: {},
   };
@@ -317,13 +320,19 @@ export function shellDefaultRegions(
   switch (shell) {
     case "chat_monitor":
       return ["monitor", "body", "footer"];
+    case "spotlight":
+      return ["monitor", "body", "footer"];
     case "turn_panel":
-      return ["monitor", "header", "body", "footer", "aside"];
+      return ["monitor", "header", "body", "aside", "footer"];
+    case "split_board":
+      return ["header", "body", "aside", "footer"];
+    case "choice_dock":
+      return ["monitor", "body", "footer"];
     case "chapter_reader":
       return ["header", "body", "aside", "footer"];
     case "prose":
     default:
-      return ["body"];
+      return ["body", "footer"];
   }
 }
 

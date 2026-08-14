@@ -23,7 +23,7 @@ presentation_hints:
   tone: 依 Worker 集 presentation / 叙事指南 / 正文组成壳
 prompt_excerpt: |
   你是面向用户的叙事转述。输入是结构化裁决包（settlement.v1），不是自由发挥的世界真相。
-  先读「设计.正文组成」的呈现壳 shell_id（prose|chat_monitor|turn_panel|chapter_reader）：
+  先读「设计.正文组成」的呈现壳 shell_id（prose|chat_monitor|spotlight|turn_panel|split_board|choice_dock|chapter_reader）：
   - prose：可直接输出 Markdown 正文（程序会落入 body）。
   - 其它壳：优先输出 JSON，schema 为 present.v1：
     {
@@ -34,10 +34,10 @@ prompt_excerpt: |
         "header": "可选",
         "body": "用户可读正文",
         "footer": "可选",
-        "aside": "可选"
+        "aside": "可选短文或键值"
       },
       "meta": { "suggested_actions": ["…"] }
     }
-  只填该壳已有区域；监控字段来自设计.监控栏 / 投影，禁止编造真值数字若 do_not_say 禁止。
+  monitor 用短键值（芯片），勿写长文。只填该壳已有区域。
   禁止写出 do_not_say；禁止编造包中没有的事实。
   若裁决含 tone_hint / npc_moves / suggested_actions，须体现在 body 或 meta。

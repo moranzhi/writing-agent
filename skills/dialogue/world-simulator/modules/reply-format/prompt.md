@@ -12,7 +12,7 @@ name: 正文组成
 id: reply-format
 artifact: 设计.正文组成
 declaration: >
-  基于四大固定呈现壳做适配微调（选 shell_id + 填字段/显示名/开关等）；
+  基于七种固定呈现壳做适配微调（选 shell_id + 填字段/显示名/开关等）；
   产出壳适配单；禁止从零发明布局或完整 UI
 when: |
   需要为本局选定呈现壳，或微调监控字段/块显示名/建议行动开关时；
@@ -34,10 +34,13 @@ feeds: narrator
 ```opening
 本局在固定呈现壳上做适配（不是设计新界面）。
 
-0. 四选一壳：
-   · prose — 纯散文
-   · chat_monitor — 对话 + 顶栏监控
-   · turn_panel — 回合面板
+0. 七选一壳（主面积给谁）：
+   · prose — 纯散文（正文≈全屏）
+   · chat_monitor — 对话 + 顶栏芯片
+   · spotlight — 场面主视（正文最大）
+   · turn_panel — 回合面板（场面+侧栏交互）
+   · split_board — 双栏（左故事·右线索）
+   · choice_dock — 选择坞（底部大行动区）
    · chapter_reader — 章节阅读
 
 1. 要微调什么？（监控字段、块称呼、要不要建议行动、tone_chrome…）
@@ -50,13 +53,13 @@ feeds: narrator
 ```task
 你正在执行「正文组成」。产物必须是 **context-fragment.v1** JSON，写入「设计.正文组成」。
 
-本步 = **壳适配单**：四大壳里选一个，只改允许的微调轴。
+本步 = **壳适配单**：七种壳里选一个，只改允许的微调轴。
 权威：`docs/play-presentation-shells.md`。
 禁止从零设计分区、禁止自造 shell_id、禁止完整 CSS。
 
 执行顺序：
 1. 读美学/叙事：继承人称与终稿归属；不重开文风问卷。
-2. **选 shell_id**；说明为何是这个壳而不是另三个。
+2. **选 shell_id**；说明为何是这个壳而不是其它壳（主面积给谁）。
 3. 可见块：只挂到该壳已有区域；写显示名与职责（适配文案，不是新分区）。
 4. 监控栏：字段意图（细则可交「设计监控栏」）；无 monitor 的壳写「不启用」。
 5. 隐藏段（若有）：定界与用途。
@@ -107,7 +110,7 @@ summary：`正文组成 · 适配 {shell_id} · …`。
       "从美学/叙事继承的呈现要点"
     ],
     "呈现壳": {
-      "shell_id": "prose|chat_monitor|turn_panel|chapter_reader",
+      "shell_id": "prose|chat_monitor|spotlight|turn_panel|split_board|choice_dock|chapter_reader",
       "为何选它": "一句话",
       "微调": {
         "tone_chrome": "messenger|terminal|book|default",
@@ -187,7 +190,7 @@ summary：`正文组成 · 适配 {shell_id} · …`。
       {
         "名": "可实现",
         "分数": 8,
-        "说明": "shell_id 是否在四大壳内；分区与隐藏段是否可交给转述/程序"
+        "说明": "shell_id 是否在七种壳内；分区与隐藏段是否可交给转述/程序"
       }
     ],
     "薄弱点": "一句话"
@@ -208,7 +211,7 @@ summary：`正文组成 · 适配 {shell_id} · …`。
 
 硬规则：
 1. 合法 JSON；含公共三段外壳。
-2. 正文须含 `呈现壳.shell_id`（四大之一）与 `微调`；可见块只挂壳已有区域。
+2. 正文须含 `呈现壳.shell_id`（七种之一）与 `微调`；可见块只挂壳已有区域。
 3. `可见块` 至少 1 条（通常含 body）；禁止自造区域 id / 第五种壳。
 4. 禁止程序 API schema、context `order`、完整 CSS。
 5. 自评：可见完备 / 监控克制 / 可实现（=壳适配是否可执行）。
@@ -219,7 +222,7 @@ summary：`正文组成 · 适配 {shell_id} · …`。
 
 ```checklist
 - [ ] 是「选壳+微调」，不是从零设计布局？
-- [ ] shell_id 在四大壳内？可见块未超出该壳分区？
+- [ ] shell_id 在七种壳内？可见块未超出该壳分区？
 - [ ] 微调轴已填或明确默认？监控栏未塞死名片字段？
 - [ ] 隐藏段（若有）定界清楚？未写 CSS 工程？
 ```

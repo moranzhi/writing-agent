@@ -29,7 +29,8 @@ boundary: |
   具体实例：按规则填最终 records；本步不写最终实例（池条目≠实例）。
   舞台骨架 / 实现机制：可引用，不重写百科、不重做移除检验。
   变量*：游玩期状态更新——本步只约束生成时的类型与合法初值范围。
-feeds: gm
+  旁观维护：可读「合同」——rule_id、产物格式、何时可 need_generate；不依赖整份描写长文。
+feeds: gm,auditor
 ```
 
 ## opening
@@ -105,7 +106,7 @@ summary：建立 → `生成规则 · {对象} · {仅动态|仅预生成|预生
   "schema": "context-fragment.v1",
   "技能": "生成规则",
   "brief": "一句话：对象族 + 建立规则|无需专门规则 + 生命周期（若建立）+ 有池|无池",
-  "mount": ["world-simulator"],
+  "mount": ["world-simulator", "auditor"],
   "稳变": "stable",
   "正文": {
     "本步参数": {
@@ -235,7 +236,7 @@ summary：建立 → `生成规则 · {对象} · {仅动态|仅预生成|预生
 5. **产物格式强制单层**：`schema` 的 `type` 不得为 `object`；`array` 的 `items` 不得为 object。禁止 `外貌.发色` 这类嵌套路径。
 6. 结论为「无需专门规则」时：`rules` 必须 `[]`。上下文策略布尔须与生命周期一致。
 7. 池条目≠最终实例；禁止输出具体实例 `records`、变量更新规则、执行单元列表。
-8. `mount` 默认主世界层；**禁止**写 `order`。summary 见 task。
+8. `mount` 默认主世界层 + 旁观维护（旁观只需合同键：rule_id/格式/必要性；描写长文可在投影时 summary）；**禁止**写 `order`。summary 见 task。
 
 ## checklist
 

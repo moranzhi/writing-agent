@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>呈现壳预览 · Writing Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/settings.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/shells.css" />
+  </head>
+  <body class="settings-page shells-page">
+    <header class="st-top">
+      <a class="st-brand" href="/">Writing Agent</a>
+      <nav class="st-nav" aria-label="主导航">
+        <a href="/">对话</a>
+        <a href="/modules.html">技能</a>
+        <a href="/shells.html" aria-current="page">呈现壳</a>
+        <a href="/stats.html">Token</a>
+        <a href="/settings.html">设置</a>
+      </nav>
+    </header>
+
+    <div class="st-shell shells-shell">
+      <aside class="st-rail" aria-label="壳列表">
+        <p class="st-rail-label">呈现壳</p>
+        <nav class="shells-list" id="shell-list" role="tablist"></nav>
+        <p class="st-rail-label shells-tone-label">装饰语气</p>
+        <div class="shells-tones" id="tone-list" role="group" aria-label="tone_chrome"></div>
+        <p class="st-rail-label shells-tone-label">正文长度</p>
+        <div class="shells-tones" id="length-list" role="group" aria-label="body length"></div>
+        <p class="st-rail-note">
+          正文按 600~3000 字设计：随字数撑高、页面滚动；侧栏/选择坞钉住。创作只改内容绑定。
+        </p>
+      </aside>
+
+      <main class="st-main">
+        <header class="st-main-head">
+          <div>
+            <h1 id="panel-title">呈现壳预览</h1>
+            <p class="st-sub" id="panel-subtitle">用示例数据看布局与可调项</p>
+          </div>
+        </header>
+        <div class="st-body shells-body">
+          <section class="shells-meta" id="shell-meta"></section>
+          <section class="shells-preview-wrap">
+            <h2 class="shells-preview-label">预览</h2>
+            <div id="shell-preview" class="shells-preview"></div>
+          </section>
+          <section class="shells-tweaks">
+            <h2>本页可调（对应创作「微调轴」）</h2>
+            <div class="shells-tweak-grid" id="tweak-controls"></div>
+          </section>
+          <section class="shells-help">
+            <h2>设计意图</h2>
+            <ul>
+              <li>正文默认装得下单轮 <strong>600~3000 字</strong>：区域随内容长高，由页面/消息区滚动，不塞进固定小框。</li>
+              <li>双栏壳：侧栏 sticky；选择坞：选项区 sticky 贴底——长文读完控件还在。</li>
+              <li>壳差在「谁占主柱」；可改的是字段/显示名/行动开关/tone，不是重画布局。</li>
+            </ul>
+            <p class="muted">说明文档：<code>docs/play-presentation-shells.md</code></p>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/shells.js"></script>
+  </body>
+</html>

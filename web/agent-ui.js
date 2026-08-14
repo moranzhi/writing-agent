@@ -370,9 +370,15 @@ function formatPlayPresentHtml(body, view) {
     tweaks?.shell_id && PRESENT_SHELL_IDS?.includes?.(tweaks.shell_id)
       ? tweaks.shell_id
       : tweaks?.shell_id &&
-          ["prose", "chat_monitor", "turn_panel", "chapter_reader"].includes(
-            tweaks.shell_id,
-          )
+          [
+            "prose",
+            "chat_monitor",
+            "spotlight",
+            "turn_panel",
+            "split_board",
+            "choice_dock",
+            "chapter_reader",
+          ].includes(tweaks.shell_id)
         ? tweaks.shell_id
         : "prose";
   const parsed = tryParseJsonDoc(trimmed);
@@ -1404,6 +1410,14 @@ function renderSpecialtyBodyHtml(body, skill) {
     const html = renderMechanismBodyHtml(body);
     if (html) return html;
   }
+  if (
+    body.风格与写法 != null ||
+    body.推进与决策 != null ||
+    skillName.includes("叙事指南")
+  ) {
+    const html = renderNarrativeBodyHtml(body);
+    if (html) return html;
+  }
 
   const looksAesthetics =
     body.设定逻辑 != null ||
@@ -1430,6 +1444,60 @@ function renderSpecialtyBodyHtml(body, skill) {
     );
   }
   return parts.length ? `<div class="af-mosaic">${parts.join("")}</div>` : "";
+}
+
+/** 叙事指南 · 一份全文结构化卡（不强调双投影裁剪） */
+function renderNarrativeBodyHtml(body) {
+  const order = [
+    "依据的体验",
+    "叙事纲领",
+    "风格与遣词",
+    "笔墨焦点",
+    "禁忌与不偏好",
+    "情境备用",
+    "推进与决策",
+    "内容与表达",
+    "风格与写法",
+  ];
+  const used = new Set();
+  const parts = [];
+  // 若仍是旧的「风格与写法 / 推进与决策」两大包，整块展示
+  if (body.风格与写法 != null || body.推进与决策 != null) {
+    if (Array.isArray(body.依据的体验) && body.依据的体验.length) {
+      parts.push(
+        `<section class="af-panel"><h4>依据的体验</h4>${skillProseList(body.依据的体验)}</section>`,
+      );
+      used.add("依据的体验");
+    }
+    if (body.风格与写法 != null) {
+      parts.push(
+        `<section class="af-panel af-panel-wide"><h4>风格与写法</h4>${renderStructuredValueHtml(body.风格与写法, 0)}</section>`,
+      );
+      used.add("风格与写法");
+    }
+    if (body.推进与决策 != null) {
+      parts.push(
+        `<section class="af-panel af-panel-wide"><h4>推进与决策</h4>${renderStructuredValueHtml(body.推进与决策, 0)}</section>`,
+      );
+      used.add("推进与决策");
+    }
+  } else {
+    for (const key of order) {
+      if (body[key] == null) continue;
+      used.add(key);
+      const wide = key === "风格与遣词" || key === "推进与决策";
+      parts.push(
+        `<section class="af-panel${wide ? " af-panel-wide" : ""}"><h4>${esc(key)}</h4>${renderStructuredValueHtml(body[key], 0)}</section>`,
+      );
+    }
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (used.has(k) || v == null || v === "") continue;
+    parts.push(
+      `<section class="af-panel"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, 0)}</section>`,
+    );
+  }
+  return parts.length ? `<div class="af-mosaic af-narrative">${parts.join("")}</div>` : "";
 }
 
 function skillSection(title, inner, cls = "") {

@@ -23,7 +23,7 @@ boundary: |
   变量设计：字段、映射索引、维护语句形状、side_effects。
   具体实例：表行正文——本步不重生成，只声明「旁观读当前档/哪几个摘要键」。
   设计监控栏 / 正文组成：用户可见层；本步管提示词视野。
-feeds: gm
+feeds: gm,auditor
 ```
 
 ## opening
@@ -72,13 +72,13 @@ summary：`变量控制上下文 · …`。
   "schema": "context-fragment.v1",
   "技能": "变量控制上下文",
   "brief": "一句话：各槽看见什么状态",
-  "mount": ["world-simulator"],
+  "mount": ["world-simulator", "auditor"],
   "稳变": "stable",
   "正文": {
     "挂载": [
       {
         "对象": "主世界层|叙事转述|旁观|常驻",
-        "ref或mount": "world-simulator|narrator|…",
+        "ref或mount": "world-simulator|narrator|auditor|…",
         "真值键": ["好感"],
         "投影tag": ["上下文.角色态度"],
         "映射摘要": ["从映射id取当前档的哪些键；无则 []"],

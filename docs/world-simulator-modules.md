@@ -5,7 +5,8 @@
 > **标准范例**：`modules/aesthetics-interaction/prompt.md`。  
 > **真值 / Data / Progressive（变量与门控）**：**`docs/progressive-data-design.md`**。  
 > **上下文片段 / 槽位 / 投影排序**：**`docs/context-fragment-design.md`**。  
-> **游玩呈现壳（P1）**：**`docs/play-presentation-shells.md`**。  
+> **游玩呈现壳**：**`docs/play-presentation-shells.md`**（预览页 `/shells.html`）。  
+> **主世界层↔旁观怎么配合**：**`docs/play-dm-auditor.md`**。  
 > **提示词待改清单**：**`docs/briefs/prompt-revision-inventory.md`**。  
 > **给外部 AI 的完整泛用规范**：**`docs/briefs/capability-authoring-brief.md`**（含 `context-fragment.v1`）。
 
@@ -128,14 +129,14 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写**；前端 mosaic 视图 |
 | 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm`；**专用卡已接** |
 | 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况；**专用卡已接** |
-| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；`params.target`；**专用卡已接** |
+| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；`params.target`；挂 gm+auditor；**专用卡已接** |
 | 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；`params.rule_id` |
-| 叙事指南与故事推进 | `narrative` | **已写**：遣词/笔墨焦点/禁忌与不偏好 + 推进；挂转述 |
-| 拓扑图谱 | `topology` | 骨架，待细写 |
-| 设计监控栏 | `status-bar` | **已写**：只盯会变信息；旧称状态栏 |
-| 正文组成 | `reply-format` | **已写**：壳适配微调；P2 present 渲染已接；见 `docs/play-presentation-shells.md` |
-| 变量设计与更新规则 | `variable-design` | **已写**：真值+维护语句+Data映射索引+side_effects |
-| 变量控制上下文 | `variable-context` | **已写**：挂载+旁观汇总 |
+| 叙事指南与故事推进 | `narrative` | **已写**：一份全文双挂；**不**为省 token 拆投影；结构化卡 |
+| 拓扑图谱 | `topology` | 骨架，待细写（拟改为选项小循环或降级） |
+| 设计监控栏 | `status-bar` | **已写**：只盯会变信息；通用 fragment 卡 |
+| 正文组成 | `reply-format` | **已写**：壳适配；P2 present 渲染已接 |
+| 变量设计与更新规则 | `variable-design` | **已写**；专用/结构化卡 |
+| 变量控制上下文 | `variable-context` | **已写**：旁观汇总；mount 含 auditor；通用 fragment 卡 |
 | 开场白与开场变量 | `opening-setup` | **已写**：开场守版式+同真相初值 |
 
 共用收成（池内保留，按需）：

@@ -27,13 +27,13 @@
 | `aesthetics-interaction` | `feeds: design_only`（再压缩进常驻）；呈现要点可摘要给 narrator |
 | `mechanism` | **已改** output→`context-fragment.v1`；`feeds: gm` |
 | `world-blueprint` | **已改**→「舞台骨架」+ `context-fragment.v1`；`feeds: gm` |
-| `generation-rules` / `concrete-instances` | **已改**→`context-fragment.v1`；`feeds: gm`；宽原则+严外壳 |
-| `narrative` | **已改**→「叙事指南与故事推进」；遣词/笔墨/禁忌+推进；`feeds: narrator` |
-| `variable-design` | **已写**；核对 output 与 `tables.side_effects`、勿暗示「变量管理 worker」 |
-| `variable-context` | **已写**；核对挂载对象用「主世界层/叙事转述」而非乱拆 |
-| `reply-format` / `status-bar` | **已改**→正文组成 + 设计监控栏；`context-fragment.v1`；非程序报文 |
-| `topology` | 骨架；若固定槽后可能降级为可选或删 |
-| `worker-templates/*.yaml` | **程序已改** gm/narrator；`role-decide` 可再收紧「只出建议」 |
+| `generation-rules` / `concrete-instances` | **已改** fragment；生成规则 **mount/feeds 含 auditor（合同级）** |
+| `narrative` | **已改**：一步两块（风格与写法｜推进与决策）+ 双挂；专用 mosaic |
+| `variable-design` | **已写** |
+| `variable-context` | **已改**：mount 含 auditor + 旁观汇总 |
+| `reply-format` / `status-bar` | 已有正文；见 artifact-card-coverage |
+| `topology` | 骨架；等你定「小循环」选项后再写 |
+| `worker-templates/*.yaml` | gm/narrator/auditor 已齐 |
 
 ## 优先级 P2（文档口径）
 

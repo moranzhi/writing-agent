@@ -120,7 +120,8 @@ play
 4. `waiting_user(review_artifact)` → 引导验收
 5. reject → 收修订 → 重跑同一 worker（含修订流程 = 再调味）
 6. 终稿（含 `设计.worker集`）已 accept 且需开局 → `opening-generator`
-7. **play**：按 `play_slots` 序 `auditor → perspective? → gm → narrator`；`pendingSideEffectWorkers` 优先
+7. **play**：按 `play_slots` 序 `auditor → perspective? → gm → narrator`；`pendingSideEffectWorkers` 优先  
+   （旁观与主世界层怎么配合：见 `docs/play-dm-auditor.md`——旁观看门补表，DM 断事，勿默认多轮传话）
 
 ## 禁用行为
 
