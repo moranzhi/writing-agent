@@ -93,3 +93,64 @@ export function formatWorkerDisplayTitle(workerId, action = null) {
   if (action === "running") return `${base} · 执行中`;
   return base;
 }
+
+/**
+ * `review_artifact` 底栏 / 工作面文案。流程编排核对工作流计划，不是「验收通过」。
+ * 须与 src/server/display-labels.ts `reviewComposerCopy` 保持一致。
+ */
+export function reviewComposerCopy(workerId, opts = {}) {
+  const hasQuestions = Boolean(opts.hasQuestions);
+  const id = String(workerId ?? "").trim();
+
+  if (id === "design-flow") {
+    return {
+      chip: "编排",
+      kicker: "核对编排",
+      taskLabel: "编排",
+      taskTitle: "核对工作流计划",
+      hint: hasQuestions
+        ? "同意就按这个排；要改就写意见，在现有计划上改。下方追问可选答。"
+        : "同意就按这个排；要改就写意见，在现有计划上改。",
+      submitLabel: "按意见改编排",
+      acceptLabel: "确认编排",
+      placeholder: "改编排意见…",
+      emptyEnterHint: "空 Enter＝确认编排",
+      tone: "plan",
+      kind: "flow",
+    };
+  }
+
+  if (id === "opening-generator") {
+    return {
+      chip: "开场",
+      kicker: "待选定",
+      taskLabel: "开场",
+      taskTitle: "选定开场白",
+      hint: hasQuestions
+        ? "同意就选定此开场；要改就写意见。下方追问可选答。"
+        : "同意就选定此开场；要改就写意见。",
+      submitLabel: "按意见修改",
+      acceptLabel: "选定此开场",
+      placeholder: "修改意见…",
+      emptyEnterHint: "空 Enter＝选定此开场",
+      tone: "plan",
+      kind: "opening",
+    };
+  }
+
+  return {
+    chip: "验收",
+    kicker: "待验收",
+    taskLabel: "验收",
+    taskTitle: "验收产物",
+    hint: hasQuestions
+      ? "同意就接受；要改就写意见，在现有产物上改。下方追问可选答。"
+      : "同意就接受；要改就写意见，在现有产物上改。",
+    submitLabel: "按意见修改",
+    acceptLabel: "接受",
+    placeholder: "修改意见…",
+    emptyEnterHint: "空 Enter＝接受",
+    tone: "accept",
+    kind: "accept",
+  };
+}

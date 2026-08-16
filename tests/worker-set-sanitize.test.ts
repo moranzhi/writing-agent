@@ -119,4 +119,114 @@ describe("sanitizeWorkerSetOutputs", () => {
     expect(result.askAssessment).toContain("美学纲领 6/10");
     expect(result.askAssessment).toContain("还需确认");
   });
+
+  it("drops askUser copies of fragment 追问 and keeps the 示例 prompt", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: {
+          "设计.美学纲领与交互范式": {
+            schema: "context-fragment.v1",
+            brief: "孤立免疫",
+            正文: { 美学纲领: { 体验内核: "特权与惊惶" } },
+            追问: {
+              导语: "还需确认：",
+              题目: [
+                {
+                  问: "你最想反复感受到的是哪一种？",
+                  建议选项: ["日常从容", "揭示翻转"],
+                  示例: "袖口唐纹",
+                },
+              ],
+            },
+          },
+        },
+        summary: "美学纲领 · 孤立免疫",
+        askUser: [
+          {
+            prompt: "为贴近你要的质感：你最想反复感受到的是哪一种？",
+            options: ["日常从容", "揭示翻转"],
+          },
+        ],
+      }),
+      ["设计.美学纲领与交互范式"],
+    );
+    expect(result.askUser).toHaveLength(1);
+    expect(result.askUser?.[0]?.prompt).toContain("示例：袖口唐纹");
+    expect(result.askUser?.[0]?.prompt).not.toContain("为贴近你要的质感");
+  });
+
+  it("recovers a root-level context-fragment into the artifact tag", () => {
+    const frag = {
+      schema: "context-fragment.v1",
+      技能: "美学纲领与交互范式",
+      brief: "孤立免疫",
+      正文: {
+        设定逻辑: { 变造: { 原型: "丧尸", 变点: "唯我免疫" } },
+        交互范式: { 代入: "完全" },
+        美学纲领: { 体验内核: "人人录我" },
+      },
+    };
+    const result = parseWorkerResponseForTest(JSON.stringify(frag), [
+      "设计.美学纲领与交互范式",
+    ]);
+    expect(result.outputs["设计.美学纲领与交互范式"]).toContain("人人录我");
+    expect(result.askUser).toBeUndefined();
+  });
+
+  it("moves a fragment written to 创作.当前步骤 onto the artifact tag", () => {
+    const frag = {
+      schema: "context-fragment.v1",
+      技能: "美学纲领与交互范式",
+      brief: "孤立免疫",
+      正文: { 美学纲领: { 体验内核: "特权与惊惶" } },
+    };
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: { "创作.当前步骤": frag },
+        summary: "误写入指针",
+      }),
+      ["设计.美学纲领与交互范式", "创作.当前步骤"],
+    );
+    expect(result.outputs["创作.当前步骤"]).toBeUndefined();
+    expect(result.outputs["设计.美学纲领与交互范式"]).toContain("特权与惊惶");
+  });
+
+  it("does not accept a fragment without 正文; keeps 追问 for the LLM loop", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: {
+          "设计.美学纲领与交互范式": {
+            schema: "context-fragment.v1",
+            技能: "美学纲领与交互范式",
+            brief: "在唯一免疫的末日联接中体验绝望掌控感",
+            mount: "world-simulator",
+            追问: {
+              导语: "还差站位",
+              题目: [{ 问: "你代入吗？", 建议选项: ["完全代入", "旁观"] }],
+            },
+          },
+        },
+        summary: "半残",
+      }),
+      ["设计.美学纲领与交互范式"],
+    );
+    expect(result.outputs["设计.美学纲领与交互范式"]).toBeUndefined();
+    expect(result.askUser?.length).toBeGreaterThan(0);
+    expect(result.askUser?.[0]?.prompt).toContain("你代入吗");
+  });
+
+  it("asks to continue the loop when fragment JSON is unusable", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: {
+          "设计.美学纲领与交互范式":
+            '{"schema":"context-fragment.v1","brief":"孤立免疫","mount":"world-simulator"',
+        },
+        summary: "截断",
+      }),
+      ["设计.美学纲领与交互范式"],
+    );
+    expect(result.outputs["设计.美学纲领与交互范式"]).toBeUndefined();
+    expect(result.askUser?.[0]?.prompt).toContain("还没写出可验收的产物");
+  });
 });

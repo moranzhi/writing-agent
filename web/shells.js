@@ -1,71 +1,64 @@
 /**
- * 呈现壳预览页：切换壳 / 装饰语气 / 正文长度，用示例数据渲染 present-shells。
- * 正文设计目标：单轮常见 600~3000 字 —— 随字数撑高，外层滚动；侧栏/选项坞钉住。
+ * 呈现壳预览：主工作面 = 壳画布。
+ * 按「要同时看见什么」选壳；正文按 600~3000 字撑高滚动。
  */
 import {
   PRESENT_SHELL_IDS,
   renderPresentShellHtml,
 } from "./present-shells.js";
 
+/** task = 同时可见关系（选壳依据）；name = 短名 */
 const SHELL_INFO = {
   prose: {
     name: "纯散文",
-    blurb: "整块都是正文，无 HUD。长文直接往下滚。",
-    density: "正文随字数伸展；无侧栏争面积",
-    scenes: "轻对话、纯叙事、不要状态栏",
+    task: "只要正文",
+    blurb: "无 HUD。读完即止。",
   },
   chat_monitor: {
-    name: "对话 + 监控",
-    blurb: "顶栏芯片固定矮；主聊/场面再长也只往下长。",
-    density: "监控一行；正文撑高滚动",
-    scenes: "网恋 / 日常扮演 / 轻 AIRP",
+    name: "对话+监控",
+    task: "正文 + 扫状态",
+    blurb: "顶栏芯片矮；主聊/场面往下长。",
   },
   spotlight: {
     name: "场面主视",
-    blurb: "芯片一行 + 大正文柱。适合一幕写满。",
-    density: "正文主导并伸展；监控不占高",
-    scenes: "电影感 RP、一幕一景、少机制",
+    task: "大正文 + 弱状态",
+    blurb: "无聊天气泡框；场面即画布。",
   },
   turn_panel: {
     name: "回合面板",
-    blurb: "场面叙述再长，右侧交互物钉在视口内对照。",
-    density: "正文撑高；侧栏 sticky；行动在下",
-    scenes: "资源、检定、场景交互、跑团感",
+    task: "场面 + 物 + 行动",
+    blurb: "对照交互物；行动在下。",
   },
   split_board: {
     name: "双栏看板",
-    blurb: "左栏长文滚动，右栏线索钉住——对照读。",
-    density: "左正文伸展；右侧栏 sticky",
-    scenes: "调查、推理、多线索并行",
+    task: "正文 ‖ 线索",
+    blurb: "左右对照；侧栏钉住。",
   },
   choice_dock: {
     name: "选择坞",
-    blurb: "先读完长局面；选项坞 sticky 贴视口底，不用翻回顶。",
-    density: "正文撑高；底部坞钉住",
-    scenes: "选项驱动、AVG、分支关口",
+    task: "局面 + 选项",
+    blurb: "读完再选；坞贴视口底。",
   },
   chapter_reader: {
     name: "章节阅读",
-    blurb: "章题 + 长阅读柱；窄进度侧栏 sticky。",
-    density: "正文伸展为主；侧栏窄且钉住",
-    scenes: "长文 / 爽文 / 先纲后章",
+    task: "章正文 + 进度",
+    blurb: "阅读柱为主；进度窄栏钉住。",
   },
 };
 
 const TONES = [
   { id: "default", label: "默认" },
-  { id: "messenger", label: "讯息感" },
-  { id: "book", label: "书页感" },
-  { id: "terminal", label: "终端感" },
+  { id: "messenger", label: "讯息" },
+  { id: "book", label: "书页" },
+  { id: "terminal", label: "终端" },
 ];
 
 const LENGTHS = [
-  { id: "short", label: "短（~120）" },
-  { id: "mid", label: "中（~800）" },
-  { id: "long", label: "长（~2500）" },
+  { id: "short", label: "短" },
+  { id: "mid", label: "中 ·800" },
+  { id: "long", label: "长 ·2500" },
 ];
 
-/** 中等长度 ≈800 字 */
 const BODY_MID = `雨还在下。你把伞往她那边偏了偏，她没说话，只是把购物袋往怀里收紧了一点。水从伞骨边缘连成线，砸在柏油路上，溅起细碎的白点。
 
 路口的灯跳成绿色。你们一起迈步——这一次，谁也没有先松开。对面便利店的玻璃上映着两个人并肩的轮廓，忽明忽暗，像谁随手画的草稿。
@@ -82,7 +75,6 @@ const BODY_MID = `雨还在下。你把伞往她那边偏了偏，她没说话�
 
 门开了一条缝。暖光漏出来，照在你们脚边的水渍上。她没有立刻进去，只是抬眼看你，像在等一句还没说出口的话。你把伞收拢，水仍顺着伞尖滴到地毯边缘。谁也没有提「进来坐坐」，但空气里已经有了那句话的形状。`;
 
-/** 长文 ≈2500 字（重复段落拼成，预览用） */
 const BODY_LONG = `${BODY_MID}
 
 天桥下的风从另一头灌过来，把塑料袋吹得啪啪响。你想起上一次走过这里，还是夏天，蝉声吵得人没法好好说话；如今只剩雨，以及偶尔驶过的车灯，把积水切成一条条亮痕。
@@ -115,9 +107,7 @@ const BODY_LONG = `${BODY_MID}
 
 「有的不用还。」她看着河对岸的塔吊，「有的还了，反而像没发生过。」
 
-塔吊缓缓旋转，吊臂在灰蓝天空里划出钝角。你忽然明白，呈现壳要解决的不是「字大一点」，而是这一长段话落在界面里时，读者还愿不愿意往下看——状态栏不能抢戏，选项不能在中途消失，侧栏得钉住好让人对照线索。
-
-你们在桥上站了一会儿。风把伞套吹得鼓起，又瘪下去。她把热饮塞进你手里：「暖的。你昨晚肯定没睡好。」你没有否认。杯壁的温度从掌心爬上手腕，像把雨夜重新烘了一遍，只留下能说出口的那一层。
+塔吊缓缓旋转，吊臂在灰蓝天空里划出钝角。你们在桥上站了一会儿。风把伞套吹得鼓起，又瘪下去。她把热饮塞进你手里：「暖的。你昨晚肯定没睡好。」你没有否认。杯壁的温度从掌心爬上手腕，像把雨夜重新烘了一遍，只留下能说出口的那一层。
 
 分开前，她抬手点了点伞：「这个，先放你那儿。等下一场雨。」
 
@@ -231,7 +221,7 @@ function buildTweaks() {
     show_suggested_actions: state.showActions,
     block_labels: { ...state.blockLabels },
     empty_states: {
-      aside: "（侧栏空：可在创作里改空态文案）",
+      aside: "（侧栏空）",
       footer: "（文末空）",
     },
   };
@@ -252,27 +242,25 @@ function buildPacket() {
 function render() {
   const info = SHELL_INFO[state.shell] || {
     name: state.shell,
+    task: "",
     blurb: "",
-    scenes: "",
-    density: "",
   };
   const packet = buildPacket();
-  document.getElementById("panel-title").textContent = info.name;
-  document.getElementById("panel-subtitle").textContent = `${info.scenes} · 正文约 ${packet._chars} 字（不计空白）`;
 
   document.getElementById("shell-meta").innerHTML = `
-    <p><strong>${esc(info.name)}</strong>（<code>${esc(state.shell)}</code>）</p>
-    <p>${esc(info.blurb)}</p>
-    <p class="shells-density"><span>长文策略</span>${esc(info.density)} · 当前试读 <strong>${packet._chars}</strong> 字</p>
-    <p class="muted">适用：${esc(info.scenes)}。请用上方「正文长度」切到长文，确认侧栏/选项是否仍可用。</p>
+    <p class="shells-meta-title">${esc(info.name)}</p>
+    <p class="shells-meta-sub">${esc(info.task)} · 试读 ${packet._chars} 字<br>${esc(info.blurb)}</p>
   `;
 
   const preview = document.getElementById("shell-preview");
   preview.dataset.shell = state.shell;
-  preview.innerHTML = renderPresentShellHtml(packet, esc, { tweaks: buildTweaks() });
+  preview.innerHTML = renderPresentShellHtml(packet, esc, {
+    tweaks: buildTweaks(),
+  });
 
   document.querySelectorAll("[data-shell]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-shell") === state.shell);
+    btn.setAttribute("aria-selected", btn.getAttribute("data-shell") === state.shell ? "true" : "false");
   });
   document.querySelectorAll("[data-tone]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tone") === state.tone);
@@ -289,8 +277,9 @@ function mount() {
   const list = document.getElementById("shell-list");
   list.innerHTML = PRESENT_SHELL_IDS.map((id) => {
     const info = SHELL_INFO[id];
-    return `<button type="button" class="st-rail-item" data-shell="${esc(id)}" role="tab">
-      ${esc(info?.name || id)}
+    return `<button type="button" class="st-rail-item" data-shell="${esc(id)}" role="tab" aria-selected="false">
+      <span class="shell-item-name">${esc(info?.name || id)}</span>
+      <span class="shell-item-task">${esc(info?.task || "")}</span>
     </button>`;
   }).join("");
 
@@ -307,15 +296,15 @@ function mount() {
   document.getElementById("tweak-controls").innerHTML = `
     <label class="field">
       <input type="checkbox" id="tweak-show-actions" />
-      显示「建议行动」（对应微调轴 show_suggested_actions）
+      显示建议行动（show_suggested_actions）
     </label>
     <label class="field">
-      正文区显示名（block_labels.body）
-      <input type="text" id="tweak-label-body" placeholder="例如：短信记录 / 场面 / 本章" />
+      正文显示名（block_labels.body）
+      <input type="text" id="tweak-label-body" placeholder="短信记录 / 场面 / 本章" />
     </label>
     <label class="field">
-      监控区显示名（block_labels.monitor）
-      <input type="text" id="tweak-label-monitor" placeholder="例如：状态 / 今日" />
+      监控显示名（block_labels.monitor）
+      <input type="text" id="tweak-label-monitor" placeholder="状态 / 今日" />
     </label>
   `;
 

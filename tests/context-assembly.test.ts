@@ -79,6 +79,38 @@ describe("contextSegments assembly", () => {
     expect(text).not.toMatch(/^\s*\{/);
   });
 
+  it("revision mode asks the worker to apply sidecar answers and keep the draft", () => {
+    const bb = new Blackboard();
+    bb.write({
+      tag: "设计.美学纲领与交互范式",
+      content: '{"tone":"warm"}',
+      source: "worker",
+    });
+    const text = assembleWorkerContext({
+      inputs: {
+        "用户.修订说明": "再冷一点",
+        "用户.worker答复": "【追问作答】\n问：偏好？\n答：偏冷",
+        "设计.美学纲领与交互范式": '{"tone":"warm"}',
+      },
+      segments: [
+        {
+          id: "user",
+          tier: "dynamic",
+          tags: ["用户.worker答复", "用户.修订说明"],
+          label: "## 用户表述",
+        },
+      ],
+      blackboard: bb,
+      workerId: "design-step",
+      workerName: "创作 · 美学纲领与交互范式",
+      outputTags: ["设计.美学纲领与交互范式"],
+    });
+    expect(text).toContain("待改底稿");
+    expect(text).toContain("用户.worker答复");
+    expect(text).toContain("偏冷");
+    expect(text).toContain("再冷一点");
+  });
+
   it("falls back to JSON inputs without segments", () => {
     const bb = new Blackboard();
     const text = assembleWorkerContext({

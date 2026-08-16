@@ -473,6 +473,8 @@ export async function loadWorkerSkillWithContext(
     acceptedStepNames?: readonly string[];
     /** 用户手动选定的配方 id / 名 */
     selectedRecipeRef?: string | null;
+    /** 黑板已有产物 tag，供编排器判断哪些技能已经做过 */
+    filledArtifactTags?: readonly string[];
   },
 ): Promise<{ worker: ParsedWorkerSkill; sharedContext: string | null; promptBody: string }> {
   const worker = await loadWorkerSkill(skillIdOrName, workerId, skillsRoot);
@@ -488,6 +490,7 @@ export async function loadWorkerSkillWithContext(
       loadModuleCatalog,
       resolveSelectedRecipeDetail,
       formatDesignFlowContentBlocks,
+      parseCreationFlow,
     } = await import("./creation-flow.js");
     const modules = await loadModuleCatalog(skill.skillPackRoot, skillsRoot);
     const selectedRecipe = await resolveSelectedRecipeDetail({
@@ -499,6 +502,9 @@ export async function loadWorkerSkillWithContext(
       selectedRecipe,
       modules,
       missingSelection: !selectedRecipe,
+      flow: parseCreationFlow(opts?.flowRaw),
+      acceptedStepIds: opts?.acceptedStepNames,
+      filledArtifactTags: opts?.filledArtifactTags,
     });
     if (blocks.length) {
       moduleCatalogBlock = blocks.join("\n\n");
@@ -537,10 +543,7 @@ export async function loadWorkerSkillWithContext(
         ...binding.depTags,
       ];
       const inputTags = [...new Set(baseInputs)];
-      const outputTags = [
-        binding.module.artifact,
-        CREATION_CURRENT_STEP_TAG,
-      ];
+      const outputTags = [binding.module.artifact];
       const depSegments = binding.depTags.map((tag, i) => ({
         id: `dep-${i}`,
         tier: "static" as const,

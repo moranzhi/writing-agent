@@ -12,6 +12,7 @@
     "phase-demo": "tsx src/cli/phase-demo.ts",
     "phase-script": "tsx src/cli/phase-demo.ts --script --auto",
     "web": "tsx src/server/web-server.ts",
+    "web:watch": "tsx watch --clear-screen=false --include \"./src/**/*.ts\" --include \"./skills/**\" src/server/web-server.ts",
     "electron": "electron ."
   },
   "devDependencies": {

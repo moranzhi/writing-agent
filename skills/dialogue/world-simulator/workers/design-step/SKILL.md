@@ -5,6 +5,7 @@ name: 创作 · 执行步骤
 description: >-
   按已认可的创作流程，执行当前一步工序。提示词与产物 tag 由程序按模块注入。
   流程是增量 DAG：本步只读，禁止自行扩步或重排。
+  outputTags 由程序注入为该步能力 artifact；勿把「创作.当前步骤」当产物写回。
 version: 1
 stage: design
 inputTags:
@@ -15,8 +16,7 @@ inputTags:
   - "用户.修订说明"
   - "设计.创作流程"
   - "创作.当前步骤"
-outputTags:
-  - "创作.当前步骤"
+outputTags: []
 inputMerge: latest
 contextSegments:
   - id: flow
@@ -46,7 +46,7 @@ contextSegments:
 1. 只写本步产物（程序指定的 output tag）；不要改其它步骤产物
 2. 产物用简洁 JSON 或结构化中文，方便界面渲染；少写机器变量名
 3. 若本步有**默认问题**：程序已先发给用户；首答在「用户.worker答复」/「创作.能力开场白」。**禁止**再用 LLM 重复同一开场白
-4. 信息不足 → askUser 1～2 点（优先 options）
+4. 信息不足：context-fragment 产物把题写在「追问」（1～2 点，建议选项 + 示例），顶层 askUser 为 null。仅完全无法产出时才用顶层 askUser
 5. `summary`：`{本步能力名} · …`
 6. **禁止**重排或扩写流程；流程只读。需要追加「再来一次生成规则」等 → 由总管再调 design-flow
 7. **本步参数**由编排期写入 steps[].params，程序会注入【本步参数】。按参数执行；禁止再问「这一步生成什么 / 调用哪个规则」。参数缺失或与目录必填项不符 → 停止产出，提示返回 design-flow 补参

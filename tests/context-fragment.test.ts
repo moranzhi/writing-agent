@@ -4,6 +4,8 @@ import {
   projectFragmentContent,
   contextFragmentToView,
   extractFragmentAskSidecar,
+  isUsableContextFragment,
+  expectsContextFragmentTag,
 } from "../src/skills/context-fragment.js";
 import {
   parseContextOrder,
@@ -73,6 +75,26 @@ describe("context-fragment.v1", () => {
       "常态压抑少见血",
       "其它",
     ]);
+  });
+
+  it("isUsableContextFragment requires non-empty 正文", () => {
+    expect(
+      isUsableContextFragment({
+        schema: "context-fragment.v1",
+        技能: "美学纲领与交互范式",
+        brief: "孤立免疫",
+        正文: { 美学纲领: { 体验内核: "特权" } },
+      }),
+    ).toBe(true);
+    expect(
+      isUsableContextFragment({
+        schema: "context-fragment.v1",
+        技能: "美学纲领与交互范式",
+        brief: "孤立免疫",
+      }),
+    ).toBe(false);
+    expect(expectsContextFragmentTag("设计.美学纲领与交互范式")).toBe(true);
+    expect(expectsContextFragmentTag("设计.创作流程")).toBe(false);
   });
 });
 

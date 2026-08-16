@@ -7,7 +7,9 @@ import type { BlackboardInputMerge } from "../types/blackboard.js";
 import { CONTEXT_BRIEF_TAG } from "../runtime/compress-after-worker.js";
 import {
   CREATION_ACCEPTED_CONTENT_TAG,
+  CREATION_ACCEPTED_UNITS_TAG,
   formatAcceptedContentForPrompt,
+  formatAcceptedUnitsForPrompt,
 } from "./creation-units.js";
 import { projectFragmentContent } from "./context-fragment.js";
 import {
@@ -107,6 +109,8 @@ function formatSegmentBody(
       if (!content) continue;
       if (tag === CREATION_ACCEPTED_CONTENT_TAG) {
         content = formatAcceptedContentForPrompt(content);
+      } else if (tag === CREATION_ACCEPTED_UNITS_TAG) {
+        content = formatAcceptedUnitsForPrompt(content);
       }
       content = applyPolicy(content, segment.policy);
       content = applyProjection(content, segment.projection);
@@ -154,15 +158,20 @@ export function assembleWorkerContext(params: {
   const segments = params.segments ?? [];
 
   if (segments.length === 0) {
+    const revisionNote = (
+      params.inputs["用户.修订说明"] ??
+      ""
+    ).trim();
     return JSON.stringify(
       {
         workerId: params.workerId,
         workerName: params.workerName,
         outputTags: params.outputTags,
         inputs: params.inputs,
-        instruction:
-          "根据 SKILL 说明完成任务。若 inputs 含「上下文.定稿摘要」，以终产物为准。" +
-          "设计.worker集 / 草稿须为 JSON 对象文本。",
+        instruction: revisionNote
+          ? "修订模式：在已有产物（inputs 中对应 outputTags）上按「用户.修订说明」以及「用户.worker答复」中的追问作答（选项与补充）修改；保留未点名要改的部分，禁止无故整份重写。节点方法（task/principles/probe/output）仍须遵守。"
+          : "根据 SKILL 说明完成任务。若 inputs 含「上下文.定稿摘要」，以终产物为准。" +
+            "设计.worker集 / 草稿须为 JSON 对象文本。",
       },
       null,
       2,
@@ -191,18 +200,61 @@ export function assembleWorkerContext(params: {
     blocks.push(`## 上下文.定稿摘要\n\n${brief}`);
   }
 
-  blocks.push(
-    [
-      "## 本步任务",
-      "",
-      `- workerId: \`${params.workerId}\``,
-      `- workerName: ${params.workerName}`,
-      `- outputTags: ${params.outputTags.map((t) => `\`${t}\``).join("、") || "（无）"}`,
-      "",
+  // 修订态：把本步 outputTags 上已有正文钉成「待改底稿」，禁止无故推倒重写
+  const revisionNote = readTagContent(
+    "用户.修订说明",
+    params.inputs,
+    params.blackboard,
+    inputMerge,
+  ).trim();
+  const draftBlocks: string[] = [];
+  if (revisionNote) {
+    for (const tag of params.outputTags) {
+      const alreadyInSegments = segments.some((s) => s.tags.includes(tag));
+      if (alreadyInSegments) continue;
+      const draft = readTagContent(
+        tag,
+        params.inputs,
+        params.blackboard,
+        inputMerge,
+      ).trim();
+      if (!draft) continue;
+      draftBlocks.push(`### \`${tag}\`\n\n${draft}`);
+    }
+    if (draftBlocks.length) {
+      blocks.push(
+        [
+          "## 【待改底稿】",
+          "",
+          "下列为**当前已有产物**。按「用户.修订说明」以及「用户.worker答复」中的追问作答（选项与补充）在其上修改，并写回同名 outputTags。",
+          "节点方法（task / principles / probe / output）仍须遵守。保留未要求改动的结构与结论；禁止无故整份重写。",
+          "",
+          ...draftBlocks,
+        ].join("\n"),
+      );
+    }
+  }
+
+  const taskLines = [
+    "## 本步任务",
+    "",
+    `- workerId: \`${params.workerId}\``,
+    `- workerName: ${params.workerName}`,
+    `- outputTags: ${params.outputTags.map((t) => `\`${t}\``).join("、") || "（无）"}`,
+    "",
+  ];
+  if (revisionNote) {
+    taskLines.push(
+      "**修订模式**：接着上方【待改底稿】（若有）与依赖产物，落实「用户.修订说明」以及「用户.worker答复」里的追问作答（选项与补充意见）。",
+      "不要从零另起一份；不要扩大修改面。标为「只读 / 已定稿」的分区仍不可改。节点方法仍有效。",
+    );
+  } else {
+    taskLines.push(
       "按 SKILL 与上方分区完成任务。标为「只读 / 已定稿」的分区不要擅自改写；只改【本单位】范围。",
-      "设计.worker集 / 草稿须为 JSON 对象文本（以 `{` 开头）。",
-    ].join("\n"),
-  );
+    );
+  }
+  taskLines.push("设计.worker集 / 草稿须为 JSON 对象文本（以 `{` 开头）。");
+  blocks.push(taskLines.join("\n"));
 
   return blocks.join("\n\n---\n\n");
 }

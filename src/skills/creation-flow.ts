@@ -13,8 +13,36 @@ import { parse as parseYaml } from "yaml";
 
 export const CREATION_FLOW_TAG = "设计.创作流程";
 export const CREATION_CURRENT_STEP_TAG = "创作.当前步骤";
+/** 确认开干前：待确认的下一步快照（JSON） */
+export const CREATION_PROPOSED_STEP_TAG = "创作.待确认步骤";
 /** 用户手动选定的初始配方（存 recipe id，或 JSON {id,name}） */
 export const CREATION_SELECTED_RECIPE_TAG = "创作.选用配方";
+
+/** 进度指针：禁止当作 worker 产物写回或列入验收正文 */
+export const PROGRESS_POINTER_TAGS = new Set<string>([
+  CREATION_CURRENT_STEP_TAG,
+  CREATION_PROPOSED_STEP_TAG,
+  CREATION_SELECTED_RECIPE_TAG,
+  "创作.当前单位",
+  "创作.已验收单位",
+  "创作.已验收内容",
+  "创作.能力开场白",
+  "创作.能力开场状态",
+]);
+
+/** 旧名：含「设计.创作流程」。写回/验收过滤请用 isProgressPointerTag */
+export const RUNTIME_PINNED_TAGS = new Set<string>([
+  CREATION_FLOW_TAG,
+  ...PROGRESS_POINTER_TAGS,
+]);
+
+export function isProgressPointerTag(tag: string): boolean {
+  return PROGRESS_POINTER_TAGS.has(tag.trim());
+}
+
+export function isRuntimePinnedTag(tag: string): boolean {
+  return RUNTIME_PINNED_TAGS.has(tag.trim());
+}
 export const MODULE_CATALOG_FILENAME = "modules/catalog.yaml";
 export const RECIPE_CATALOG_FILENAME = "recipes/catalog.yaml";
 export const DESIGN_STEP_WORKER_ID = "design-step";
@@ -152,6 +180,9 @@ export type CreationFlowValidation = {
   errors: string[];
 };
 
+/** 工作流计划节点相对执行进度（给人看的三态） */
+export type FlowStepRunState = "done" | "current" | "pending";
+
 export type CreationFlowUserView = {
   brief?: string;
   status?: CreationFlowStatus;
@@ -169,6 +200,8 @@ export type CreationFlowUserView = {
     params?: CreationFlowStepParams;
     /** 参数缺必填项时的提示（给人看） */
     paramsMissing?: string[];
+    /** 已执行 / 将要执行 / 未执行 */
+    runState: FlowStepRunState;
   }>;
   parseError?: string;
 };
@@ -299,6 +332,42 @@ export function findStepByRef(
 /** 验收 / 当前步骤用的单位 id（优先 step.id） */
 export function stepUnitId(step: CreationFlowStep): string {
   return step.id || step.name;
+}
+
+/**
+ * 验收时记下哪一步做完。只认流程里的真实 step.id：
+ * LLM 可能把产物误写进「创作.当前步骤」，那种内容不能当进度。
+ */
+export function pickRecordedStepId(params: {
+  flow: CreationFlow | null;
+  alreadyAccepted?: readonly string[];
+  pinnedUnitId?: string | null;
+  writtenCurrentStep?: string | null;
+  summaryHint?: string | null;
+}): string | null {
+  const flow = params.flow;
+  const tryRef = (ref: string | undefined | null): string | null => {
+    const key = ref?.trim();
+    if (!key || key === "flow") return null;
+    if (!flow) return key;
+    const step = findStepByRef(flow, key);
+    return step ? stepUnitId(step) : null;
+  };
+
+  const pinned = tryRef(params.pinnedUnitId);
+  if (pinned) return pinned;
+
+  const written = tryRef(params.writtenCurrentStep);
+  if (written) return written;
+
+  const hinted = tryRef(params.summaryHint);
+  if (hinted) return hinted;
+
+  if (flow) {
+    const pending = nextPendingStep(flow, params.alreadyAccepted ?? []);
+    if (pending) return stepUnitId(pending);
+  }
+  return null;
 }
 
 export function parseCreationFlow(raw: string | undefined | null): CreationFlow | null {
@@ -591,6 +660,93 @@ export function stringifyModuleOpeningState(state: ModuleOpeningState): string {
   return JSON.stringify(state);
 }
 
+/**
+ * 序列化「设计.创作流程」（程序 seed / 验收写回共用）。
+ */
+export function stringifyCreationFlow(flow: CreationFlow): string {
+  return JSON.stringify({
+    version: 1,
+    ...(flow.brief ? { brief: flow.brief } : {}),
+    ...(flow.status ? { status: flow.status } : {}),
+    steps: flow.steps,
+  });
+}
+
+/**
+ * 编排层重排流程时，已验收步骤按原样保留：
+ * 缺了就按原位置补回，改了名字/参数就还原。编排只能动未验收步。
+ */
+export function mergeCreationFlowPreservingAccepted(params: {
+  prevRaw: string | null | undefined;
+  nextRaw: string;
+  acceptedStepIds: readonly string[];
+}): { raw: string; restored: string[] } {
+  const next = parseCreationFlow(params.nextRaw);
+  const prev = parseCreationFlow(params.prevRaw);
+  if (!next || !prev) return { raw: params.nextRaw, restored: [] };
+
+  const accepted = prev.steps.filter((s) => isStepAccepted(s, params.acceptedStepIds));
+  if (accepted.length === 0) return { raw: params.nextRaw, restored: [] };
+
+  const restored: string[] = [];
+  const steps = [...next.steps];
+  for (let i = 0; i < accepted.length; i++) {
+    const frozen = accepted[i]!;
+    const at = steps.findIndex((s) => s.id === frozen.id);
+    if (at < 0) {
+      steps.splice(Math.min(i, steps.length), 0, frozen);
+      restored.push(frozen.id);
+      continue;
+    }
+    const current = steps[at]!;
+    const changed =
+      current.name !== frozen.name ||
+      JSON.stringify(current.depends_on) !== JSON.stringify(frozen.depends_on) ||
+      JSON.stringify(current.params ?? null) !== JSON.stringify(frozen.params ?? null);
+    if (changed) {
+      steps[at] = frozen;
+      restored.push(frozen.id);
+    }
+  }
+  if (restored.length === 0) return { raw: params.nextRaw, restored: [] };
+  return {
+    raw: stringifyCreationFlow({ ...next, version: 1, steps }),
+    restored,
+  };
+}
+
+/**
+ * 配方近期起点 → 可写入黑板的开局 DAG。
+ * steps 为空则返回 null（仍只当选型参考，不预置流程）。
+ */
+export function creationFlowFromRecipeSeed(
+  detail: Pick<RecipeDetail, "seed">,
+): CreationFlow | null {
+  const seed = detail.seed;
+  if (!seed?.steps?.length) return null;
+  return {
+    version: 1,
+    ...(seed.brief ? { brief: seed.brief } : {}),
+    status: seed.status ?? "open",
+    steps: ensureCreationFlowStepIds(seed.steps),
+  };
+}
+
+/**
+ * 已坐在配方开局步（无 depends_on）且「用户.需求」有首句时：
+ * 跳过程序再抛模块 opening——首句即该步对话，不是「先开场再进 DAG」。
+ */
+export function shouldSkipModuleOpening(opts: {
+  demand: string;
+  dependsOn?: string[] | null;
+  phase?: "shown" | "answered" | null;
+}): boolean {
+  if (opts.phase === "shown" || opts.phase === "answered") return false;
+  if (!String(opts.demand ?? "").trim()) return false;
+  const deps = opts.dependsOn ?? [];
+  return deps.length === 0;
+}
+
 /** 无 id 时的兜底（目录仍应显式写 id） */
 function slugFromName(name: string): string {
   const map: Record<string, string> = {
@@ -661,6 +817,7 @@ export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
     "【能力 · 可选工序】",
     "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入。",
     "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）；有「编排参数」的步骤必须在 DAG 里写齐 params，缺参时用 askUser 选项+其它，禁止空壳进执行。",
+    "生成规则：改 target 时必须同步改 rule_id（英文 kebab-case）与步骤 id（生成规则·{对象}）；禁止只改中文对象沿用旧后台 id。",
     "不要把能力执行全文塞进本步；执行由 design-step 注入。",
     lines.join("\n"),
   ].join("\n");
@@ -929,13 +1086,23 @@ function formatRecipeFieldBlock(value: string | string[]): string {
   return value;
 }
 
-/** design-flow 一次注入：已选配方 + 技能池 */
+/** design-flow 一次注入：流程进度 + 已选配方 + 技能池 */
 export function formatDesignFlowContentBlocks(params: {
   selectedRecipe?: RecipeDetail | null;
   modules?: ModuleCatalog | null;
   missingSelection?: boolean;
+  flow?: CreationFlow | null;
+  acceptedStepIds?: readonly string[];
+  filledArtifactTags?: readonly string[];
 }): string[] {
-  const blocks: string[] = [];
+  const blocks: string[] = [
+    formatFlowProgressForAgent({
+      flow: params.flow,
+      acceptedStepIds: params.acceptedStepIds,
+      catalog: params.modules,
+      filledArtifactTags: params.filledArtifactTags,
+    }),
+  ];
   if (params.missingSelection) {
     blocks.push(
       [
@@ -951,6 +1118,120 @@ export function formatDesignFlowContentBlocks(params: {
     blocks.push(formatModuleCatalogForAgent(params.modules));
   }
   return blocks;
+}
+
+/**
+ * 编排器必须看见的进度：哪些步已做完、草案里已有什么、哪些能力才允许再编入。
+ * 裸 JSON id 列表不够；此块由程序钉死。
+ */
+export function formatFlowProgressForAgent(params: {
+  flow?: CreationFlow | null;
+  acceptedStepIds?: readonly string[];
+  catalog?: ModuleCatalog | null;
+  filledArtifactTags?: readonly string[];
+}): string {
+  const accepted = (params.acceptedStepIds ?? []).filter(
+    (id) => Boolean(id?.trim()) && id.trim() !== "flow",
+  );
+  const flow = params.flow ?? null;
+  const catalog = params.catalog ?? null;
+  const filled = new Set(params.filledArtifactTags ?? []);
+  const repeatableNames = new Set(
+    (catalog?.modules ?? [])
+      .filter((m) => m.repeatable === true)
+      .map((m) => m.name),
+  );
+
+  const doneLines: string[] = [];
+  const doneNames = new Set<string>();
+  const doneIds = new Set<string>();
+
+  const markDone = (
+    name: string,
+    id: string | undefined,
+    why: string,
+    repeatable: boolean,
+  ) => {
+    const flag = repeatable
+      ? "〔可反复：可再追加不同 id〕"
+      : "〔不可反复：禁止再排一次执行〕";
+    const idBit = id ? `（id: ${id}）` : "";
+    doneLines.push(`- ${name}${idBit} · ${why} ${flag}`);
+    doneNames.add(name);
+    if (id) doneIds.add(id);
+  };
+
+  if (flow) {
+    for (const step of flow.steps) {
+      const acceptedHere = isStepAccepted(step, accepted);
+      const art = catalog ? artifactTagForStep(step.name, catalog) : null;
+      const hasArtifact = Boolean(art && filled.has(art));
+      const repeatable = repeatableNames.has(step.name);
+      if (acceptedHere || (!repeatable && hasArtifact)) {
+        markDone(
+          step.name,
+          step.id,
+          acceptedHere ? "已验收" : "产物已在黑板",
+          repeatable,
+        );
+      }
+    }
+  }
+
+  for (const id of accepted) {
+    if (doneIds.has(id)) continue;
+    if (flow?.steps.some((s) => isStepAccepted(s, [id]))) continue;
+    markDone(id, id, "已验收", repeatableNames.has(id));
+  }
+
+  if (catalog) {
+    for (const mod of catalog.modules) {
+      if (mod.repeatable === true) continue;
+      if (!mod.artifact || !filled.has(mod.artifact)) continue;
+      if (doneNames.has(mod.name)) continue;
+      markDone(mod.name, undefined, "产物已在黑板", false);
+    }
+  }
+
+  const draftLines: string[] = [];
+  if (flow) {
+    for (const step of flow.steps) {
+      if (doneIds.has(step.id) || doneNames.has(step.name)) continue;
+      draftLines.push(
+        `- ${step.name}（id: ${step.id}）· 已在草案，保留原 id；不要当作新规划再写一遍`,
+      );
+    }
+  }
+
+  const repeatableList = (catalog?.modules ?? [])
+    .filter((m) => m.repeatable === true)
+    .map((m) => m.name);
+
+  const lines = [
+    "【流程进度】（程序钉死，必须遵守）",
+    "你的任务是追加缺口，不是从头规划。",
+    "已完成的非反复技能：只保留原 id 作 depends_on 锚点，禁止再作为将要执行的一步。",
+    "草案里已有的步骤：原样保留，不要重排一遍开局。",
+    "只有能力目录标了〔可反复〕的（如生成规则、具体实例）才允许再编入新 id。",
+  ];
+  if (doneLines.length) {
+    lines.push("", "已完成：", ...doneLines);
+  } else {
+    lines.push(
+      "",
+      "已完成：尚无已验收步骤。若草案已有开局步，那是配方预置起点，不是你新规划的。",
+    );
+  }
+  if (draftLines.length) {
+    lines.push("", "草案已有、尚未验收（保留，勿重排）：", ...draftLines);
+  }
+  lines.push(
+    "",
+    repeatableList.length
+      ? `可反复追加：${repeatableList.join("、")}`
+      : "可反复追加：以能力目录〔可反复〕为准。",
+  );
+  return lines.join("\n");
 }
 
 /** 解析并加载用户已选配方详情 */
@@ -973,7 +1254,6 @@ export function validateCreationFlow(
   catalog: ModuleCatalog | null,
 ): CreationFlowValidation {
   const errors: string[] = [];
-  const ids = flow.steps.map((s) => s.id);
   const seenIds = new Set<string>();
   const allowed = catalog
     ? new Set(catalog.modules.map((m) => m.name))
@@ -1020,23 +1300,51 @@ export function validateCreationFlow(
       }
     }
 
-    if (mod?.params?.length) {
-      const missing = missingRequiredStepParams(step, mod);
-      if (missing.length > 0) {
-        const labels = missing
-          .map((key) => {
-            const spec = mod.params!.find((p) => p.key === key);
-            return spec ? `${key}（${spec.label}）` : key;
-          })
-          .join("、");
-        errors.push(
-          `「${step.id}」缺少必填编排参数：${labels}（须在 design-flow 钉齐后再执行）`,
-        );
-      }
-    }
+    // 必填 params 改在「确认开干」时钉齐，不再阻挡编排产出空壳步骤
   }
 
   return { ok: errors.length === 0, errors };
+}
+
+/** 进 design-step 前：本步必填编排参数是否已齐 */
+export function validateStepReadyToRun(
+  step: CreationFlowStep,
+  catalog: ModuleCatalog | null,
+): CreationFlowValidation {
+  const mod = catalog?.modules.find((m) => m.name === step.name);
+  if (!mod?.params?.length) return { ok: true, errors: [] };
+  const missing = missingRequiredStepParams(step, mod);
+  if (missing.length === 0) return { ok: true, errors: [] };
+  const labels = missing
+    .map((key) => {
+      const spec = mod.params!.find((p) => p.key === key);
+      return spec ? `${key}（${spec.label}）` : key;
+    })
+    .join("、");
+  return {
+    ok: false,
+    errors: [`「${step.id}」缺少必填编排参数：${labels}（确认开干前请补齐）`],
+  };
+}
+
+/** 写回某步 params（确认下一节点时由用户钉死） */
+export function patchCreationFlowStepParams(
+  flow: CreationFlow,
+  stepId: string,
+  params: CreationFlowStepParams,
+): CreationFlow {
+  const id = stepId.trim();
+  return {
+    ...flow,
+    steps: flow.steps.map((s) =>
+      s.id === id
+        ? {
+            ...s,
+            params: Object.keys(params).length ? { ...params } : undefined,
+          }
+        : s,
+    ),
+  };
 }
 
 export function artifactTagForStep(
@@ -1049,11 +1357,13 @@ export function artifactTagForStep(
 export function formatCreationFlowForUser(
   flow: CreationFlow,
   catalog?: ModuleCatalog | null,
+  acceptedStepIds: readonly string[] = [],
 ): CreationFlowUserView {
   const decl = new Map(
     (catalog?.modules ?? []).map((m) => [m.name, m] as const),
   );
   const seenName = new Map<string, number>();
+  const next = nextPendingStep(flow, acceptedStepIds);
   return {
     brief: flow.brief,
     status: flow.status,
@@ -1062,6 +1372,11 @@ export function formatCreationFlowForUser(
       seenName.set(s.name, n);
       const mod = decl.get(s.name);
       const paramsMissing = missingRequiredStepParams(s, mod);
+      const runState: FlowStepRunState = isStepAccepted(s, acceptedStepIds)
+        ? "done"
+        : next && next.id === s.id
+          ? "current"
+          : "pending";
       return {
         order: i + 1,
         id: s.id,
@@ -1070,6 +1385,7 @@ export function formatCreationFlowForUser(
         occurrence: n,
         declaration: mod?.declaration,
         repeatable: mod?.repeatable,
+        runState,
         ...(s.params ? { params: s.params } : {}),
         ...(paramsMissing.length > 0 ? { paramsMissing } : {}),
       };

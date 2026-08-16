@@ -34,14 +34,14 @@ feeds: narrator
 ```opening
 本局在固定呈现壳上做适配（不是设计新界面）。
 
-0. 七选一壳（主面积给谁）：
-   · prose — 纯散文（正文≈全屏）
-   · chat_monitor — 对话 + 顶栏芯片
-   · spotlight — 场面主视（正文最大）
-   · turn_panel — 回合面板（场面+侧栏交互）
-   · split_board — 双栏（左故事·右线索）
-   · choice_dock — 选择坞（底部大行动区）
-   · chapter_reader — 章节阅读
+0. 按「要同时看见什么」七选一：
+   · prose — 只要正文
+   · chat_monitor — 正文 + 扫状态
+   · spotlight — 大正文 + 弱状态
+   · turn_panel — 场面 + 交互物 + 行动
+   · split_board — 正文 ‖ 线索
+   · choice_dock — 局面 + 选项
+   · chapter_reader — 章正文 + 进度
 
 1. 要微调什么？（监控字段、块称呼、要不要建议行动、tone_chrome…）
 2. 有没有隐藏段给模型/程序维护变量？

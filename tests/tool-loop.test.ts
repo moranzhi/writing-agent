@@ -5,6 +5,7 @@ import {
   MockLlmProvider,
 } from "../src/llm/client.js";
 import { runMainAgentToolLoop } from "../src/main-agent/tool-loop.js";
+import { MAIN_AGENT_TOOL_DEFINITIONS } from "../src/main-agent/tools.js";
 import { toolCallToDecision } from "../src/runtime/tool-registry.js";
 import { createSession } from "../src/runtime/phase-machine.js";
 
@@ -21,6 +22,12 @@ describe("main agent tool loop", () => {
     listWorkers: () => [{ id: "outline", description: "生成大纲" }],
     listArtifacts: () => [],
   };
+
+  it("exposes only DAG routing tools", () => {
+    expect(
+      MAIN_AGENT_TOOL_DEFINITIONS.map((tool) => tool.function.name),
+    ).toEqual(["read_blackboard", "run_worker"]);
+  });
 
   it("runs loop tools then returns terminal decision", async () => {
     const llm = new MockLlmProvider([

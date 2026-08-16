@@ -115,6 +115,46 @@ export function isContextFragmentDoc(doc: unknown): boolean {
   return Boolean(parseContextFragment(doc));
 }
 
+const NON_FRAGMENT_DESIGN_TAGS = new Set([
+  "设计.创作流程",
+  "设计.worker集",
+  "设计.worker集.草稿",
+  "设计.worker规格",
+  "设计.上下文投影排序",
+]);
+
+/** 该 output tag 应按 context-fragment.v1 验收（有可用「正文」） */
+export function expectsContextFragmentTag(tag: string): boolean {
+  const t = tag.trim();
+  if (!t.startsWith("设计.")) return false;
+  return !NON_FRAGMENT_DESIGN_TAGS.has(t);
+}
+
+export function hasUsableFragmentBody(body: unknown): boolean {
+  if (body == null) return false;
+  if (typeof body === "string") return body.trim().length > 0;
+  if (Array.isArray(body)) return body.length > 0;
+  if (typeof body === "object") return Object.keys(body as object).length > 0;
+  return false;
+}
+
+/** 能进验收卡：解析成功且「正文」非空 */
+export function isUsableContextFragment(raw: unknown): boolean {
+  const frag = parseContextFragment(raw);
+  return Boolean(frag && hasUsableFragmentBody(frag.正文));
+}
+
+export function looksLikeFragmentDoc(doc: unknown): boolean {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  const row = doc as Record<string, unknown>;
+  if (row.schema === CONTEXT_FRAGMENT_SCHEMA) return true;
+  if (typeof row.技能 === "string" && row.技能.trim()) return true;
+  return (
+    typeof row.brief === "string" &&
+    ("正文" in row || "body" in row)
+  );
+}
+
 /** 投影级别：summary 优先 brief；fields 尝试列出正文顶层键 */
 export function projectFragmentContent(
   raw: string,

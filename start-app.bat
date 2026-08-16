@@ -46,8 +46,9 @@ if exist ".env" (
 )
 
 echo [信息] 启动桌面窗口 http://localhost:%PORT%
-echo [信息] 调试: F12 或 Ctrl+Shift+I 打开开发者工具
-echo [信息] 自动打开 DevTools: set WRITING_AGENT_ELECTRON_DEV=1 ^&^& npm run electron
+echo [信息] 后端日志在 %USERPROFILE%\.writing-agent\logs\runtime.log
+echo [信息] 显示控制台请用 start-app.bat console
+echo [信息] F12 或 Ctrl+Shift+I 打开开发者工具，只有前端
 echo [信息] 关闭窗口即停止服务
 echo.
 

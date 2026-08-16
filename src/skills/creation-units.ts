@@ -491,6 +491,13 @@ export function parseAcceptedUnits(raw: unknown): string[] {
   return [];
 }
 
+/** 给人 / 编排 LLM 看的已验收步骤清单；去掉「flow」（那是计划本身，不是某一步）。 */
+export function formatAcceptedUnitsForPrompt(raw: unknown): string {
+  const ids = parseAcceptedUnits(raw).filter((id) => id && id !== "flow");
+  if (ids.length === 0) return "（尚无已验收步骤）";
+  return ids.map((id) => `- ${id}`).join("\n");
+}
+
 export function isFinalWorkerSetArtifact(artifact: {
   workerId: string;
   outputTags: string[];

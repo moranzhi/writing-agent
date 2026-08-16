@@ -26,7 +26,10 @@ import {
   readIntakeValues,
   synthesizeDemandText,
 } from "../intake/intake.js";
-import { normalizeQuestions } from "../skills/question-protocol.js";
+import {
+  isModuleOpeningQuestions,
+  normalizeQuestions,
+} from "../skills/question-protocol.js";
 import type { QuestionItem } from "../types/questions.js";
 
 function nowIso(): string {
@@ -119,6 +122,67 @@ function updateArtifact(
   };
 }
 
+/** 最近一次被拒 / 待修订的产物（用于 revision 等待态补交意见后重跑） */
+function findRevisionTargetArtifact(
+  session: RuntimeSession,
+): ArtifactRecord | undefined {
+  if (session.pendingArtifactId) {
+    const pending = findArtifact(session, session.pendingArtifactId);
+    if (pending) return pending;
+  }
+  for (let i = session.artifacts.length - 1; i >= 0; i -= 1) {
+    const a = session.artifacts[i];
+    if (a.status === "revision_requested" || a.status === "rejected") {
+      return a;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 已有修改意见 → 写入「用户.修订说明」并立刻重跑同一 worker。
+ * 语义：在已有产物上按意见改（上下文会注入待改底稿），不是推倒重做。
+ * 对应验收底栏：看产物 → 输入意见 →「按意见修改」。
+ */
+function beginRevisionRerun(
+  session: RuntimeSession,
+  event: RuntimeEvent,
+  artifact: ArtifactRecord,
+  instruction: string,
+): ApplyEventResult {
+  const trimmed = instruction.trim();
+  const slots: Record<string, unknown> = {
+    ...session.slots,
+    "用户.修订说明": trimmed,
+    "用户.最新输入": trimmed,
+    revisionInstruction: trimmed,
+    // 本次重跑的底稿；重跑写不出新版时只许退回这一份
+    revisionTargetArtifactId: artifact.id,
+  };
+  const next = appendHistory(
+    updateArtifact(session, artifact.id, { status: "revision_requested" }),
+    event,
+  );
+  return {
+    session: touch(
+      running({
+        ...next,
+        slots,
+        pendingArtifactId: undefined,
+        pendingDecision: undefined,
+        currentWorkerId: artifact.workerId,
+        currentStepId: artifact.stepId ?? session.currentStepId,
+      }),
+    ),
+    effects: [
+      {
+        type: "run_worker",
+        workerId: artifact.workerId,
+      },
+    ],
+  };
+}
+
 /** 创建 idle 状态的新会话 */
 export function createSession(
   presetId: string,
@@ -154,6 +218,7 @@ export function getAllowedEvents(
         "worker_started",
         "worker_completed",
         "worker_needs_input",
+        "worker_revision_produced_nothing",
         "programmatic_review_started",
         "programmatic_review_passed",
         "programmatic_review_failed",
@@ -204,7 +269,8 @@ export function canApplyEvent(
         reason?.kind === "intake" ||
         reason?.kind === "input" ||
         reason?.kind === "worker_questions" ||
-        reason?.kind === "revision"
+        reason?.kind === "revision" ||
+        reason?.kind === "next_intent"
       );
     case "user_confirmed_intake":
       return reason?.kind === "intake";
@@ -255,6 +321,14 @@ function handleWorkerCompleted(
 
   const mode = session.acceptanceMode ?? "user_confirmed";
   let next = appendHistory(session, event);
+
+  if (next.slots.revisionTargetArtifactId) {
+    // 已写出新版，旧底稿不再是退回目标
+    next = {
+      ...next,
+      slots: { ...next.slots, revisionTargetArtifactId: undefined },
+    };
+  }
 
   if (mode === "user_confirmed") {
     next = updateArtifact(next, artifact.id, { status: "under_review" });
@@ -451,6 +525,62 @@ export function applyEvent(
         return {
           session: waiting(touch(next), { kind: "intake", prompt }),
           effects,
+        };
+      }
+
+      if (session.waitingReason?.kind === "next_intent") {
+        if (text) {
+          slots["用户.下一步意向"] = text;
+          slots["用户.最新输入"] = text;
+        }
+        const next = appendHistory(
+          {
+            ...session,
+            slots,
+            resumeContext: undefined,
+          },
+          event,
+        );
+        return {
+          session: touch(running(next)),
+          effects: [{ type: "propose_next_creation_step" }],
+        };
+      }
+
+      if (session.waitingReason?.kind === "revision") {
+        const instruction =
+          text.trim() || session.waitingReason.instruction?.trim() || "";
+        if (!instruction) {
+          return {
+            session: waiting(touch(appendHistory({ ...session, slots }, event)), {
+              kind: "revision",
+              instruction: session.waitingReason.instruction,
+            }),
+            effects: [
+              {
+                type: "emit_message",
+                message: "请说明要改哪里，再发送。",
+              },
+            ],
+          };
+        }
+        const target = findRevisionTargetArtifact(session);
+        if (target) {
+          return beginRevisionRerun(session, event, target, instruction);
+        }
+        slots["用户.修订说明"] = instruction;
+        slots["用户.最新输入"] = instruction;
+        slots.revisionInstruction = instruction;
+        return {
+          session: touch(
+            running(
+              appendHistory(
+                { ...session, slots, pendingArtifactId: undefined },
+                event,
+              ),
+            ),
+          ),
+          effects: [{ type: "invoke_main_agent" }],
         };
       }
 
@@ -660,6 +790,7 @@ export function applyEvent(
         acceptanceMode: session.acceptanceMode ?? "user_confirmed",
         questions: normalized,
       };
+      const openingAsk = isModuleOpeningQuestions(normalized);
       return {
         session: waiting(
           appendHistory(
@@ -675,7 +806,10 @@ export function applyEvent(
         effects: [
           {
             type: "emit_message",
-            message: `[Worker] ${event.payload.workerId} 提问：\n${normalized.map((q) => `- ${q.prompt}`).join("\n")}`,
+            // 默认问题正文由说话面 openingGuide 展示，勿再整段塞进调度消息
+            message: openingAsk
+              ? `[Worker] ${event.payload.workerId} · 默认问题（请在主栏按引导作答）`
+              : `[Worker] ${event.payload.workerId} 提问：\n${normalized.map((q) => `- ${q.prompt}`).join("\n")}`,
           },
         ],
       };
@@ -690,16 +824,10 @@ export function applyEvent(
           typeof event.payload.assessment === "string"
             ? event.payload.assessment.trim()
             : "";
-        const effects = [...result.effects];
-        if (sidecar?.length) {
-          effects.push({
-            type: "emit_message",
-            message: `[Worker] 可选追问（可跳过，直接接受目前产物）：\n${sidecar.map((q) => `- ${q.prompt}`).join("\n")}`,
-          });
-        }
+        // 追问与产物同一次产出：只挂 review_artifact，勿再 emit 独立「可选追问」消息
+        //（否则历史里会拆成 worker_output + worker_questions 两段）
         return {
           ...result,
-          effects,
           session: waiting(result.session, {
             kind: "review_artifact",
             artifactId: result.session.pendingArtifactId,
@@ -709,6 +837,42 @@ export function applyEvent(
         };
       }
       return result;
+    }
+
+    case "worker_revision_produced_nothing": {
+      const artifact = findArtifact(session, event.payload.artifactId);
+      if (!artifact) {
+        return fail(session, `Artifact not found: ${event.payload.artifactId}`);
+      }
+      const retryQuestions = normalizeQuestions(event.payload.questions).map(
+        (q) => ({ ...q, required: false }),
+      );
+      const next = appendHistory(
+        updateArtifact(session, artifact.id, { status: "under_review" }),
+        event,
+      );
+      return {
+        session: waiting(
+          {
+            ...next,
+            slots: { ...next.slots, revisionTargetArtifactId: undefined },
+            pendingArtifactId: artifact.id,
+            currentWorkerId: undefined,
+          },
+          {
+            kind: "review_artifact",
+            artifactId: artifact.id,
+            questions: retryQuestions.length ? retryQuestions : undefined,
+          },
+        ),
+        effects: [
+          {
+            type: "emit_message",
+            message:
+              "[系统] 这次按意见重写没能产出可验收的新版本，已退回上一版产物：可补充说明再改，或直接接受上一版。",
+          },
+        ],
+      };
     }
 
     case "user_resolved_sidecar_questions": {
@@ -745,22 +909,43 @@ export function applyEvent(
       }
       const slots: Record<string, unknown> = { ...session.slots };
       // 仅终稿 tag「设计.worker集」表示完整 Worker 集验收；草稿单位验收不得开 play
-      if (artifact.outputTags.some((tag) => tag === "设计.worker集")) {
+      const isFinalSet = artifact.outputTags.some((tag) => tag === "设计.worker集");
+      if (isFinalSet) {
         slots.designInstanceReady = true;
       }
       const next = appendHistory(
         updateArtifact(session, artifact.id, { status: "accepted" }),
         event,
       );
-      return {
-        session: touch(
-          running({
-            ...next,
-            slots,
-            pendingArtifactId: undefined,
-            pendingDecision: undefined,
+      const cleared = {
+        ...next,
+        slots,
+        pendingArtifactId: undefined,
+        pendingDecision: undefined,
+        currentWorkerId: undefined,
+      };
+      // 创作步验收后：先问下一步意向，再展示下一节点确认开干（勿直接连跑）
+      const gateNextIntent =
+        !isFinalSet &&
+        (artifact.workerId === "design-step" ||
+          artifact.workerId === "design-flow");
+      if (gateNextIntent) {
+        return {
+          session: waiting(cleared, {
+            kind: "next_intent",
+            afterWorkerId: artifact.workerId,
           }),
-        ),
+          effects: [
+            {
+              type: "emit_message",
+              message:
+                "这一步已收下。下一步想写什么？可留空，直接发送后看下一节点并确认开干。",
+            },
+          ],
+        };
+      }
+      return {
+        session: touch(running(cleared)),
         effects: [{ type: "invoke_main_agent" }],
       };
     }
@@ -770,19 +955,21 @@ export function applyEvent(
       if (!artifact) {
         return fail(session, `Artifact not found: ${event.payload.artifactId}`);
       }
+      const reason = event.payload.reason?.trim() ?? "";
+      // 验收态已写意见 → 在现有产物上按意见改；无意见才进入 revision 等待补交
+      if (reason) {
+        return beginRevisionRerun(session, event, artifact, reason);
+      }
       const next = appendHistory(
         updateArtifact(session, artifact.id, { status: "rejected" }),
         event,
       );
       return {
-        session: waiting(next, {
-          kind: "revision",
-          instruction: event.payload.reason,
-        }),
+        session: waiting(next, { kind: "revision" }),
         effects: [
           {
             type: "emit_message",
-            message: event.payload.reason ?? "产物已被拒绝，等待修改指示。",
+            message: "已保留当前产物，请说明要改哪里。",
           },
         ],
       };
@@ -800,15 +987,26 @@ export function applyEvent(
           effects: [{ type: "invoke_main_agent" }],
         };
       }
+      const instruction = event.payload.instruction?.trim() ?? "";
+      const artifactId =
+        event.payload.artifactId ?? session.pendingArtifactId;
+      const artifact = artifactId
+        ? findArtifact(session, artifactId)
+        : findRevisionTargetArtifact(session);
+      if (instruction && artifact) {
+        return beginRevisionRerun(session, event, artifact, instruction);
+      }
       return {
         session: waiting(
-          appendHistory({ ...session, pendingArtifactId: undefined }, event),
-          { kind: "revision", instruction: event.payload.instruction },
+          appendHistory(session, event),
+          { kind: "revision", instruction: instruction || undefined },
         ),
         effects: [
           {
             type: "emit_message",
-            message: `返工请求：${event.payload.instruction}`,
+            message: instruction
+              ? `修改意见：${instruction}`
+              : "请说明要改哪里（在现有产物上改）。",
           },
         ],
       };
@@ -840,20 +1038,16 @@ export function applyEvent(
       if (!artifact) {
         return fail(session, `Artifact not found: ${event.payload.artifactId}`);
       }
-      const next = appendHistory(
-        updateArtifact(session, artifact.id, { status: "revision_requested" }),
-        event,
-      );
+      const reason = event.payload.reason?.trim() || "程序验收失败";
+      const result = beginRevisionRerun(session, event, artifact, reason);
       return {
-        session: waiting(next, {
-          kind: "revision",
-          instruction: event.payload.reason,
-        }),
+        ...result,
         effects: [
           {
             type: "emit_message",
-            message: `程序验收失败：${event.payload.reason}`,
+            message: `程序验收未过，按意见在现有产物上改：${reason}`,
           },
+          ...result.effects,
         ],
       };
     }

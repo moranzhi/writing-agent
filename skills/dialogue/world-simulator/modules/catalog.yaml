@@ -46,11 +46,11 @@ modules:
       - key: target
         label: 生成对象
         required: true
-        hint: 本轮为哪一类内容建规则；编排时 askUser 给选项+其它
+        hint: 本轮为哪一类内容建规则；编排时 askUser 给选项+其它；用户改对象时必须同步改 rule_id 与步骤 id
       - key: rule_id
         label: 规则 id
         required: false
-        hint: 建议英文 kebab-case；可执行时再最终钉死
+        hint: 英文 kebab-case，须与 target 对应（女租客→female-tenants，丧尸→zombies）；改对象时禁止沿用旧 id
       - key: lifecycle_intent
         label: 生命周期意图
         required: false

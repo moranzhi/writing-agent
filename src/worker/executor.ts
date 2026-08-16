@@ -15,10 +15,17 @@ import {
 } from "../skills/worker-set-parse.js";
 import { assembleWorkerContext } from "../skills/context-segments.js";
 import {
+  mergeQuestionsPreferFragment,
   normalizeQuestions,
   type QuestionItem,
 } from "../skills/question-protocol.js";
-import { extractFragmentAskSidecar } from "../skills/context-fragment.js";
+import {
+  extractFragmentAskSidecar,
+  expectsContextFragmentTag,
+  isUsableContextFragment,
+  looksLikeFragmentDoc,
+} from "../skills/context-fragment.js";
+import { isProgressPointerTag } from "../skills/creation-flow.js";
 
 export type WorkerRunParams = {
   skillName: string;
@@ -66,7 +73,8 @@ askUser 每项可为：
 
 - outputs 的 key 必须是要求的 outputTags
 - **设计.worker集 / 设计.worker集.草稿**：value 必须是 JSON 对象文本（以 { 开头），禁止中文说明、元叙述、提问长文；禁止 YAML
-- **优先同时给 outputs + askUser**：先交出可用草稿/产物，追问挂在产物下（用户可直接接受而不作答）。仅当完全无法产出时才留空 outputs、只填 askUser
+- **context-fragment.v1**：必须放在 outputs["<本步 artifact tag>"]，禁止把片段当根对象。题目只写在产物「追问」（建议选项 + 示例）；顶层 askUser 必须为 **null**。程序会把「追问」挂到询问卡。禁止同一问再抄一份 askUser。禁止写入「创作.当前步骤」等进度指针
+- **其它产物**：优先同时给 outputs + askUser；有产物时追问挂在产物下（用户可直接接受而不作答）。仅当完全无法产出时才留空 outputs、只填 askUser
 - 能推断选项时 **必须**给 options（完整句、可改写）；不要只丢裸问题逼用户写长段
 - 若 inputs 中 \`用户.需求\` / \`用户.博弈需求\`（或 book.brief）已有实质内容，禁止 askUser 要求用户重复提供其中已写明的情境、角色、规则等；仅对 genuinely 缺失且无法推断的要点提问
 - summary 用于界面展示`;
@@ -127,6 +135,102 @@ function gatherInputs(
   return inputs;
 }
 
+function stringifyOutputValue(val: unknown): string | undefined {
+  if (typeof val === "string" && val.trim()) return val.trim();
+  if (val && typeof val === "object") return JSON.stringify(val);
+  return undefined;
+}
+
+function productOutputTags(outputTags: string[]): string[] {
+  return outputTags.filter((t) => t.trim() && !isProgressPointerTag(t));
+}
+
+function assignOutput(
+  outputs: Record<string, string>,
+  tag: string | undefined,
+  val: unknown,
+): void {
+  if (!tag || isProgressPointerTag(tag)) return;
+  const text = stringifyOutputValue(val);
+  if (text) outputs[tag] = text;
+}
+
+/** 模型常把片段当根对象，或写进「创作.当前步骤」 */
+function recoverFragmentOutputs(
+  obj: Record<string, unknown>,
+  outputs: Record<string, string>,
+  outputTags: string[],
+): void {
+  const target = productOutputTags(outputTags)[0];
+  if (!target) return;
+  if (outputs[target] && isUsableContextFragment(outputs[target])) return;
+
+  const outputsRaw =
+    obj.outputs && typeof obj.outputs === "object" && !Array.isArray(obj.outputs)
+      ? (obj.outputs as Record<string, unknown>)
+      : null;
+
+  if (outputsRaw) {
+    for (const [key, val] of Object.entries(outputsRaw)) {
+      if (key === target) continue;
+      const text = stringifyOutputValue(val);
+      if (!text) continue;
+      if (isUsableContextFragment(text) || looksLikeFragmentDoc(val)) {
+        outputs[target] = text;
+        return;
+      }
+    }
+  }
+
+  const protocolKeys = new Set(["outputs", "summary", "askUser", "askAssessment"]);
+  const rest: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (!protocolKeys.has(k)) rest[k] = v;
+  }
+  if (looksLikeFragmentDoc(obj) || looksLikeFragmentDoc(rest)) {
+    const source = looksLikeFragmentDoc(obj) ? obj : rest;
+    outputs[target] = JSON.stringify(source);
+  }
+}
+
+function dropUnusableFragmentOutputs(outputs: Record<string, string>): void {
+  for (const tag of Object.keys(outputs)) {
+    if (isProgressPointerTag(tag)) {
+      delete outputs[tag];
+      continue;
+    }
+    const content = outputs[tag]!;
+    const requireFragment = expectsContextFragmentTag(tag);
+    const looksFragment =
+      isUsableContextFragment(content) ||
+      looksLikeFragmentDoc(tryParseObject(content)) ||
+      /"schema"\s*:\s*"context-fragment\.v1"/.test(content) ||
+      /"技能"\s*:/.test(content);
+    if ((requireFragment || looksFragment) && !isUsableContextFragment(content)) {
+      delete outputs[tag];
+    }
+  }
+}
+
+function tryParseObject(text: string): unknown {
+  const extracted = extractJsonObjectText(text) ?? text.trim();
+  try {
+    return JSON.parse(extracted);
+  } catch {
+    return undefined;
+  }
+}
+
+const INCOMPLETE_FRAGMENT_ASK = normalizeQuestions([
+  {
+    id: "design-step-retry",
+    prompt:
+      "这一步还没写出可验收的产物。请再补一点你最在意的体验或参与方式；也可以说「按已有描述先出一版」。",
+    allowOther: true,
+    required: true,
+  },
+]);
+
 function parseWorkerResponse(
   raw: string,
   outputTags: string[],
@@ -135,7 +239,6 @@ function parseWorkerResponse(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    // 整段不是协议 JSON：切勿把散文塞进设计.worker集*
     if (outputTags.some((t) => WORKER_SET_OUTPUT_TAGS.has(t))) {
       const questions = normalizeQuestions(extractQuestionsFromText(raw));
       return {
@@ -149,16 +252,20 @@ function parseWorkerResponse(
             ]),
       };
     }
-    const fallback: Record<string, string> = {};
-    if (outputTags.length === 1) {
-      fallback[outputTags[0]] = raw;
-    } else {
-      fallback[outputTags[0] ?? "output.草稿"] = raw;
+    const target = productOutputTags(outputTags)[0] ?? outputTags[0];
+    if (target && isUsableContextFragment(raw)) {
+      return finalizeParsedOutputs(
+        { [target]: raw },
+        { summary: raw.slice(0, 80) },
+        outputTags,
+      );
     }
+    const questions = normalizeQuestions(extractQuestionsFromText(raw));
     return {
-      outputs: fallback,
-      summary: raw.slice(0, 80),
+      outputs: {},
+      summary: "未产出可验收产物",
       preview: raw.slice(0, 600),
+      askUser: questions.length ? questions.slice(0, 2) : INCOMPLETE_FRAGMENT_ASK,
     };
   }
 
@@ -171,17 +278,20 @@ function parseWorkerResponse(
   const outputs: Record<string, string> = {};
 
   if (outputsRaw && typeof outputsRaw === "object") {
-    for (const tag of outputTags) {
-      const val = (outputsRaw as Record<string, unknown>)[tag];
-      if (typeof val === "string" && val.trim()) {
-        outputs[tag] = val.trim();
-      } else if (val && typeof val === "object") {
-        // 模型有时直接回对象而非字符串
-        outputs[tag] = JSON.stringify(val);
-      }
+    for (const tag of productOutputTags(outputTags)) {
+      assignOutput(outputs, tag, (outputsRaw as Record<string, unknown>)[tag]);
     }
   }
+  recoverFragmentOutputs(obj, outputs, outputTags);
 
+  return finalizeParsedOutputs(outputs, obj, outputTags);
+}
+
+function finalizeParsedOutputs(
+  outputs: Record<string, string>,
+  obj: Record<string, unknown>,
+  _outputTags: string[],
+): WorkerRunResult {
   const isMetaAskToken = (s: string) => /^ask[_-]?user$/i.test(s.trim());
 
   let askUser: QuestionItem[] | undefined;
@@ -213,7 +323,7 @@ function parseWorkerResponse(
     }
   }
 
-  // context-fragment.v1：正文内 追问/自评 → 挂到询问卡（不必再抄一份 askUser）
+  // 先抽追问，再丢掉半残片段——无正文时仍要把题留给 LLM loop
   let askAssessment: string | undefined;
   const fragQuestions: QuestionItem[] = [];
   for (const content of Object.values(outputs)) {
@@ -226,19 +336,20 @@ function parseWorkerResponse(
     }
   }
   if (fragQuestions.length) {
-    if (!askUser?.length) {
-      askUser = fragQuestions;
-    } else {
-      for (const q of fragQuestions) {
-        if (!askUser.some((x) => x.prompt === q.prompt)) askUser.push(q);
-      }
-    }
+    askUser = mergeQuestionsPreferFragment(askUser, fragQuestions);
+  }
+
+  dropUnusableFragmentOutputs(outputs);
+
+  if (Object.keys(outputs).length === 0 && (!askUser || askUser.length === 0)) {
+    askUser = normalizeQuestions(INCOMPLETE_FRAGMENT_ASK);
   }
 
   const summary =
     typeof obj.summary === "string" && obj.summary.trim()
       ? obj.summary.trim()
-      : Object.values(outputs)[0]?.slice(0, 80) ?? "Worker 已完成";
+      : Object.values(outputs)[0]?.slice(0, 80) ??
+        (askUser?.length ? `待补充：${askUser[0]!.prompt.slice(0, 40)}` : "Worker 已完成");
 
   const preview =
     Object.entries(outputs)
@@ -379,6 +490,9 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     } catch {
       acceptedStepNames = [];
     }
+    const filledArtifactTags = params.blackboard
+      .listTagIndex()
+      .map((item) => item.tag);
     const loaded = await loadWorkerSkillWithContext(
       params.skillName,
       workerId,
@@ -388,6 +502,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
         currentStepName,
         acceptedStepNames,
         selectedRecipeRef,
+        filledArtifactTags,
       },
     );
     worker = loaded.worker;

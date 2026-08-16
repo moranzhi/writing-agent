@@ -1,11 +1,12 @@
 import { renderWorkspace, updateLiveStreamPanel, resetRailChrome } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
-import { displaySkillPackLabel } from "./display-labels.js";
+import { displaySkillPackLabel, reviewComposerCopy } from "./display-labels.js";
 import {
   clearQuestionCardState,
   collectQuestionAnswers,
   getActiveQuestions,
+  isModuleOpeningWaiting,
   renderQuestionsCard,
 } from "./questions-ui.js";
 
@@ -27,15 +28,158 @@ const LIVE_POLL_MS = 280;
 const $ = (id) => document.getElementById(id);
 
 const PHASE = { idle: "待命", running: "执行中", waiting_user: "等待你", done: "已完成", error: "出错" };
-const REASON = {
-  skill_selection: "选择配方",
-  intake: "补充信息",
-  input: "等待输入",
-  approve_step: "确认执行",
-  review_artifact: "验收产物",
-  worker_questions: "回答提问",
-  revision: "按反馈修改",
+
+/** 用户任务三态（表层）；底层 waitingReason 映射进来 */
+const USER_TASK = {
+  speak: { id: "speak", label: "说话", title: "继续说" },
+  answer: { id: "answer", label: "答题", title: "回答问题" },
+  review: { id: "review", label: "验收", title: "验收产物" },
 };
+
+function reviewCopyFromView(view) {
+  return reviewComposerCopy(view?.reviewArtifact?.workerId, {
+    hasQuestions: Boolean(getActiveQuestions(view)?.questions?.length),
+  });
+}
+
+/**
+ * 把 waitingReason 收成用户三态：说话 / 答题+自由发挥 / 批阅。
+ * @returns {{ id: 'speak'|'answer'|'review'|'busy'|'idle'|'error', label: string, title: string, hint: string|null }}
+ */
+function resolveUserTask(view, loading) {
+  if (loading || isAgentBusy(view, loading)) {
+    return {
+      id: "busy",
+      label: "执行中",
+      title: view.focus?.action ?? "总管或 Worker 执行中…",
+      hint: null,
+    };
+  }
+  if (composerForceInput) {
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: "说明意见",
+      hint: "写完发送即可。",
+    };
+  }
+  if (view.phase === "done") {
+    return { id: "idle", label: "已完成", title: "会话已结束", hint: null };
+  }
+  if (view.phase === "error") {
+    return {
+      id: "error",
+      label: "出错",
+      title: "说明后重试",
+      hint: view.hints?.[0] ?? "执行出错，可在下方重试",
+    };
+  }
+
+  const wr = view.waitingReason;
+  const hasQuestions = Boolean(getActiveQuestions(view)?.questions?.length);
+  const moduleOpening = isModuleOpeningWaiting(view);
+
+  if (wr?.kind === "review_artifact") {
+    const copy = reviewCopyFromView(view);
+    return {
+      id: "review",
+      label: copy.taskLabel,
+      title: copy.taskTitle,
+      hint: copy.hint,
+    };
+  }
+
+  // 能力默认问题：对齐美学纲领开局 → 说话面，不进「答题」
+  if (moduleOpening) {
+    const stepName = view.openingGuide?.stepName?.trim();
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: stepName || "按引导先说几句",
+      hint: "想到什么写什么，不必整齐；写完发送即可。",
+    };
+  }
+
+  if (hasQuestions || wr?.kind === "worker_questions") {
+    return {
+      id: "answer",
+      label: USER_TASK.answer.label,
+      title: "回答问题",
+      hint: "先点选项作答；也可以在底栏自由补充。",
+    };
+  }
+
+  if (wr?.kind === "approve_step") {
+    const proposed = view.proposedNextStep;
+    return {
+      id: "speak",
+      label: "确认",
+      title: proposed?.name ? `接下来生成 · ${proposed.name}` : "确认下一步",
+      hint: proposed
+        ? proposedOutputCopy(proposed)
+        : view.focus?.detail ?? "确认执行，或说明意见。",
+    };
+  }
+
+  if (wr?.kind === "next_intent") {
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: "下一步想写什么",
+      hint: "说说接下来想做什么；可留空，发送后会展示下一节点。",
+    };
+  }
+
+  if (wr?.kind === "revision") {
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: "说明修改意见",
+      hint: "写清楚要改哪里；发送后在现有产物上修改。",
+    };
+  }
+
+  if (wr?.kind === "intake") {
+    const hasUser = (view.messages ?? []).some((m) => m.role === "user");
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: hasUser ? "继续补充" : "描述你想创作什么",
+      hint: hasUser
+        ? "继续说细节，或等信息齐后确认。"
+        : "用几句话说明题材、玩法或爽点即可。",
+    };
+  }
+
+  if (wr?.kind === "input" || wr?.kind === "skill_selection") {
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: "继续说",
+      hint: view.hints?.[0] ?? "直接输入你的想法或补充。",
+    };
+  }
+
+  if (view.phase === "waiting_user") {
+    return {
+      id: "speak",
+      label: USER_TASK.speak.label,
+      title: "继续说",
+      hint: view.hints?.[0] ?? null,
+    };
+  }
+
+  return {
+    id: "idle",
+    label: PHASE[view.phase] ?? view.phase,
+    title: PHASE[view.phase] ?? "待命",
+    hint: null,
+  };
+}
+
+function applyUserTaskChrome(task) {
+  document.body.dataset.userTask = task?.id || "";
+}
 
 /** @type {{ id: string, name: string, description: string }[]} */
 let directors = [];
@@ -54,16 +198,67 @@ function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function proposedOutputCopy(proposed) {
+  const params = proposed?.params;
+  const target =
+    params && typeof params === "object"
+      ? params.target ?? params.object ?? params["对象"] ?? params["生成对象"]
+      : null;
+  const targetText =
+    typeof target === "string" || typeof target === "number"
+      ? String(target).trim()
+      : "";
+  if (targetText) {
+    return `将生成「${targetText}」的${proposed.name}。`;
+  }
+  return `接下来将生成：${proposed?.name || "下一项内容"}。`;
+}
+
+/** 确认下一步：给人看「生成什么」；有 target 时顺带露出后台 id，便于改对象时同步。 */
+function proposeVisibleFields(proposed) {
+  const missing = new Set(proposed?.paramsMissing || []);
+  const specs = Array.isArray(proposed?.paramSpecs) ? proposed.paramSpecs : [];
+  const byKey = new Map(specs.map((s) => [s.key, s]));
+  const out = [];
+  const push = (key) => {
+    const spec = byKey.get(key);
+    if (!spec || out.some((s) => s.key === key)) return;
+    out.push(spec);
+  };
+
+  if (byKey.has("target")) {
+    push("target");
+    // 对象与后台 id 绑定：改女租客→丧尸时，rule_id 也要换成 zombies 一类英文
+    if (byKey.has("rule_id")) push("rule_id");
+  } else if (byKey.has("rule_id") && (missing.has("rule_id") || proposed?.name === "具体实例")) {
+    push("rule_id");
+  }
+
+  for (const key of missing) push(key);
+  return out;
+}
+
+function proposeFieldLabel(field) {
+  if (field.key === "rule_id" && field.label === "规则 id") return "后台 id";
+  return field.label || field.key;
+}
+
+function proposeFieldHint(field, proposed) {
+  if (field.key === "rule_id" && proposed?.paramSpecs?.some((s) => s.key === "target")) {
+    return "英文 kebab-case，须与上方对象对应；改对象时一并改（如丧尸→zombies）";
+  }
+  return field.hint || field.key;
+}
+
 function statusFor(view, loading) {
-  if (loading) return { cls: "running", text: "处理中…" };
-  if (view.phase === "done") return { cls: "done", text: "已完成" };
-  if (view.phase === "running" && !view.waitingReason) {
-    return { cls: "running", text: view.focus?.action ?? "总管运行中" };
+  const task = resolveUserTask(view, loading);
+  if (task.id === "busy") return { cls: "running", text: task.title };
+  if (task.id === "error") return { cls: "", text: task.label };
+  if (task.id === "idle" && view.phase === "done") return { cls: "done", text: "已完成" };
+  if (task.id === "speak" || task.id === "answer" || task.id === "review") {
+    return { cls: "waiting", text: task.label };
   }
-  if (view.waitingReason) {
-    return { cls: "waiting", text: REASON[view.waitingReason.kind] ?? view.waitingReason.kind };
-  }
-  return { cls: "", text: PHASE[view.phase] ?? view.phase };
+  return { cls: "", text: task.label };
 }
 
 function isAgentBusy(view, loading) {
@@ -72,17 +267,25 @@ function isAgentBusy(view, loading) {
 }
 
 function resolveComposer(view, loading) {
-  if (view.phase === "done") return { mode: "idle", text: "会话已结束" };
+  const task = resolveUserTask(view, loading);
+  applyUserTaskChrome(task);
+
+  if (task.id === "busy") {
+    return { mode: "waiting", text: task.title, task };
+  }
+  if (view.phase === "done") {
+    return { mode: "idle", text: "会话已结束", task };
+  }
   if (view.phase === "error") {
     const send = view.actions?.find((a) => a.type === "send_message");
     return {
       mode: "input",
+      task,
+      taskTitle: task.title,
+      taskHint: task.hint,
       placeholder: send?.placeholder ?? "说明后重试，或直接发送继续…",
-      hint: view.hints?.[0] ?? "执行出错，可在下方重试",
+      hint: null,
     };
-  }
-  if (isAgentBusy(view, loading)) {
-    return { mode: "waiting", text: view.focus?.action ?? "总管或 Worker 执行中…" };
   }
 
   const confirmIntake = view.actions?.find((a) => a.type === "confirm_intake");
@@ -91,6 +294,9 @@ function resolveComposer(view, loading) {
     const send = view.actions?.find((a) => a.type === "send_message");
     return {
       mode: view.intake.ready && confirmIntake ? "intake_ready" : "intake",
+      task,
+      taskTitle: task.title,
+      taskHint: task.hint,
       intake: view.intake,
       intakePrompt: hasUser ? view.intakePrompt : null,
       showIntakePanel: hasUser,
@@ -101,48 +307,65 @@ function resolveComposer(view, loading) {
 
   const approve = view.actions?.find((a) => a.type === "approve");
   const accept = view.actions?.find((a) => a.type === "accept");
+  if (approve && view.proposedNextStep && !composerForceInput) {
+    return {
+      mode: "propose_step",
+      task,
+      taskTitle: task.title,
+      taskHint: task.hint,
+      proposed: view.proposedNextStep,
+      primary: approve,
+      hint: null,
+    };
+  }
   if (approve && !composerForceInput) {
     return {
       mode: "action",
+      task,
+      taskTitle: task.title,
+      taskHint: task.hint,
       primary: approve,
       primaryType: "approve",
-      hint: view.focus?.detail,
+      hint: null,
       showReject: true,
     };
   }
   if (accept && view.waitingReason?.kind !== "review_artifact" && !composerForceInput) {
     return {
       mode: "action",
+      task,
+      taskTitle: "验收产物",
+      taskHint: "同意就接受；要改可先点「说明意见」。",
       primary: accept,
       primaryType: "accept",
-      hint: "验收产物",
+      hint: null,
       showReject: true,
     };
   }
 
   const send = view.actions?.find((a) => a.type === "send_message");
-  const hasQuestionsCard =
-    (view.waitingReason?.kind === "worker_questions" &&
-      view.waitingReason?.questions?.length) ||
-    (view.waitingReason?.kind === "input" &&
-      view.waitingReason?.questions?.length) ||
-    (view.waitingReason?.kind === "review_artifact" &&
-      view.waitingReason?.questions?.length);
+  const hasQuestionsCard = Boolean(getActiveQuestions(view)?.questions?.length);
 
   if (view.waitingReason?.kind === "review_artifact") {
     const parseBroken = Boolean(view.reviewArtifact?.workerSetView?.parseError);
+    const copy = reviewCopyFromView(view);
     return {
       mode: "input",
-      placeholder: send?.placeholder ?? "输入修改意见后发送…",
-      hint: hasQuestionsCard
-        ? "接受产物即收起追问（表示无需再完善）"
-        : null,
+      task,
+      taskTitle: copy.taskTitle,
+      taskHint: copy.hint,
+      placeholder: send?.placeholder ?? copy.placeholder,
+      hint: null,
+      submitLabel: copy.submitLabel,
+      emptyEnterHint: copy.emptyEnterHint,
       acceptAction: accept
         ? {
-            label: accept.label || "接受目前产物",
+            label: copy.acceptLabel,
+            title: copy.hint,
+            tone: copy.tone,
             disabled: parseBroken,
             disabledTitle: parseBroken
-              ? "规格解析失败，请先发送修改意见让 Worker 重写"
+              ? "规格解析失败，请先写修改意见再改产物"
               : undefined,
           }
         : null,
@@ -152,8 +375,12 @@ function resolveComposer(view, loading) {
   if (hasQuestionsCard && !composerForceInput) {
     return {
       mode: "input",
+      task,
+      taskTitle: task.title,
+      taskHint: task.hint,
       placeholder: send?.placeholder ?? "也可在此自由补充…",
       hint: null,
+      submitLabel: "补充并发送",
     };
   }
 
@@ -161,31 +388,90 @@ function resolveComposer(view, loading) {
     send ||
     view.waitingReason?.kind === "input" ||
     view.waitingReason?.kind === "worker_questions" ||
+    view.waitingReason?.kind === "revision" ||
+    view.waitingReason?.kind === "next_intent" ||
     composerForceInput
   ) {
     const wr = view.waitingReason;
-    if (wr?.kind === "worker_questions" && !hasQuestionsCard) {
-      return {
-        mode: "input",
-        placeholder: "在此直接回答上面的问题…",
-        hint: null,
-      };
+    let placeholder = send?.placeholder ?? "输入你想说的…";
+    let submitLabel = "发送";
+    if (wr?.kind === "next_intent") {
+      placeholder = send?.placeholder ?? "下一步想写什么？（可留空）…";
+      submitLabel = "继续";
+    } else if (wr?.kind === "approve_step" && composerForceInput) {
+      placeholder =
+        "例如：改成丧尸怪物规则（后台 id 也换成 zombies）…";
+      submitLabel = "发送意见";
+    } else if (wr?.kind === "revision") {
+      placeholder = "说明要改哪里…";
+      submitLabel = "按意见修改";
+    } else if (wr?.kind === "worker_questions" && !hasQuestionsCard) {
+      placeholder = isModuleOpeningWaiting(view)
+        ? "想到什么写什么…"
+        : "直接回答问题…";
+    } else if (
+      view.openingGuide?.text &&
+      !(view.messages ?? []).some((m) => m.role === "user")
+    ) {
+      placeholder = "按上方引导写几句…";
     }
-    const hint = view.hints?.[0] ?? null;
-    return { mode: "input", placeholder: send?.placeholder ?? "输入消息…", hint };
+    return {
+      mode: "input",
+      task,
+      taskTitle: task.title,
+      taskHint: task.hint,
+      placeholder,
+      hint: null,
+      submitLabel,
+      allowEmpty: wr?.kind === "next_intent",
+    };
   }
 
   const finish = view.actions?.find((a) => a.type === "finish");
   if (finish) {
-    return { mode: "action", primary: finish, primaryType: "finish", hint: null, showReject: false };
+    return {
+      mode: "action",
+      task,
+      taskTitle: "结束",
+      taskHint: null,
+      primary: finish,
+      primaryType: "finish",
+      hint: null,
+      showReject: false,
+    };
   }
 
-  return { mode: "idle", text: "暂无可用操作" };
+  return { mode: "idle", text: "暂无可用操作", task };
+}
+
+function composerModeChip(spec) {
+  const id = spec.task?.id;
+  if (id !== "speak" && id !== "answer" && id !== "review") return "";
+  const label = spec.task.label || "";
+  const tip = [spec.taskTitle, spec.taskHint].filter(Boolean).join(" — ");
+  const tone = spec.acceptAction?.tone ? ` data-tone="${esc(spec.acceptAction.tone)}"` : "";
+  return `<span class="composer-mode-chip" data-task="${esc(id)}"${tone} title="${esc(tip)}">${esc(label)}</span>`;
+}
+
+function composerInputShell(spec, { textareaHtml, trailing = "" } = {}) {
+  const chip = composerModeChip(spec);
+  const tone = spec.acceptAction?.tone
+    ? ` data-tone="${esc(spec.acceptAction.tone)}"`
+    : "";
+  return `<div class="composer-input-shell" data-task="${esc(spec.task?.id || "")}"${tone}>
+    ${chip}
+    ${textareaHtml}
+    ${trailing ? `<div class="composer-shell-actions">${trailing}</div>` : ""}
+  </div>`;
 }
 
 function renderComposer(view, loading) {
   const root = $("composer");
   if (!root) return;
+  if (root._enterHandler) {
+    document.removeEventListener("keydown", root._enterHandler);
+    root._enterHandler = null;
+  }
   const spec = resolveComposer(view, loading);
 
   if (spec.mode === "waiting") {
@@ -206,14 +492,14 @@ function renderComposer(view, loading) {
       spec.mode === "intake_ready" && spec.confirmIntake
         ? `<div class="composer-actions"><button type="button" class="btn btn-primary" data-act="confirm_intake">${esc(spec.confirmIntake.label)}</button></div>`
         : "";
+    const shell = composerInputShell(spec, {
+      textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
+      trailing: `<button type="submit" class="btn btn-primary composer-btn">发送</button>`,
+    });
     root.innerHTML = `
-      ${spec.intakePrompt ? `<p class="composer-hint">${esc(spec.intakePrompt)}</p>` : ""}
       ${intakePanel}
       ${confirm}
-      <form class="composer-form" id="composer-form">
-        <textarea id="composer-input" rows="2" placeholder="${esc(spec.placeholder)}"></textarea>
-        <button type="submit" class="btn btn-primary">发送</button>
-      </form>`;
+      <form class="composer-form" id="composer-form">${shell}</form>`;
     wireComposerForm();
     root.querySelector("[data-act=confirm_intake]")?.addEventListener("click", () => runAction("confirm_intake"));
     return;
@@ -221,13 +507,14 @@ function renderComposer(view, loading) {
 
   if (spec.mode === "action") {
     const reject = spec.showReject
-      ? `<button type="button" class="btn" data-act="reject">${spec.primaryType === "approve" ? "暂不" : "重新来"}</button>
+      ? `<button type="button" class="btn" data-act="reject">${spec.primaryType === "approve" ? "暂不" : "不接受"}</button>
          <button type="button" class="btn" data-act="force-input">说明意见</button>`
       : "";
+    const chip = composerModeChip(spec);
     root.innerHTML = `
-      ${spec.hint ? `<p class="composer-hint">${esc(spec.hint)}</p>` : ""}
-      <div class="composer-actions">
-        <button type="button" class="btn btn-primary" data-act="${esc(spec.primaryType)}">${esc(spec.primary.label)}</button>
+      <div class="composer-actions composer-actions-with-chip">
+        ${chip}
+        <button type="button" class="btn btn-primary" data-act="${esc(spec.primaryType)}" title="Enter">${esc(spec.primary.label)}</button>
         ${reject}
       </div>`;
     root.querySelector(`[data-act="${spec.primaryType}"]`)?.addEventListener("click", () => runAction(spec.primaryType));
@@ -236,43 +523,257 @@ function renderComposer(view, loading) {
       composerForceInput = true;
       renderComposer(view, loading);
     });
+    wireComposerActionEnter(spec.primaryType);
     return;
   }
 
+  if (spec.mode === "propose_step") {
+    const p = spec.proposed;
+    const missing = new Set(p.paramsMissing || []);
+    const originalTarget = String(p.params?.target ?? "").trim();
+    const originalRuleId = String(p.params?.rule_id ?? "").trim();
+    const visible = proposeVisibleFields(p);
+    const fields = visible
+      .map((field) => {
+        const val = p.params?.[field.key];
+        const str =
+          val == null ? "" : typeof val === "string" ? val : JSON.stringify(val);
+        const need = missing.has(field.key);
+        const hint = proposeFieldHint(field, p);
+        return `<label class="propose-field${need ? " is-missing" : ""}${
+          field.key === "rule_id" ? " propose-field-id" : ""
+        }">
+          <span class="propose-field-label">${esc(proposeFieldLabel(field))}${
+            need ? `<span class="propose-req">需补充</span>` : ""
+          }</span>
+          <input type="text" data-param-key="${esc(field.key)}" value="${esc(str)}" placeholder="${esc(hint)}" />
+        </label>`;
+      })
+      .join("");
+    const syncHint =
+      visible.some((f) => f.key === "target") && visible.some((f) => f.key === "rule_id")
+        ? `<p class="propose-sync-hint">改生成对象时，后台 id 也要改成对应英文（如丧尸怪物 → zombies）。</p>`
+        : "";
+    root.innerHTML = `
+      <div class="propose-step" id="propose-step" data-step-id="${esc(p.stepId)}">
+        <div class="propose-step-head">
+          <span class="propose-kicker">下一步</span>
+          <strong class="propose-name">${esc(p.name)}</strong>
+        </div>
+        <p class="propose-output" data-propose-output>${esc(proposedOutputCopy(p))}</p>
+        ${fields ? `<div class="propose-fields">${fields}</div>` : ""}
+        ${syncHint}
+        <div class="composer-actions">
+          <button type="button" class="btn btn-primary" data-act="approve">${esc(spec.primary.label)}</button>
+          <button type="button" class="btn" data-act="reject">暂不</button>
+          <button type="button" class="btn" data-act="force-input">改意见</button>
+        </div>
+      </div>`;
+    const targetInput = root.querySelector('[data-param-key="target"]');
+    const ruleIdInput = root.querySelector('[data-param-key="rule_id"]');
+    const outputEl = root.querySelector("[data-propose-output]");
+    const refreshOutput = () => {
+      if (!outputEl || !targetInput) return;
+      const next = {
+        ...p,
+        params: { ...(p.params || {}), target: String(targetInput.value ?? "").trim() },
+      };
+      outputEl.textContent = proposedOutputCopy(next);
+    };
+    const markRuleIdSync = () => {
+      if (!targetInput || !ruleIdInput) return;
+      const nextTarget = String(targetInput.value ?? "").trim();
+      const nextRuleId = String(ruleIdInput.value ?? "").trim();
+      const targetChanged = Boolean(originalTarget) && nextTarget !== originalTarget;
+      const ruleStale =
+        targetChanged && Boolean(originalRuleId) && nextRuleId === originalRuleId;
+      ruleIdInput.closest(".propose-field")?.classList.toggle("is-stale-id", ruleStale);
+    };
+    targetInput?.addEventListener("input", () => {
+      refreshOutput();
+      markRuleIdSync();
+    });
+    ruleIdInput?.addEventListener("input", markRuleIdSync);
+    const approvePropose = () => {
+      const stepParams = { ...(p.params || {}) };
+      root.querySelectorAll("[data-param-key]").forEach((input) => {
+        const key = input.getAttribute("data-param-key");
+        if (!key) return;
+        const v = String(input.value ?? "").trim();
+        if (v) stepParams[key] = v;
+        else delete stepParams[key];
+      });
+      const nextTarget = String(stepParams.target ?? "").trim();
+      const nextRuleId = String(stepParams.rule_id ?? "").trim();
+      if (
+        originalTarget &&
+        nextTarget &&
+        nextTarget !== originalTarget &&
+        originalRuleId &&
+        nextRuleId === originalRuleId
+      ) {
+        alert("生成对象已改，请把后台 id 改成对应英文（例如丧尸怪物 → zombies），不要沿用旧 id。");
+        ruleIdInput?.focus();
+        markRuleIdSync();
+        return;
+      }
+      void runAction("approve", { stepParams });
+    };
+    root.querySelector("[data-act=approve]")?.addEventListener("click", approvePropose);
+    root.querySelector("[data-act=reject]")?.addEventListener("click", () => runAction("reject"));
+    root.querySelector("[data-act=force-input]")?.addEventListener("click", () => {
+      composerForceInput = true;
+      renderComposer(view, loading);
+    });
+    wireComposerActionEnter("approve", { onEnter: approvePropose, allowInInputs: true });
+    return;
+  }
+
+  const acceptOnEmpty = Boolean(spec.acceptAction);
+  const acceptTone = spec.acceptAction?.tone || "accept";
   const acceptBtn = spec.acceptAction
-    ? `<button type="button" class="btn btn-primary" data-act="accept" ${
+    ? `<button type="button" class="btn composer-btn-accept${
+        acceptTone === "accept" ? " composer-btn-review" : ""
+      }${acceptOnEmpty ? " btn-primary" : ""}" data-act="accept" title="${esc(
         spec.acceptAction.disabled
-          ? `disabled title="${esc(spec.acceptAction.disabledTitle || "暂不可接受")}"`
-          : ""
-      }>${esc(spec.acceptAction.label)}</button>`
+          ? spec.acceptAction.disabledTitle || "暂不可确认"
+          : spec.acceptAction.title || spec.acceptAction.label
+      )}" ${spec.acceptAction.disabled ? "disabled" : ""}>${esc(spec.acceptAction.label)}</button>`
     : "";
-  root.innerHTML = `
-    ${spec.askBanner
-      ? `<div class="composer-ask-banner"><strong>${esc(spec.askBanner.title)}</strong>${esc(spec.askBanner.body)}</div>`
-      : ""}
-    ${spec.hint ? `<p class="composer-hint">${esc(spec.hint)}</p>` : ""}
-    <form class="composer-form" id="composer-form">
-      <textarea id="composer-input" rows="2" placeholder="${esc(spec.placeholder)}"></textarea>
-      <button type="submit" class="btn${spec.acceptAction ? "" : " btn-primary"}">发送</button>
-      ${acceptBtn}
-    </form>`;
-  wireComposerForm();
+  const submitLabel = spec.submitLabel || "发送";
+  const sendIsPrimary = !acceptOnEmpty;
+  const placeholder = acceptOnEmpty
+    ? `${spec.placeholder || "修改意见…"}（${spec.emptyEnterHint || "空 Enter＝确认"}）`
+    : spec.placeholder;
+  const shell = composerInputShell(spec, {
+    textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(placeholder)}"></textarea>`,
+    trailing: `<button type="button" class="btn composer-btn${
+      sendIsPrimary ? " btn-primary" : ""
+    }" data-act="revise" title="${esc(
+      acceptOnEmpty
+        ? `有字或已选追问时 Enter＝${submitLabel}`
+        : "Enter 发送"
+    )}">${esc(submitLabel)}</button>${acceptBtn}`,
+  });
+  root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
+  wireComposerForm({ acceptOnEmpty });
   root.querySelector("[data-act=accept]")?.addEventListener("click", () => runAction("accept"));
 }
 
-function wireComposerForm() {
+function composerTextareaMaxPx(el) {
+  const raw = getComputedStyle(el).maxHeight;
+  const n = Number.parseFloat(raw);
+  if (Number.isFinite(n) && n > 0) return n;
+  return Math.min(window.innerHeight * 0.42, 360);
+}
+
+/** SillyTavern 式：高度随内容上长，触顶后框内滚动 */
+function autosizeComposerInput(el) {
+  if (!el) return;
+  const max = composerTextareaMaxPx(el);
+  el.style.height = "auto";
+  el.style.overflowY = "hidden";
+  const line = Number.parseFloat(getComputedStyle(el).lineHeight) || 21;
+  const floor = Math.ceil(line);
+  const next = Math.min(Math.max(el.scrollHeight, floor), max);
+  el.style.height = `${next}px`;
+  el.style.overflowY = el.scrollHeight > max + 1 ? "auto" : "hidden";
+}
+
+/** 无输入框的确认态：Enter = 主按钮 */
+function wireComposerActionEnter(action, opts = {}) {
+  const root = $("composer");
+  if (!root) return;
+  const prev = root._enterHandler;
+  if (prev) document.removeEventListener("keydown", prev);
+  const handler = (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.isComposing) return;
+    const t = e.target;
+    const tag = t?.tagName;
+    if (t?.isContentEditable || tag === "TEXTAREA") return;
+    if (tag === "INPUT" && !opts.allowInInputs) return;
+    if (t?.closest?.(".questions-card-host [contenteditable=true], .qcard-other-input, .msg-edit-input")) {
+      return;
+    }
+    e.preventDefault();
+    if (typeof opts.onEnter === "function") opts.onEnter();
+    else void runAction(action);
+  };
+  root._enterHandler = handler;
+  document.addEventListener("keydown", handler);
+}
+
+function refreshReviewComposerChrome() {
+  const input = $("composer-input");
+  const acceptBtn = $("composer")?.querySelector("[data-act=accept]");
+  const sendBtn = $("composer")?.querySelector("[data-act=revise]");
+  if (!acceptBtn || !sendBtn) return;
+  syncDualComposerPrimary(input, acceptBtn, sendBtn);
+  if (!input || lastView?.waitingReason?.kind !== "review_artifact") return;
+  const copy = reviewCopyFromView(lastView);
+  const empty = !String(input.value ?? "").trim();
+  const hasAnswers = selectedQuestionAnswers(lastView).answered.length > 0;
+  input.placeholder = hasAnswers && empty
+    ? `${copy.placeholder}（Enter＝${copy.submitLabel}）`
+    : `${copy.placeholder}（${copy.emptyEnterHint}）`;
+}
+
+function syncDualComposerPrimary(input, acceptBtn, sendBtn) {
+  if (!acceptBtn || !sendBtn) return;
+  const empty = !String(input?.value ?? "").trim();
+  const hasAnswers = selectedQuestionAnswers(lastView).answered.length > 0;
+  const revisePrimary = !empty || hasAnswers;
+  acceptBtn.classList.toggle("btn-primary", !revisePrimary && !acceptBtn.disabled);
+  sendBtn.classList.toggle("btn-primary", revisePrimary);
+}
+
+function wireComposerForm(opts = {}) {
   const form = $("composer-form");
   const input = $("composer-input");
+  const acceptOnEmpty = opts.acceptOnEmpty === true;
+  const sendBtn = form?.querySelector("[data-act=revise]");
+  const root = $("composer");
+  if (root?._enterHandler) {
+    document.removeEventListener("keydown", root._enterHandler);
+    root._enterHandler = null;
+  }
   form?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    await sendText(input?.value ?? "");
+    await submitComposer(input?.value ?? "", { acceptOnEmpty });
   });
   input?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      form?.requestSubmit();
+      void submitComposer(input?.value ?? "", { acceptOnEmpty });
     }
   });
+  sendBtn?.addEventListener("click", () => {
+    void sendText(input?.value ?? "");
+  });
+  if (acceptOnEmpty) {
+    const handler = (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.isComposing) return;
+      const t = e.target;
+      const tag = t?.tagName;
+      if (t?.isContentEditable || tag === "TEXTAREA" || tag === "INPUT") return;
+      if (t?.closest?.(".msg-edit-input, .qcard-other-input, .questions-card-host [contenteditable=true]")) {
+        return;
+      }
+      e.preventDefault();
+      void submitComposer(input?.value ?? "", { acceptOnEmpty: true });
+    };
+    root._enterHandler = handler;
+    document.addEventListener("keydown", handler);
+  }
+  const grow = () => {
+    autosizeComposerInput(input);
+    if (acceptOnEmpty) refreshReviewComposerChrome();
+  };
+  input?.addEventListener("input", grow);
+  input?.addEventListener("change", grow);
+  requestAnimationFrame(grow);
   input?.focus();
 }
 
@@ -518,37 +1019,56 @@ function setupBookBoxSelect() {
   });
 }
 
+function pathHomeIcon() {
+  return `<svg class="path-home-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+  </svg>`;
+}
+
 function renderPathBar() {
   const bar = $("book-path-bar");
   if (!bar) return;
   bar.innerHTML = "";
-  bar.hidden = !books.length;
 
+  // 根级不占行；钻入作品后才显示面包屑
+  const inBook = sidebarNav.level === "book";
+  const book = inBook ? getNavBook() : null;
+  bar.hidden = !inBook || !book;
+  if (bar.hidden) return;
+
+  const list = document.createElement("ol");
+  list.className = "path-bar-list";
+
+  const rootLi = document.createElement("li");
+  rootLi.className = "path-bar-item";
   const rootBtn = document.createElement("button");
   rootBtn.type = "button";
-  rootBtn.className = "path-seg";
+  rootBtn.className = "path-seg path-seg-root";
   rootBtn.dataset.nav = "root";
-  rootBtn.innerHTML = `<span class="path-icon" aria-hidden="true">⌂</span><span>作品</span>`;
-  if (sidebarNav.level === "root") rootBtn.classList.add("current");
-  rootBtn.addEventListener("click", () => {
-    if (sidebarNav.level !== "root") navigateToRoot();
-  });
-  bar.appendChild(rootBtn);
+  rootBtn.title = "返回作品列表";
+  rootBtn.innerHTML = `${pathHomeIcon()}<span>作品</span>`;
+  rootBtn.addEventListener("click", () => navigateToRoot());
+  rootLi.appendChild(rootBtn);
 
-  if (sidebarNav.level === "book") {
-    const book = getNavBook();
-    if (!book) return;
-    const sep = document.createElement("span");
-    sep.className = "path-sep";
-    sep.setAttribute("aria-hidden", "true");
-    sep.textContent = "›";
-    bar.appendChild(sep);
+  const sepLi = document.createElement("li");
+  sepLi.className = "path-bar-item";
+  sepLi.setAttribute("aria-hidden", "true");
+  const sep = document.createElement("span");
+  sep.className = "path-sep";
+  sep.textContent = "›";
+  sepLi.appendChild(sep);
 
-    const bookSeg = document.createElement("span");
-    bookSeg.className = "path-seg current";
-    bookSeg.textContent = book.title;
-    bar.appendChild(bookSeg);
-  }
+  const bookLi = document.createElement("li");
+  bookLi.className = "path-bar-item path-bar-item-current";
+  const bookSeg = document.createElement("span");
+  bookSeg.className = "path-seg current";
+  bookSeg.setAttribute("aria-current", "page");
+  bookSeg.textContent = book.title;
+  bookSeg.title = book.title;
+  bookLi.appendChild(bookSeg);
+
+  list.append(rootLi, sepLi, bookLi);
+  bar.appendChild(list);
 }
 
 function renderExplorerRow({ name, meta, active, selected, bookId, actionClass, onClick, onDelete }) {
@@ -559,8 +1079,10 @@ function renderExplorerRow({ name, meta, active, selected, bookId, actionClass, 
     .join(" ");
   if (bookId) row.dataset.bookId = bookId;
   row.innerHTML = `
-    <span class="explorer-name">${esc(name)}</span>
-    ${meta ? `<span class="explorer-meta">${esc(meta)}</span>` : ""}
+    <span class="explorer-main">
+      <span class="explorer-name" title="${esc(name)}">${esc(name)}</span>
+      ${meta ? `<span class="explorer-meta" title="${esc(meta)}">${esc(meta)}</span>` : ""}
+    </span>
     ${onDelete ? `<span class="explorer-del" role="button" tabindex="-1" aria-label="删除">×</span>` : ""}`;
   row.addEventListener("click", (e) => {
     if (e.target.closest(".explorer-del")) return;
@@ -627,10 +1149,19 @@ function renderBookContents(book, list) {
     const kindLabel =
       s.kindLabel ||
       (s.kind === "instance" ? "创作定稿" : s.kind === "opening" ? "开局" : "游玩进度");
+    const when = new Date(s.createdAt);
+    const shortWhen = Number.isNaN(when.getTime())
+      ? ""
+      : when.toLocaleString("zh-CN", {
+          month: "numeric",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
     list.appendChild(
       renderExplorerRow({
         name: s.label,
-        meta: `${kindLabel} · ${new Date(s.createdAt).toLocaleString("zh-CN")}`,
+        meta: shortWhen ? `${kindLabel} · ${shortWhen}` : kindLabel,
         onClick: () => void loadPlaySave(book.id, s.id),
         onDelete: () => void deletePlaySave(book.id, s.id, s.label),
         actionClass: "explorer-file",
@@ -744,15 +1275,13 @@ async function startNewPlayForBook(bookId) {
 }
 
 function renderHeader(view, loading) {
+  const task = resolveUserTask(view, loading);
   const st = statusFor(view, loading);
   $("work-title").textContent = view.bookTitle ?? "未命名作品";
   const skill = displaySkillPackLabel(view.activeSkill) ||
     view.selectedRecipe?.name ||
     "配方";
-  const phase = view.waitingReason
-    ? REASON[view.waitingReason.kind] ?? view.phase
-    : PHASE[view.phase] ?? view.phase;
-  $("work-meta").textContent = `${skill} · ${phase}`;
+  $("work-meta").textContent = `${skill} · ${task.label}`;
   $("status-dot").className = `status-dot ${st.cls}`;
   $("status-text").textContent = st.text;
   const showSavePlay = Boolean(view.bookId && view.playReady && view.lifecycleStage === "play");
@@ -779,6 +1308,23 @@ function renderEmpty() {
   if (btnInst) btnInst.hidden = true;
   $("btn-export").disabled = true;
   $("message-feed").innerHTML = `<p class="empty">点击左侧 + 新建作品</p>`;
+  const stage = $("workspace-stage");
+  if (stage) {
+    stage.hidden = true;
+    stage.innerHTML = "";
+  }
+  const drawer = $("coord-rail");
+  if (drawer) {
+    drawer.hidden = true;
+    drawer.dataset.collapsed = "1";
+    const body = $("coord-drawer-body");
+    if (body) body.innerHTML = "";
+    const count = $("coord-drawer-count");
+    if (count) count.textContent = "";
+  }
+  document.body.classList.remove("is-reviewing", "design-workspace", "coord-rail-collapsed");
+  document.body.dataset.userTask = "";
+  delete document.body.dataset.designSurface;
   $("skill-picker").hidden = true;
   const focus = $("agent-focus");
   if (focus) focus.innerHTML = "";
@@ -789,7 +1335,6 @@ function renderEmpty() {
     trace.hidden = true;
     trace.innerHTML = "";
   }
-  document.body.classList.remove("is-reviewing");
   resetRailChrome();
   hideBookMenu();
   document.body.dataset.lifecycle = "design";
@@ -836,6 +1381,12 @@ function renderSession(view, loading = false) {
   renderBookList();
   renderWorkspace(view, loading, (skillId) => sendText(skillId), {
     onSkipQuestions: () => runAction("skip_questions"),
+    onQuestionAnswersChange: () => refreshReviewComposerChrome(),
+    onQuestionCardEnter: () => {
+      const { answered } = selectedQuestionAnswers(lastView);
+      if (!answered.length) return;
+      void sendText($("composer-input")?.value ?? "");
+    },
     onEditMessage: (messageId, text) => messageAction("edit", messageId, { text }),
     onRefreshMessage: (messageId) => messageAction("refresh", messageId),
     onDeleteMessage: (messageId) => messageAction("delete", messageId),
@@ -865,6 +1416,36 @@ async function messageAction(kind, messageId, body = {}) {
   }
 }
 
+/** 询问卡已选中的追问作答（不要求卡仍标 is-open；未选则为空） */
+function selectedQuestionAnswers(view) {
+  const qHost = $("questions-card-host");
+  const activeQs = getActiveQuestions(view);
+  if (!activeQs?.questions?.length || !qHost?._qState) {
+    return { collected: null, answered: [] };
+  }
+  const collected = collectQuestionAnswers(qHost, view);
+  const answered = collected?.ok
+    ? collected.answers.filter((a) => a.text && a.text !== "（未答）")
+    : [];
+  return { collected, answered };
+}
+
+/** 空 Enter＝接受；有字或已选追问则按意见改。点「按意见修改」不走这条。 */
+async function submitComposer(text, { acceptOnEmpty } = {}) {
+  const trimmed = String(text ?? "").trim();
+  if (acceptOnEmpty && !trimmed) {
+    const { answered } = selectedQuestionAnswers(lastView);
+    if (answered.length === 0) {
+      const acceptBtn = $("composer")?.querySelector("[data-act=accept]");
+      if (acceptBtn && !acceptBtn.disabled) {
+        await runAction("accept");
+        return;
+      }
+    }
+  }
+  await sendText(text);
+}
+
 async function sendText(text) {
   if (!sessionId) return;
   const trimmed = text?.trim() ?? "";
@@ -875,14 +1456,29 @@ async function sendText(text) {
     activeQs?.questions?.length && qHost?.classList.contains("is-open"),
   );
 
-  // 产物验收：底栏有字 ⇒ 按修改意见重做；接受走「接受目前产物」
-  if (reviewing && trimmed) {
+  // 能力默认问题：对齐美学纲领，须自由书写，不能空发/跳过当答复
+  if (isModuleOpeningWaiting(lastView) && !trimmed) {
+    alert("请先按主栏引导写几句再发送。");
+    return;
+  }
+
+  // 核对/验收：有选中追问或修改意见 ⇒ 写回产物；点「按意见修改」绝不等于接受
+  if (reviewing) {
+    const { collected, answered } = selectedQuestionAnswers(lastView);
+    if (!trimmed && answered.length === 0) {
+      alert("请选择追问选项或填写修改意见；满意请点「接受」收下产物。");
+      return;
+    }
     try {
+      const body = { text: trimmed };
+      if (answered.length && collected?.answers) {
+        body.answers = collected.answers;
+      }
       clearQuestionCardState(qHost, lastView);
       renderSession(lastView, true);
       const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: "POST",
-        body: JSON.stringify({ text: trimmed }),
+        body: JSON.stringify(body),
       });
       clearQuestionCardState(qHost);
       renderSession(view, false);
@@ -937,7 +1533,25 @@ async function sendText(text) {
     clearQuestionCardState(qHost, lastView);
   }
 
-  if (!trimmed) return;
+  if (!trimmed) {
+    if (
+      lastView?.waitingReason?.kind === "next_intent" ||
+      resolveComposer(lastView, false)?.allowEmpty
+    ) {
+      try {
+        renderSession(lastView, true);
+        const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ text: "" }),
+        });
+        clearQuestionCardState(qHost);
+        renderSession(view, false);
+      } catch (err) {
+        if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+      }
+    }
+    return;
+  }
   try {
     renderSession(lastView, true);
     const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -952,7 +1566,7 @@ async function sendText(text) {
   }
 }
 
-async function runAction(action) {
+async function runAction(action, extra = {}) {
   if (!sessionId) return;
   const qHost = $("questions-card-host");
   try {
@@ -961,9 +1575,10 @@ async function runAction(action) {
       clearQuestionCardState(qHost, lastView);
     }
     renderSession(lastView, true);
+    const body = { action, ...extra };
     const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/actions`, {
       method: "POST",
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(body),
     });
     if (action === "accept" || action === "skip_questions") {
       clearQuestionCardState(qHost);
@@ -1181,11 +1796,51 @@ function showContextTraceDialog(messageId) {
     alert("这条消息没有保存请求上下文（可能已被修剪，或当时未开启保存）");
     return;
   }
-  const kb = ((trace.charCount || 0) / 1024).toFixed(1);
-  meta.textContent = `${trace.caller || "unknown"} · ${trace.model || "model?"} · ${kb} KB · ${trace.createdAt || ""}`;
-  body.textContent = trace.messages
-    .map((m) => `======== ${m.role} ========\n${m.content}`)
-    .join("\n\n");
+  const subject = msg || review || {};
+  const requestChars =
+    trace.charCount ??
+    trace.messages.reduce((sum, item) => sum + String(item.content ?? "").length, 0);
+  const usage = subject.tokenUsage;
+  const responseBody = String(subject.body ?? subject.text ?? "").trim();
+  const thinking = String(subject.thinking ?? "").trim();
+  const requestLog = trace.messages.map((item, index) => {
+    const content = String(item.content ?? "");
+    const part = String(index + 1).padStart(2, "0");
+    return `======== REQUEST ${part}/${trace.messages.length} · ${item.role} · ${content.length.toLocaleString("zh-CN")} chars ========\n${content}`;
+  });
+  const responseLog = [
+    thinking
+      ? `======== RESPONSE THINKING · ${thinking.length.toLocaleString("zh-CN")} chars ========\n${thinking}`
+      : "",
+    responseBody
+      ? `======== RESPONSE BODY · ${responseBody.length.toLocaleString("zh-CN")} chars ========\n${responseBody}`
+      : "",
+  ].filter(Boolean);
+  const tokenMeta = usage?.totalTokens
+    ? ` · ${Number(usage.totalTokens).toLocaleString("zh-CN")} tokens`
+    : "";
+  meta.textContent = [
+    subject.kind || "message",
+    subject.actor || trace.caller || "unknown",
+    trace.model || usage?.model || "model?",
+    `${trace.messages.length} 段请求`,
+    `${(requestChars / 1024).toFixed(1)} KB`,
+  ].join(" · ") + tokenMeta;
+  body.textContent = [
+    `MESSAGE  ${messageId}`,
+    `KIND     ${subject.kind || "unknown"}`,
+    `ACTOR    ${subject.actor || "-"}`,
+    `CALLER   ${trace.caller || usage?.caller || "unknown"}`,
+    `MODEL    ${trace.model || usage?.model || "model?"}`,
+    `CREATED  ${trace.createdAt || subject.createdAt || "-"}`,
+    `REQUEST  ${trace.messages.length} messages / ${requestChars.toLocaleString("zh-CN")} chars`,
+    usage?.totalTokens
+      ? `TOKENS   total=${usage.totalTokens} cached=${usage.cachedTokens ?? 0} miss=${usage.cacheMissTokens ?? 0}`
+      : "TOKENS   not recorded",
+    "",
+    ...requestLog,
+    ...(responseLog.length ? ["", ...responseLog] : []),
+  ].join("\n\n");
   dlg.showModal();
 }
 
@@ -1259,6 +1914,12 @@ $("btn-save-instance")?.addEventListener("click", () => void saveCurrentInstance
 window.addEventListener("wa:session-updated", (e) => {
   const view = e.detail;
   if (view?.id) renderSession(view, false);
+});
+
+document.addEventListener("click", (e) => {
+  document.querySelectorAll("details.more-menu[open]").forEach((d) => {
+    if (!d.contains(e.target)) d.removeAttribute("open");
+  });
 });
 
 async function init() {

@@ -7,9 +7,11 @@ import { sessionManager } from "./session-manager.js";
 import { handleSettingsApi } from "./settings-handlers.js";
 import { handleBooksApi } from "./book-handlers.js";
 import { handleStatsApi } from "./stats-handlers.js";
+import { ensureConsoleUtf8, getRuntimeLogPath } from "../log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "../..");
+ensureConsoleUtf8();
 loadDotEnv(PROJECT_ROOT);
 const WEB_ROOT = path.resolve(__dirname, "../../web");
 const PORT = Number(process.env.PORT ?? 23337);
@@ -122,12 +124,45 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "POST" && sub === "/messages") {
-        const body = JSON.parse(await readBody(req)) as { text?: string };
-        if (!body.text?.trim()) {
-          json(res, 400, { error: "text 不能为空" });
-          return;
+        const body = JSON.parse(await readBody(req)) as {
+          text?: string;
+          answers?: Array<{
+            questionId?: string;
+            optionId?: string;
+            text?: string;
+          }>;
+        };
+        const text = typeof body.text === "string" ? body.text : "";
+        const trimmed = text.trim();
+        const answers = (body.answers ?? [])
+          .filter(
+            (a) =>
+              typeof a?.questionId === "string" &&
+              a.questionId.trim() &&
+              typeof a?.text === "string" &&
+              a.text.trim(),
+          )
+          .map((a) => ({
+            questionId: a.questionId!.trim(),
+            optionId:
+              typeof a.optionId === "string" && a.optionId.trim()
+                ? a.optionId.trim()
+                : undefined,
+            text: a.text!.trim(),
+          }));
+        // next_intent 明确可留空；其余态仍要求有字（除非顺带提交了追问）
+        if (!trimmed && !answers.length) {
+          const current = sessionManager.get(sessionId);
+          if (current?.waitingReason?.kind !== "next_intent") {
+            json(res, 400, { error: "text 不能为空" });
+            return;
+          }
         }
-        const view = await sessionManager.sendMessage(sessionId, body.text.trim());
+        const view = await sessionManager.sendMessage(
+          sessionId,
+          trimmed,
+          answers.length ? { answers } : undefined,
+        );
         json(res, 200, view);
         return;
       }
@@ -406,11 +441,19 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "POST" && sub === "/actions") {
-        const body = JSON.parse(await readBody(req)) as { action?: string };
+        const body = JSON.parse(await readBody(req)) as {
+          action?: string;
+          stepParams?: Record<string, unknown>;
+        };
         let view;
         switch (body.action) {
           case "approve":
-            view = await sessionManager.approve(sessionId);
+            view = await sessionManager.approve(
+              sessionId,
+              body.stepParams && typeof body.stepParams === "object"
+                ? body.stepParams
+                : undefined,
+            );
             break;
           case "confirm_intake":
             view = await sessionManager.confirmIntake(sessionId);
@@ -452,7 +495,7 @@ const server = createServer(async (req, res) => {
       json(res, 404, { error: "Not found" });
     }
   } catch (err) {
-    console.error("[api]", req.method, url.pathname, err);
+    console.error("[接口]", req.method, url.pathname, err);
     json(res, 500, {
       error: err instanceof Error ? err.message : "服务器错误",
     });
@@ -460,5 +503,6 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Writing Agent 对话页: http://localhost:${PORT}`);
+  console.log(`对话页  http://localhost:${PORT}`);
+  console.log(`运行日志（UTF-8）  ${getRuntimeLogPath()}`);
 });

@@ -101,6 +101,7 @@ export async function resolveRunnableWorker(params: {
         currentStepName,
         acceptedStepNames: parseAcceptedSteps(acceptedRaw),
         selectedRecipeRef,
+        filledArtifactTags: params.blackboard.listTagIndex().map((item) => item.tag),
       },
     );
     return {

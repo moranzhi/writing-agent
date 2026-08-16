@@ -41,13 +41,15 @@ if exist ".env" (
 )
 
 echo [信息] 启动服务 http://localhost:%PORT%
-echo [信息] 调试: 浏览器 F12 打开开发者工具
-echo [信息] 桌面壳: 运行 start-app.bat
+echo [信息] 改 src 或 skills 后后端会自动重启
+echo [信息] 后端日志在本窗口，文件在 %USERPROFILE%\.writing-agent\logs\runtime.log
+echo [信息] 浏览器按 F12 打开开发者工具
+echo [信息] 桌面窗口请用 start-app.bat
 echo [信息] 按 Ctrl+C 停止
 echo.
 
 start "" "http://localhost:%PORT%"
 
-call npm run web
+call npm run web:watch
 
 pause

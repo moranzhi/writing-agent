@@ -57,18 +57,36 @@ import {
 import {
   CREATION_FLOW_TAG,
   CREATION_CURRENT_STEP_TAG,
+  CREATION_PROPOSED_STEP_TAG,
   CREATION_MODULE_OPENING_TAG,
   CREATION_MODULE_OPENING_STATE_TAG,
   SLOT_CREATION_MODULE_OPENING_STATE,
+  loadModuleCatalog,
+  mergeCreationFlowPreservingAccepted,
   nextPendingStep,
   parseCreationFlow,
   parseModuleOpeningState,
+  patchCreationFlowStepParams,
+  pickRecordedStepId,
   resolveDesignStepBinding,
+  shouldSkipModuleOpening,
+  isProgressPointerTag,
   stepUnitId,
+  stringifyCreationFlow,
   stringifyModuleOpeningState,
+  type CreationFlowStepParams,
+  type ModuleParamSpec,
 } from "../skills/creation-flow.js";
-import { normalizeQuestions } from "../skills/question-protocol.js";
+import {
+  appendAskedQuestions,
+  dropAlreadyAskedQuestions,
+  MODULE_OPENING_QUESTION_ID,
+  normalizeQuestions,
+  parseAskedQuestions,
+  SLOT_ASKED_QUESTIONS,
+} from "../skills/question-protocol.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
+import { debugLog, labelAction, logStateChange, sessionSnap } from "../log.js";
 import {
   executeChance,
   resolveChanceRequest,
@@ -363,10 +381,18 @@ export class PhaseRuntime {
     return this.session;
   }
 
-  /** 统一事件入口：applyEvent + 更新 session + 处理 effects + 可选总管 LLM */
-  async dispatch(event: RuntimeEvent): Promise<ApplyEventResult> {
+  /** applyEvent 并打状态日志（dispatch / 总管决策共用） */
+  private commitEvent(event: RuntimeEvent): ApplyEventResult {
+    const before = sessionSnap(this.session);
     const result = applyEvent(this.session, event);
     this.session = result.session;
+    logStateChange(event, before, result);
+    return result;
+  }
+
+  /** 统一事件入口：applyEvent + 更新 session + 处理 effects + 可选总管 LLM */
+  async dispatch(event: RuntimeEvent): Promise<ApplyEventResult> {
+    const result = this.commitEvent(event);
 
     if (
       event.type === "user_submitted_input" ||
@@ -416,11 +442,23 @@ export class PhaseRuntime {
         source: "user",
       });
     }
-    const revision = session.slots.revisionInstruction;
+    const revision =
+      (typeof session.slots["用户.修订说明"] === "string" &&
+        session.slots["用户.修订说明"]) ||
+      (typeof session.slots.revisionInstruction === "string" &&
+        session.slots.revisionInstruction);
     if (typeof revision === "string" && revision.trim()) {
       this.blackboard.write({
-        tag: "用户.修改说明",
+        tag: "用户.修订说明",
         content: revision.trim(),
+        source: "user",
+      });
+    }
+    const nextIntent = session.slots["用户.下一步意向"];
+    if (typeof nextIntent === "string" && nextIntent.trim()) {
+      this.blackboard.write({
+        tag: "用户.下一步意向",
+        content: nextIntent.trim(),
         source: "user",
       });
     }
@@ -490,10 +528,15 @@ export class PhaseRuntime {
     return this.session;
   }
 
-  /** 用户确认 pendingDecision（approve_step） */
-  async approve(): Promise<RuntimeSession> {
+  /** 用户确认 pendingDecision（approve_step）；可顺带钉死下一步 params */
+  async approve(stepParams?: CreationFlowStepParams): Promise<RuntimeSession> {
     const id = this.session.pendingDecision?.id;
     if (!id) throw new Error("当前没有待确认的决策");
+    if (stepParams && Object.keys(stepParams).length > 0) {
+      this.applyProposedStepParams(stepParams);
+    }
+    const readyErr = this.assertProposedStepReady();
+    if (readyErr) throw new Error(readyErr);
     await this.dispatch({ type: "user_approved_next_step", payload: { decisionId: id } });
     return this.session;
   }
@@ -577,7 +620,7 @@ export class PhaseRuntime {
     return this.session;
   }
 
-  /** 用户拒绝 pendingArtifact，进入 revision */
+  /** 用户拒绝 pendingArtifact：有意见则立刻按「用户.修订说明」在现有产物上改 */
   async rejectArtifact(reason?: string, artifactId?: string): Promise<RuntimeSession> {
     const id = artifactId ?? this.session.pendingArtifactId;
     if (!id) throw new Error("当前没有待拒绝的产物");
@@ -588,17 +631,73 @@ export class PhaseRuntime {
     return this.session;
   }
 
+  /**
+   * 按意见重跑却没写出新产物：退回**本次修订的那一份**产物验收，重试追问改挂为可选。
+   * 只认 beginRevisionRerun 钉下的底稿；否则会把无关的旧产物（如上一轮流程编排）
+   * 错误地挂回验收面。首跑无产物仍走阻塞追问。
+   * @returns true = 已退回验收，调用方应 return
+   */
+  private async restoreRevisionTargetForReview(
+    workerId: string,
+    questions: import("../types/questions.js").QuestionItem[] | string[],
+  ): Promise<boolean> {
+    const targetId = this.session.slots.revisionTargetArtifactId;
+    if (typeof targetId !== "string" || !targetId) return false;
+    const target = this.session.artifacts.find(
+      (a) =>
+        a.id === targetId &&
+        a.workerId === workerId &&
+        a.status === "revision_requested",
+    );
+    if (!target) return false;
+    await this.dispatch({
+      type: "worker_revision_produced_nothing",
+      payload: { artifactId: target.id, questions },
+    });
+    return true;
+  }
+
   /** worker 调用 ask_user 能力时，由外层触发此事件（仅无产物时阻塞） */
   async workerAsk(
     questions: import("../types/questions.js").QuestionItem[] | string[],
   ): Promise<RuntimeSession> {
     const workerId = this.session.currentWorkerId;
     if (!workerId) throw new Error("当前没有运行中的 worker");
+    this.rememberAskedQuestions(normalizeQuestions(questions));
     await this.dispatch({
       type: "worker_needs_input",
       payload: { workerId, stepId: this.session.currentStepId, questions },
     });
     return this.session;
+  }
+
+  private askedQuestionHistory() {
+    return parseAskedQuestions(this.session.slots[SLOT_ASKED_QUESTIONS]);
+  }
+
+  private rememberAskedQuestions(
+    questions: readonly import("../types/questions.js").QuestionItem[],
+  ): void {
+    if (!questions.length) return;
+    const next = appendAskedQuestions(this.askedQuestionHistory(), questions);
+    this.session = {
+      ...this.session,
+      slots: { ...this.session.slots, [SLOT_ASKED_QUESTIONS]: next },
+    };
+  }
+
+  /**
+   * 挂在验收态的可跳过追问：本局问过的不再问一次。
+   * 编排层常把上一步已问过的体验题再抛一遍，用户会读成「又要重做那一步」。
+   */
+  private freshSidecarQuestions(
+    questions: readonly import("../types/questions.js").QuestionItem[] | undefined,
+  ): import("../types/questions.js").QuestionItem[] | undefined {
+    if (!questions?.length) return undefined;
+    const fresh = dropAlreadyAskedQuestions(questions, this.askedQuestionHistory());
+    if (!fresh.length) return undefined;
+    this.rememberAskedQuestions(fresh);
+    return fresh;
   }
 
   /**
@@ -662,6 +761,13 @@ export class PhaseRuntime {
   /** 消费 applyEvent 返回的 PhaseEffect 列表 */
   private async processEffects(effects: PhaseEffect[]): Promise<void> {
     for (const effect of effects) {
+      if (effect.type === "run_worker") {
+        debugLog("step", `启动执行单元 ${effect.workerId}`);
+      } else if (effect.type === "propose_next_creation_step") {
+        debugLog("step", "提案下一步");
+      } else if (effect.type === "resume_worker") {
+        debugLog("step", `恢复执行单元 ${this.session.resumeContext?.workerId ?? "未知"}`);
+      }
       switch (effect.type) {
         case "emit_message":
           this.onMessage(effect.message);
@@ -705,8 +811,207 @@ export class PhaseRuntime {
         case "run_programmatic_review":
           await this.runProgrammaticReview(effect.artifactId);
           break;
+        case "propose_next_creation_step":
+          await this.proposeNextCreationStep();
+          break;
       }
     }
+  }
+
+  /**
+   * 用户填完「下一步想写什么」后：有待执行步则提案并进入确认；否则交总管扩步/收口。
+   */
+  private async proposeNextCreationStep(): Promise<void> {
+    this.syncSlotsToBlackboard(this.session);
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    const accepted = parseAcceptedUnits(
+      this.session.slots[SLOT_CREATION_ACCEPTED_UNITS] ??
+        this.blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
+    );
+    const pending = nextPendingStep(flow, accepted);
+    if (!pending || !flow) {
+      debugLog("step", "暂无下一步，交给总管");
+      this.session = {
+        ...this.session,
+        slots: {
+          ...this.session.slots,
+          [CREATION_PROPOSED_STEP_TAG]: undefined,
+        },
+      };
+      if (this.mainAgent) {
+        await this.runMainAgent();
+      } else {
+        this.onMessage(
+          "[阶段机] 暂无下一节点，等待总管编排或补充意向。",
+        );
+      }
+      return;
+    }
+
+    const active = this.getActiveSkill();
+    let paramSpecs: ModuleParamSpec[] = [];
+    let declaration = "";
+    if (active?.name) {
+      try {
+        const skill = await loadSkill(active.name);
+        if (skill.skillPackRoot) {
+          const catalog = await loadModuleCatalog(skill.skillPackRoot);
+          const mod = catalog?.modules.find((m) => m.name === pending.name);
+          paramSpecs = mod?.params ?? [];
+          declaration = mod?.declaration?.trim() || "";
+        }
+      } catch {
+        /* catalog optional */
+      }
+    }
+
+    debugLog("step", `提案下一步 ${pending.id}（${pending.name}）`);
+
+    const params = pending.params ? { ...pending.params } : {};
+    const paramsMissing = paramSpecs
+      .filter((p) => p.required)
+      .map((p) => p.key)
+      .filter((key) => {
+        const v = params[key];
+        return v == null || (typeof v === "string" && !v.trim());
+      });
+
+    const intent =
+      typeof this.session.slots["用户.下一步意向"] === "string"
+        ? String(this.session.slots["用户.下一步意向"]).trim()
+        : "";
+    const paramHint =
+      Object.keys(params).length > 0
+        ? `；参数 ${Object.entries(params)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(" · ")}`
+        : paramsMissing.length
+          ? `；待钉参数：${paramsMissing.join("、")}`
+          : "";
+    const reason = [
+      `下一步：${pending.name}`,
+      declaration ? `—— ${declaration}` : "",
+      paramHint,
+      intent ? `（你的意向：${intent}）` : "",
+    ]
+      .filter(Boolean)
+      .join("");
+
+    const snapshot = {
+      stepId: pending.id,
+      name: pending.name,
+      declaration: declaration || undefined,
+      params,
+      paramsMissing,
+      paramSpecs: paramSpecs.map((p) => ({
+        key: p.key,
+        label: p.label,
+        required: Boolean(p.required),
+        hint: p.hint,
+      })),
+      intent: intent || undefined,
+    };
+    this.blackboard.write({
+      tag: CREATION_PROPOSED_STEP_TAG,
+      content: JSON.stringify(snapshot),
+      source: "runtime",
+    });
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [CREATION_PROPOSED_STEP_TAG]: JSON.stringify(snapshot),
+      },
+    };
+
+    const decision = createDecision({
+      action: "run_worker",
+      workerId: "design-step",
+      reason,
+      requiresApproval: true,
+    });
+    await this.dispatch({
+      type: "main_agent_decision_created",
+      payload: { decision },
+    });
+  }
+
+  private applyProposedStepParams(params: CreationFlowStepParams): void {
+    const raw =
+      (typeof this.session.slots[CREATION_PROPOSED_STEP_TAG] === "string"
+        ? String(this.session.slots[CREATION_PROPOSED_STEP_TAG])
+        : null) ||
+      this.blackboard.getContentByTag(CREATION_PROPOSED_STEP_TAG);
+    if (!raw?.trim()) return;
+    let snap: {
+      stepId?: string;
+      paramSpecs?: Array<{ key: string; required?: boolean }>;
+    };
+    try {
+      snap = JSON.parse(raw) as typeof snap;
+    } catch {
+      return;
+    }
+    const stepId = typeof snap.stepId === "string" ? snap.stepId.trim() : "";
+    if (!stepId) return;
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (!flow) return;
+    const next = patchCreationFlowStepParams(flow, stepId, params);
+    const content = stringifyCreationFlow(next);
+    this.blackboard.write({
+      tag: CREATION_FLOW_TAG,
+      content,
+      source: "user",
+    });
+    const paramsMissing = (snap.paramSpecs ?? [])
+      .filter((p) => p.required)
+      .map((p) => p.key)
+      .filter((key) => {
+        const v = params[key];
+        return v == null || (typeof v === "string" && !v.trim());
+      });
+    const snapshot = {
+      ...snap,
+      params,
+      paramsMissing,
+    };
+    this.blackboard.write({
+      tag: CREATION_PROPOSED_STEP_TAG,
+      content: JSON.stringify(snapshot),
+      source: "runtime",
+    });
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [CREATION_FLOW_TAG]: content,
+        [CREATION_PROPOSED_STEP_TAG]: JSON.stringify(snapshot),
+      },
+    };
+  }
+
+  private assertProposedStepReady(): string | null {
+    const decision = this.session.pendingDecision;
+    if (decision?.workerId !== "design-step") return null;
+    const raw =
+      (typeof this.session.slots[CREATION_PROPOSED_STEP_TAG] === "string"
+        ? String(this.session.slots[CREATION_PROPOSED_STEP_TAG])
+        : null) ||
+      this.blackboard.getContentByTag(CREATION_PROPOSED_STEP_TAG);
+    if (!raw?.trim()) return null;
+    try {
+      const snap = JSON.parse(raw) as { paramsMissing?: string[] };
+      if (snap.paramsMissing?.length) {
+        return `请先补齐必填参数：${snap.paramsMissing.join("、")}`;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
   }
 
   private getInstanceWorkerDeclaration() {
@@ -840,24 +1145,50 @@ export class PhaseRuntime {
 
     if (result.askUser?.length && Object.keys(result.outputs).length === 0) {
       // 无产物：阻塞追问（信息不足，必须补）
+      if (await this.restoreRevisionTargetForReview(workerId, result.askUser)) {
+        return;
+      }
       await this.workerAsk(result.askUser);
+      return;
+    }
+    if (
+      workerId === "design-step" &&
+      Object.keys(result.outputs).length === 0
+    ) {
+      const retryQuestions = result.askUser?.length
+        ? result.askUser
+        : [
+            {
+              id: "design-step-retry",
+              prompt:
+                "这一步还没写出可验收的产物。请再补一点你最在意的体验或参与方式；也可以说「按已有描述先出一版」。",
+              allowOther: true,
+              required: true,
+            },
+          ];
+      if (await this.restoreRevisionTargetForReview(workerId, retryQuestions)) {
+        return;
+      }
+      await this.workerAsk(retryQuestions);
       return;
     }
 
     slots = { ...this.session.slots };
+    const writtenTags: string[] = [];
     for (const [tag, content] of Object.entries(result.outputs)) {
+      if (isProgressPointerTag(tag)) continue;
       const written = this.writeWorkerTagContent(tag, content, workerId);
       slots[tag] = written;
+      writtenTags.push(tag);
     }
     this.session = { ...this.session, slots };
 
     const artifact = createArtifact({
       workerId: effect.workerId,
       stepId: this.session.currentStepId,
-      outputTags:
-        Object.keys(result.outputs).length > 0
-          ? Object.keys(result.outputs)
-          : worker.outputTags,
+      outputTags: (writtenTags.length > 0 ? writtenTags : worker.outputTags).filter(
+        (t) => !isProgressPointerTag(t),
+      ),
       summary: result.summary,
     });
     this.session = { ...this.session, artifacts: [...this.session.artifacts, artifact] };
@@ -871,7 +1202,7 @@ export class PhaseRuntime {
       payload: {
         artifactId: artifact.id,
         // 有产物时 askUser 挂到验收态，不阻断 Accept
-        questions: result.askUser?.length ? result.askUser : undefined,
+        questions: this.freshSidecarQuestions(result.askUser),
         assessment: result.askAssessment?.trim() || undefined,
       },
     });
@@ -1052,6 +1383,22 @@ export class PhaseRuntime {
             `[表合并] ${tag}：跳过 ${skipped.map((s) => `${s.key}(${s.reason})`).join("、")}`,
           );
         }
+      }
+    }
+    if (tag === CREATION_FLOW_TAG) {
+      const merged = mergeCreationFlowPreservingAccepted({
+        prevRaw: this.blackboard.getContentByTag(tag),
+        nextRaw: toWrite,
+        acceptedStepIds: parseAcceptedUnits(
+          this.session.slots[SLOT_CREATION_ACCEPTED_UNITS] ??
+            this.blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
+        ),
+      });
+      toWrite = merged.raw;
+      if (merged.restored.length) {
+        this.onMessage(
+          `[流程编排] 已验收步骤按原样保留：${merged.restored.join("、")}`,
+        );
       }
     }
     this.blackboard.write({
@@ -1252,6 +1599,48 @@ export class PhaseRuntime {
 
     if (phase === "answered") return false;
 
+    // 配方开局模块 + 用户首句已在「用户.需求」→ 默认视为 opening 已做完，直接进 LLM
+    const demand = (
+      this.blackboard.getContentByTag("用户.需求") ??
+      this.session.slots["用户.需求"] ??
+      ""
+    )
+      .toString()
+      .trim();
+    if (
+      shouldSkipModuleOpening({
+        demand,
+        dependsOn: binding.step.depends_on,
+        phase,
+      })
+    ) {
+      state[stepKey] = "answered";
+      const raw = stringifyModuleOpeningState(state);
+      this.blackboard.write({
+        tag: CREATION_MODULE_OPENING_STATE_TAG,
+        content: raw,
+        source: "runtime",
+      });
+      this.blackboard.write({
+        tag: CREATION_MODULE_OPENING_TAG,
+        content: "（已跳过默认问题：用户首句见「用户.需求」）",
+        source: "runtime",
+      });
+      this.session = {
+        ...this.session,
+        slots: {
+          ...this.session.slots,
+          [SLOT_CREATION_MODULE_OPENING_STATE]: raw,
+          [CREATION_MODULE_OPENING_TAG]:
+            "（已跳过默认问题：用户首句见「用户.需求」）",
+        },
+      };
+      this.onMessage(
+        `[系统] ${binding.module.name} · 已坐在配方开局步，首句见「用户.需求」，跳过默认问题`,
+      );
+      return false;
+    }
+
     if (phase === "shown" && this.session.resumeContext) {
       // 用户刚答完默认问题 → 标记已答，继续走 LLM
       state[stepKey] = "answered";
@@ -1315,15 +1704,13 @@ export class PhaseRuntime {
 
     const questions = normalizeQuestions([
       {
-        id: "module-opening",
+        id: MODULE_OPENING_QUESTION_ID,
         prompt: binding.opening.trim(),
         allowOther: true,
         required: true,
       },
     ]);
-    this.onMessage(
-      `[Worker] ${binding.module.name} · 默认问题（程序）：\n${binding.opening.trim()}`,
-    );
+    // 正文由说话面 openingGuide 展示（对齐美学纲领）；workerAsk 只发短调度句
     await this.workerAsk(questions);
     return true;
   }
@@ -1356,6 +1743,8 @@ export class PhaseRuntime {
 
     if (!current) current = "flow";
 
+    debugLog("step", `钉住当前步骤 ${workerId} → ${current}`);
+
     const anchorAt = new Date().toISOString();
     this.blackboard.write({
       tag: CREATION_CURRENT_UNIT_TAG,
@@ -1386,17 +1775,29 @@ export class PhaseRuntime {
     const fromSlot = String(slots[SLOT_CREATION_CURRENT_UNIT] ?? "").trim();
     const fromStep = this.blackboard.getContentByTag(CREATION_CURRENT_STEP_TAG)?.trim();
     const fromSummary = artifact.summary?.match(/单位\s+([^\s·]+)/)?.[1]?.trim();
-    const unitId =
-      (artifact.workerId === "design-step" ? fromStep : "") ||
-      fromBoard ||
-      fromSlot ||
-      fromSummary ||
-      "";
+    // 接受工作流计划 ≠ 某一步做完；「flow」不得写入已验收步骤
+    if (artifact.workerId === "design-flow") return;
     const prev = parseAcceptedUnits(
       slots[SLOT_CREATION_ACCEPTED_UNITS] ??
         this.blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
     );
+    const unitId =
+      artifact.workerId === "design-step"
+        ? pickRecordedStepId({
+            flow: parseCreationFlow(
+              this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+            ),
+            alreadyAccepted: prev,
+            pinnedUnitId: fromSlot || fromBoard,
+            writtenCurrentStep: fromStep,
+            summaryHint: fromSummary,
+          }) ?? ""
+        : fromBoard || fromSlot || fromSummary || "";
+    if (!unitId || unitId === "flow") return;
     const next = unitId && !prev.includes(unitId) ? [...prev, unitId] : prev;
+    if (next !== prev) {
+      debugLog("step", `验收步骤 ${unitId}  已验收 ${next.join("、")}`);
+    }
     slots[SLOT_CREATION_ACCEPTED_UNITS] = next;
     slots[SLOT_CREATION_CURRENT_UNIT] = unitId || undefined;
     this.blackboard.write({
@@ -1518,6 +1919,7 @@ export class PhaseRuntime {
       return;
     }
 
+    debugLog("step", "总管开始");
     const availableWorkers = await this.resolveAvailableWorkers();
 
     const decision = await this.mainAgent.runToolLoop(
@@ -1554,13 +1956,16 @@ export class PhaseRuntime {
       },
     );
 
+    debugLog(
+      "step",
+      `总管决策 ${labelAction(decision.action)}${decision.workerId ? ` ${decision.workerId}` : ""}`,
+    );
     this.onMessage(`[总管] ${decision.action}: ${decision.reason}`);
 
-    const result = applyEvent(this.session, {
+    const result = this.commitEvent({
       type: "main_agent_decision_created",
       payload: { decision },
     });
-    this.session = result.session;
 
     if (result.error) {
       this.onMessage(result.error);

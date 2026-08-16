@@ -63,7 +63,12 @@ import type { BlackboardItem } from "../types/blackboard.js";
 import { Blackboard } from "../blackboard/blackboard.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
 import { parseShellAdaptationFromReplyFormat } from "../skills/present-packet.js";
-import { parseAcceptedUnits, isDesignDiskWorker } from "../skills/creation-units.js";
+import {
+  CREATION_ACCEPTED_UNITS_TAG,
+  isDesignDiskWorker,
+  parseAcceptedUnits,
+  SLOT_CREATION_ACCEPTED_UNITS,
+} from "../skills/creation-units.js";
 import {
   formatWorkerSetForUser,
   type WorkerSetUserView,
@@ -78,13 +83,21 @@ import {
   type ContextOrderEdit,
 } from "../skills/context-order.js";
 import {
+  CREATION_CURRENT_STEP_TAG,
   CREATION_FLOW_TAG,
+  CREATION_PROPOSED_STEP_TAG,
   CREATION_SELECTED_RECIPE_TAG,
+  creationFlowFromRecipeSeed,
   findRecipeCatalogEntry,
   formatCreationFlowForUser,
+  isProgressPointerTag,
   loadRecipeCatalog,
+  loadRecipeDetail,
   parseCreationFlow,
   parseSelectedRecipeRef,
+  resolveDesignStepBinding,
+  stepUnitId,
+  stringifyCreationFlow,
   type CreationFlowUserView,
   type RecipeCatalogEntry,
 } from "../skills/creation-flow.js";
@@ -94,6 +107,7 @@ import { buildBoardPanel } from "../runtime/compress-after-worker.js";
 import {
   displayWorkerLabel,
   formatWorkerDisplayTitle,
+  reviewComposerCopy,
 } from "./display-labels.js";
 import {
   buildCreationDialogueTranscript,
@@ -102,6 +116,7 @@ import {
 import {
   formatQuestionAnswersForAi,
   formatQuestionAnswersForDisplay,
+  isModuleOpeningQuestions,
   normalizeQuestions,
 } from "../skills/question-protocol.js";
 import type { QuestionAnswer } from "../types/questions.js";
@@ -180,10 +195,16 @@ export type SessionView = {
   workerSetView?: WorkerSetUserView;
   /** 创作流程用户视图（步骤顺序 + 依赖） */
   creationFlowView?: CreationFlowUserView;
+  /** 确认开干：下一步提案（含可编辑编排参数） */
+  proposedNextStep?: ProposedNextStepView;
   /** 能力包内可选初始配方（用户手动选） */
   recipes?: Array<{ id: string; name: string; declaration: string }>;
   /** 用户已选初始配方 */
   selectedRecipe?: { id: string; name: string; declaration: string } | null;
+  /**
+   * 开局引导：配方起点或当前能力默认问题的 opening（说话面主柱；对齐美学纲领）。
+   */
+  openingGuide?: { stepId: string; stepName: string; text: string } | null;
   /** 黑板与定稿上下文（强可读） */
   boardPanel?: BoardPanelView;
   /** 游玩呈现壳微调（来自设计.正文组成） */
@@ -238,6 +259,21 @@ export type BoardPanelView = {
   brief?: string;
 };
 
+export type ProposedNextStepView = {
+  stepId: string;
+  name: string;
+  declaration?: string;
+  params: Record<string, unknown>;
+  paramsMissing: string[];
+  paramSpecs: Array<{
+    key: string;
+    label: string;
+    required: boolean;
+    hint?: string;
+  }>;
+  intent?: string;
+};
+
 export type ReviewArtifactView = {
   id: string;
   workerId: string;
@@ -263,14 +299,18 @@ type ManagedSession = {
   branchState: MessageBranchState;
   /** 当前能力包可选初始配方（用户手动选） */
   recipeOptions?: RecipeCatalogEntry[];
+  /** 开局模块 opening，缓存给意图页 */
+  openingGuide?: { stepId: string; stepName: string; text: string } | null;
 };
 
 export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
   /** bookId → 当前内存中的 sessionId */
   private readonly activeBookSessions = new Map<string, string>();
-  /** sessionId → 流式 thinking 缓冲 */
+  /** sessionId → 流式 thinking 缓冲（思考结束后仍保留，直到本轮结束） */
   private readonly agentThinkingLive = new Map<string, string>();
+  /** 本轮思维链已收束；下一次 delta 起新一轮 */
+  private readonly agentThinkingClosed = new Set<string>();
   /** sessionId → worker 流式缓冲 */
   private readonly workerLive = new Map<
     string,
@@ -679,7 +719,11 @@ export class SessionManager {
     return count;
   }
 
-  async sendMessage(id: string, text: string): Promise<SessionView> {
+  async sendMessage(
+    id: string,
+    text: string,
+    opts?: { answers?: QuestionAnswer[] },
+  ): Promise<SessionView> {
     const s = this.require(id);
     this.clearAgentThinking(id);
     recordPreMessageCheckpoint(
@@ -687,21 +731,62 @@ export class SessionManager {
       s.messages.length,
       this.captureCheckpoint(s),
     );
-    s.messages.push(this.msg("user", text));
-    this.syncCreationDialogue(s);
-    if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     const reason = s.runtime.getSession().waitingReason;
+    const trimmed = text.trim();
+    const sidecarAnswers =
+      reason?.kind === "review_artifact" &&
+      reason.questions?.length &&
+      opts?.answers?.length
+        ? opts.answers.filter((a) => a.text?.trim() && a.text !== "（未答）")
+        : [];
+
+    // next_intent 允许留空：不塞空白气泡
+    if (trimmed || reason?.kind !== "next_intent" || sidecarAnswers.length) {
+      let recordText = trimmed || text;
+      let displayBody: string | undefined;
+      if (sidecarAnswers.length && reason?.kind === "review_artifact") {
+        const qs = normalizeQuestions(reason.questions ?? []);
+        recordText = formatQuestionAnswersForAi(
+          qs,
+          sidecarAnswers,
+          trimmed || undefined,
+        );
+        displayBody = formatQuestionAnswersForDisplay(
+          qs,
+          sidecarAnswers,
+          trimmed || undefined,
+        );
+      }
+      const userMsg = this.msg("user", recordText);
+      if (displayBody) userMsg.body = displayBody;
+      s.messages.push(userMsg);
+      this.syncCreationDialogue(s);
+      if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    }
     try {
       if (reason?.kind === "approve_step") {
-        await s.runtime.rejectStep(text);
+        await s.runtime.rejectStep(trimmed || text);
       } else if (reason?.kind === "review_artifact") {
-        await s.runtime.rejectArtifact(text);
+        // 先把卡上追问（问+选项+补充）写入「用户.worker答复」，再按意见改产物
+        if (sidecarAnswers.length && reason.questions?.length) {
+          const qaText = formatQuestionAnswersForAi(
+            normalizeQuestions(reason.questions),
+            sidecarAnswers,
+            trimmed || undefined,
+          );
+          await s.runtime.resolveSidecarQuestions(qaText);
+        }
+        if (trimmed || sidecarAnswers.length) {
+          await s.runtime.rejectArtifact(
+            trimmed || "按追问作答更新产物",
+          );
+        }
       } else {
-        await s.runtime.submitInput(text);
+        await s.runtime.submitInput(trimmed || text);
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error("[session] sendMessage failed:", detail);
+      console.error("[会话] 发送消息失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     } finally {
@@ -755,12 +840,14 @@ export class SessionManager {
     try {
       if (isSidecar) {
         await s.runtime.resolveSidecarQuestions(aiText);
+        // 作答必须写回产物，否则验收后进度空转、追问在美学/交互间打转
+        await s.runtime.rejectArtifact("按追问作答更新产物");
       } else {
         await s.runtime.submitInput(aiText);
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error("[session] answerQuestions failed:", detail);
+      console.error("[会话] 回答追问失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     } finally {
@@ -960,13 +1047,16 @@ export class SessionManager {
     return this.toView(id);
   }
 
-  async approve(id: string): Promise<SessionView> {
+  async approve(
+    id: string,
+    stepParams?: Record<string, unknown>,
+  ): Promise<SessionView> {
     const s = this.require(id);
     try {
-      await s.runtime.approve();
+      await s.runtime.approve(stepParams);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error("[session] approve failed:", detail);
+      console.error("[会话] 确认开干失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
     }
     return this.toView(id);
@@ -978,7 +1068,7 @@ export class SessionManager {
       await s.runtime.confirmIntake();
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error("[session] confirmIntake failed:", detail);
+      console.error("[会话] 确认需求失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     }
@@ -1028,7 +1118,7 @@ export class SessionManager {
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error("[session] reject failed:", detail);
+      console.error("[会话] 打回失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     }
@@ -1154,7 +1244,7 @@ export class SessionManager {
         payload: { text },
       });
     } catch (err) {
-      console.error("[session] maybeKickAgentAfterDemand failed:", err);
+      console.error("[会话] 需求后唤醒总管失败", err);
     }
   }
 
@@ -1214,7 +1304,7 @@ export class SessionManager {
       const transcript = buildCreationDialogueTranscript(s.messages);
       s.runtime.writeCreationDialogue(transcript);
     } catch (err) {
-      console.warn("[session] syncCreationDialogue:", err);
+      console.warn("[会话] 同步创作对话失败", err);
     }
   }
 
@@ -1274,6 +1364,7 @@ export class SessionManager {
 
   private clearAgentThinking(sessionId: string): void {
     this.agentThinkingLive.delete(sessionId);
+    this.agentThinkingClosed.delete(sessionId);
     this.workerLive.delete(sessionId);
   }
 
@@ -1287,15 +1378,20 @@ export class SessionManager {
     | "onWorkerStreamStart"
     | "onWorkerThinkingDelta"
     | "onWorkerOutputDelta"
-    | "onWorkerStreamDone"
   > {
     return {
       onAgentThinkingDelta: (delta) => {
-        const prev = this.agentThinkingLive.get(sessionId) ?? "";
+        const prev = this.agentThinkingClosed.has(sessionId)
+          ? ""
+          : (this.agentThinkingLive.get(sessionId) ?? "");
+        this.agentThinkingClosed.delete(sessionId);
         this.agentThinkingLive.set(sessionId, prev + delta);
       },
-      onAgentThinkingDone: () => {
-        this.agentThinkingLive.delete(sessionId);
+      onAgentThinkingDone: (text) => {
+        // 正文仍等完整后再渲染；思考收束后继续挂在 liveStream，避免中间只剩「…」
+        this.agentThinkingClosed.add(sessionId);
+        const done = text.trim();
+        if (done) this.agentThinkingLive.set(sessionId, done);
       },
       onWorkerStreamStart: (workerId) => {
         this.workerLive.set(sessionId, { workerId, thinking: "", output: "" });
@@ -1321,9 +1417,6 @@ export class SessionManager {
         prev.workerId = workerId;
         prev.output += delta;
         this.workerLive.set(sessionId, prev);
-      },
-      onWorkerStreamDone: () => {
-        this.workerLive.delete(sessionId);
       },
     };
   }
@@ -1603,47 +1696,94 @@ export class SessionManager {
       }
     } else if (reason?.kind === "worker_questions") {
       const qs = normalizeQuestions(reason.questions);
-      if (qs.length) {
+      if (isModuleOpeningQuestions(qs)) {
+        // 能力默认问题：对齐美学纲领 → 自由书写，不是可跳过追问卡
+        hints.push("按主栏引导先说几句（想到什么写什么，不必整齐）");
+        actions.push({
+          type: "send_message",
+          label: "发送",
+          placeholder: "想到什么写什么…",
+        });
+      } else if (qs.length) {
         hints.push(
           `${displayWorkerLabel(reason.workerId)} · 提问（请在询问卡作答）：${qs.map((q) => q.prompt).join(" ")}`,
         );
+        actions.push({ type: "answer_questions", label: "提交作答" });
+        actions.push({ type: "skip_questions", label: "跳过追问" });
+        actions.push({
+          type: "send_message",
+          label: "自由补充",
+          placeholder: "也可在此自由补充…",
+        });
       } else {
         hints.push(
           `${displayWorkerLabel(reason.workerId)} 需要更多信息，请补充说明`,
         );
+        actions.push({
+          type: "send_message",
+          label: "发送",
+          placeholder: "补充说明…",
+        });
       }
-      actions.push({ type: "answer_questions", label: "提交作答" });
-      actions.push({ type: "skip_questions", label: "跳过追问" });
-      actions.push({
-        type: "send_message",
-        label: "自由补充",
-        placeholder: "也可在此自由补充…",
-      });
     } else if (reason?.kind === "approve_step") {
-      actions.push({ type: "approve", label: "确认执行" });
+      const proposed = readProposedNextStep(
+        s.runtime.getSession().slots,
+        s.runtime.getBlackboard(),
+      );
+      if (proposed) {
+        hints.push(
+          `确认开始「${proposed.name}」${
+            proposed.paramsMissing.length
+              ? `（请先补齐：${proposed.paramsMissing.join("、")}）`
+              : ""
+          }`,
+        );
+        actions.push({
+          type: "approve",
+          label: proposed.paramsMissing.length ? "补参后开始" : "同意并开始",
+        });
+      } else {
+        actions.push({ type: "approve", label: "确认执行" });
+      }
       actions.push({ type: "reject", label: "暂不执行" });
-    } else if (reason?.kind === "review_artifact") {
-      actions.push({ type: "accept", label: "接受目前产物" });
-      actions.push({ type: "reject", label: "不接受，重新来" });
       actions.push({
         type: "send_message",
-        label: "发送修改意见",
-        placeholder: "输入修改意见后发送…",
+        label: "说明意见",
+        placeholder: "不同意可说明要改成什么…",
+      });
+    } else if (reason?.kind === "next_intent") {
+      hints.push("下一步想写什么？可留空，发送后会展示下一节点供你确认。");
+      actions.push({
+        type: "send_message",
+        label: "继续",
+        placeholder: "下一步想写什么？（可留空）…",
+      });
+    } else if (reason?.kind === "review_artifact") {
+      const art = session.artifacts.find((a) => a.id === session.pendingArtifactId);
+      const copy = reviewComposerCopy(art?.workerId, {
+        hasQuestions: Boolean(reason.questions?.length),
+      });
+      actions.push({ type: "accept", label: copy.acceptLabel });
+      actions.push({ type: "reject", label: "不接受" });
+      actions.push({
+        type: "send_message",
+        label: copy.submitLabel,
+        placeholder: `${copy.placeholder}；在现有产物上改，不整份重做…`,
       });
       if (reason.questions?.length) {
-        hints.push("下方追问可选；接受产物即收起（表示无需再完善）");
+        hints.push(`下方追问可选；${copy.acceptLabel}即收起（表示无需再完善）`);
         actions.push({ type: "answer_questions", label: "提交作答" });
         actions.push({ type: "skip_questions", label: "跳过追问" });
       }
     } else if (reason?.kind === "revision") {
       hints.push(
         reason.instruction?.trim() ||
-          "需要按反馈修改后继续；请在下方说明或直接发送继续",
+          "请说明要改哪里；发送后在现有产物上修改",
       );
       actions.push({
         type: "send_message",
-        label: "发送",
-        placeholder: "说明修改意见，或直接发送让总管继续…",
+        label: "按意见修改",
+        placeholder: "说明要改哪里…",
       });
     } else if (session.phase === "error") {
       hints.push("上一轮执行出错。可直接发消息让总管重试，或刷新作品后继续。");
@@ -1737,7 +1877,17 @@ export class SessionManager {
         s.runtime.getBlackboard(),
         s.runtime.getSession(),
       ),
-      creationFlowView: buildCreationFlowUserView(s.runtime.getBlackboard()),
+      creationFlowView: buildCreationFlowUserView(
+        s.runtime.getBlackboard(),
+        session.slots[SLOT_CREATION_ACCEPTED_UNITS],
+      ),
+      proposedNextStep:
+        reason?.kind === "approve_step"
+          ? readProposedNextStep(
+              session.slots,
+              s.runtime.getBlackboard(),
+            )
+          : undefined,
       recipes: s.recipeOptions?.map((r) => ({
         id: r.id,
         name: r.name,
@@ -1747,6 +1897,7 @@ export class SessionManager {
         s.runtime.getBlackboard(),
         s.recipeOptions,
       ),
+      openingGuide: this.resolveOpeningGuideForView(s, reason),
       boardPanel: buildBoardPanelFromRuntime(s.runtime.getBlackboard()),
       presentationTweaks: shellAdapt
         ? {
@@ -1839,12 +1990,14 @@ export class SessionManager {
     const skillName = s.runtime.getActiveSkill()?.name;
     if (!skillName) {
       s.recipeOptions = [];
+      s.openingGuide = null;
       return;
     }
     try {
       const skill = await loadSkill(skillName);
       if (!skill.skillPackRoot) {
         s.recipeOptions = [];
+        s.openingGuide = null;
         return;
       }
       const catalog = await loadRecipeCatalog(skill.skillPackRoot);
@@ -1852,6 +2005,125 @@ export class SessionManager {
     } catch {
       s.recipeOptions = [];
     }
+    await this.ensureRecipeSeededFlow(s);
+    await this.refreshOpeningGuide(s);
+  }
+
+  /** 已选配方但尚无流程 → 写入配方近期起点（兼容旧会话） */
+  private async ensureRecipeSeededFlow(s: ManagedSession): Promise<void> {
+    const board = s.runtime.getBlackboard();
+    if (board.getContentByTag(CREATION_FLOW_TAG)?.trim()) return;
+    const ref = parseSelectedRecipeRef(
+      board.getContentByTag(CREATION_SELECTED_RECIPE_TAG),
+    );
+    if (!ref) return;
+    const entry = findRecipeCatalogEntry(
+      s.recipeOptions?.length ? { recipes: s.recipeOptions } : null,
+      ref,
+    );
+    if (!entry) return;
+    const skillName = s.runtime.getActiveSkill()?.name;
+    if (!skillName) return;
+    try {
+      const skill = await loadSkill(skillName);
+      const packRoot = skill.skillPackRoot?.trim();
+      if (!packRoot) return;
+      const detail = await loadRecipeDetail(packRoot, entry);
+      const seeded = creationFlowFromRecipeSeed(detail);
+      if (!seeded) return;
+      board.write({
+        tag: CREATION_FLOW_TAG,
+        content: stringifyCreationFlow(seeded),
+        source: "runtime",
+      });
+    } catch (err) {
+      console.error("[会话] 配方预置失败", err);
+    }
+  }
+
+  /**
+   * 下一待做开局步（无 depends_on）的 opening → 意图页引导。
+   * 有起点模块就展示；无则 null（再走 design-flow 生成）。
+   * 中段步骤的默认问题改由 resolveOpeningGuideForView 在 waiting 时覆盖。
+   */
+  private async refreshOpeningGuide(s: ManagedSession): Promise<void> {
+    const skillName = s.runtime.getActiveSkill()?.name;
+    if (!skillName) {
+      s.openingGuide = null;
+      return;
+    }
+    try {
+      const skill = await loadSkill(skillName);
+      const packRoot = skill.skillPackRoot?.trim();
+      if (!packRoot) {
+        s.openingGuide = null;
+        return;
+      }
+      const board = s.runtime.getBlackboard();
+      const session = s.runtime.getSession();
+      const accepted = parseAcceptedUnits(
+        session.slots[SLOT_CREATION_ACCEPTED_UNITS] ??
+          board.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
+      );
+      const binding = await resolveDesignStepBinding({
+        skillPackRoot: packRoot,
+        flowRaw: board.getContentByTag(CREATION_FLOW_TAG),
+        acceptedStepNames: accepted,
+      });
+      if (
+        !binding?.opening?.trim() ||
+        (binding.step.depends_on?.length ?? 0) > 0
+      ) {
+        s.openingGuide = null;
+        return;
+      }
+      s.openingGuide = {
+        stepId: binding.step.id,
+        stepName: binding.module.name || binding.step.name,
+        text: binding.opening.trim(),
+      };
+    } catch {
+      s.openingGuide = null;
+    }
+  }
+
+  /**
+   * 视图用开场引导：等待能力默认问题时用题干（对齐美学纲领说话面）；
+   * 中段步骤（有 depends_on）也会覆盖，避免只剩空答题壳。
+   */
+  private resolveOpeningGuideForView(
+    s: ManagedSession,
+    reason: WaitingReason | undefined,
+  ): { stepId: string; stepName: string; text: string } | null {
+    if (reason?.kind === "worker_questions") {
+      const qs = normalizeQuestions(reason.questions);
+      if (isModuleOpeningQuestions(qs)) {
+        const text = qs[0]?.prompt?.trim() ?? "";
+        if (text) {
+          const board = s.runtime.getBlackboard();
+          const stepKey =
+            board.getContentByTag(CREATION_CURRENT_STEP_TAG)?.trim() || "";
+          const flow = parseCreationFlow(board.getContentByTag(CREATION_FLOW_TAG));
+          const step = flow?.steps?.find(
+            (st) =>
+              stepUnitId(st) === stepKey ||
+              st.id === stepKey ||
+              st.name === stepKey,
+          );
+          const stepName =
+            step?.name?.trim() ||
+            s.openingGuide?.stepName?.trim() ||
+            stepKey ||
+            "按引导先说几句";
+          return {
+            stepId: qs[0]!.id,
+            stepName,
+            text,
+          };
+        }
+      }
+    }
+    return s.openingGuide ?? null;
   }
 
   private async applySelectedRecipe(
@@ -1866,7 +2138,8 @@ export class SessionManager {
     if (!entry) {
       throw new Error(`未知初始配方：${recipeId}`);
     }
-    s.runtime.getBlackboard().write({
+    const board = s.runtime.getBlackboard();
+    board.write({
       tag: CREATION_SELECTED_RECIPE_TAG,
       content: JSON.stringify({
         id: entry.id,
@@ -1874,6 +2147,33 @@ export class SessionManager {
       }),
       source: "user",
     });
+
+    // 剧本已钉死开局模块 → 默认写入近期起点，开局即坐在 DAG 第一步（不必先跑 design-flow）
+    const existingFlow = board.getContentByTag(CREATION_FLOW_TAG)?.trim();
+    if (!existingFlow) {
+      const skillName = s.runtime.getActiveSkill()?.name;
+      if (skillName) {
+        try {
+          const skill = await loadSkill(skillName);
+          const packRoot = skill.skillPackRoot?.trim();
+          if (packRoot) {
+            const detail = await loadRecipeDetail(packRoot, entry);
+            const seeded = creationFlowFromRecipeSeed(detail);
+            if (seeded) {
+              board.write({
+                tag: CREATION_FLOW_TAG,
+                content: stringifyCreationFlow(seeded),
+                source: "runtime",
+              });
+            }
+          }
+        } catch (err) {
+          console.error("[会话] 从配方写入创作流程失败", err);
+        }
+      }
+    }
+
+    await this.refreshOpeningGuide(s);
   }
 }
 
@@ -1893,6 +2193,7 @@ function collectFilledTags(blackboard: Blackboard): string[] {
 
 function buildCreationFlowUserView(
   blackboard: Blackboard,
+  acceptedRaw?: unknown,
 ): CreationFlowUserView | undefined {
   const raw = blackboard.getContentByTag(CREATION_FLOW_TAG)?.trim();
   if (!raw) return undefined;
@@ -1900,7 +2201,56 @@ function buildCreationFlowUserView(
   if (!flow) {
     return { steps: [], parseError: "创作流程无法解析为 JSON（需要 steps 数组）" };
   }
-  return formatCreationFlowForUser(flow);
+  const accepted = parseAcceptedUnits(
+    acceptedRaw ?? blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
+  );
+  return formatCreationFlowForUser(flow, undefined, accepted);
+}
+
+function readProposedNextStep(
+  slots: Record<string, unknown>,
+  blackboard: Blackboard,
+): ProposedNextStepView | undefined {
+  const raw =
+    (typeof slots[CREATION_PROPOSED_STEP_TAG] === "string"
+      ? String(slots[CREATION_PROPOSED_STEP_TAG])
+      : null) || blackboard.getContentByTag(CREATION_PROPOSED_STEP_TAG);
+  if (!raw?.trim()) return undefined;
+  try {
+    const doc = JSON.parse(raw) as Partial<ProposedNextStepView>;
+    if (typeof doc.stepId !== "string" || typeof doc.name !== "string") {
+      return undefined;
+    }
+    return {
+      stepId: doc.stepId,
+      name: doc.name,
+      declaration:
+        typeof doc.declaration === "string" ? doc.declaration : undefined,
+      params:
+        doc.params && typeof doc.params === "object" && !Array.isArray(doc.params)
+          ? (doc.params as Record<string, unknown>)
+          : {},
+      paramsMissing: Array.isArray(doc.paramsMissing)
+        ? doc.paramsMissing.map(String)
+        : [],
+      paramSpecs: Array.isArray(doc.paramSpecs)
+        ? doc.paramSpecs
+            .map((p) => ({
+              key: String((p as { key?: string }).key ?? ""),
+              label: String((p as { label?: string }).label ?? ""),
+              required: Boolean((p as { required?: boolean }).required),
+              hint:
+                typeof (p as { hint?: string }).hint === "string"
+                  ? (p as { hint: string }).hint
+                  : undefined,
+            }))
+            .filter((p) => p.key)
+        : [],
+      intent: typeof doc.intent === "string" ? doc.intent : undefined,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveSelectedRecipeView(
@@ -1972,11 +2322,38 @@ function buildReviewArtifactView(
 
   for (const tag of art.outputTags) {
     if (workerSetTags.includes(tag)) continue;
+    if (isProgressPointerTag(tag)) continue;
     const content = blackboard.getContentByTag(tag);
     if (content?.trim()) {
       tagBodies.push(`## ${tag}\n\n${content.trim()}`);
     }
   }
+
+  // 回退消息里也可能夹带「创作.当前步骤」段落，验收正文里去掉
+  const stripPointerSections = (text: string): string => {
+    const trimmed = text.trim();
+    if (!trimmed) return "";
+    const re = /^##\s+(.+?)\s*$/gm;
+    const hits: Array<{ title: string; index: number; headerEnd: number }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(trimmed))) {
+      hits.push({
+        title: m[1]!.trim(),
+        index: m.index,
+        headerEnd: m.index + m[0].length,
+      });
+    }
+    if (!hits.length) return trimmed;
+    return hits
+      .filter((h) => !isProgressPointerTag(h.title) && !/当前步骤|当前单位/.test(h.title))
+      .map((h, i) => {
+        const end = i + 1 < hits.length ? hits[i + 1]!.index : trimmed.length;
+        const chunk = trimmed.slice(h.headerEnd, end).trim();
+        return chunk ? `## ${h.title}\n\n${chunk}` : "";
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  };
 
   const outputMsg = [...messages]
     .reverse()
@@ -1984,7 +2361,7 @@ function buildReviewArtifactView(
 
   const body =
     tagBodies.join("\n\n") ||
-    (outputMsg?.body ?? outputMsg?.text ?? "").trim() ||
+    stripPointerSections((outputMsg?.body ?? outputMsg?.text ?? "").trim()) ||
     art.summary?.trim() ||
     "（Worker 未写入可读正文，请检查黑板 tag 或重试创作 skill）";
 
@@ -2028,7 +2405,10 @@ function buildReviewArtifactView(
       : undefined;
 
   const creationFlowView = isFlowArt
-    ? buildCreationFlowUserView(blackboard)
+    ? buildCreationFlowUserView(
+        blackboard,
+        session.slots[SLOT_CREATION_ACCEPTED_UNITS],
+      )
     : undefined;
 
   return {

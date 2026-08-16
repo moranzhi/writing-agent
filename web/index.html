@@ -35,7 +35,7 @@
 
         <div class="rail-panels">
           <div class="rail-tab-panel active" id="rail-panel-books" role="tabpanel" data-rail-panel="books">
-            <nav class="path-bar" id="book-path-bar" aria-label="作品路径"></nav>
+            <nav class="path-bar" id="book-path-bar" aria-label="面包屑" hidden></nav>
             <div class="book-list" id="book-list"></div>
             <div id="book-box-overlay" class="book-box-overlay" hidden aria-hidden="true"></div>
           </div>
@@ -60,14 +60,19 @@
             </div>
           </div>
           <div class="main-head-right">
-            <a class="link" href="/modules.html">技能</a>
-            <a class="link" href="/shells.html">呈现壳</a>
-            <a class="link" href="/stats.html">Token</a>
-            <a class="link" href="/settings.html">设置</a>
             <button type="button" class="btn-sm" id="btn-save-instance" hidden>保存定稿</button>
             <button type="button" class="btn-sm" id="btn-save-play" hidden>保存游玩</button>
             <button type="button" class="btn-sm" id="btn-export" disabled>导出</button>
             <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
+            <details class="more-menu">
+              <summary class="btn-sm more-menu-sum" title="更多页面">更多</summary>
+              <div class="more-menu-panel" role="menu">
+                <a class="more-menu-item" href="/modules.html" role="menuitem">技能</a>
+                <a class="more-menu-item" href="/shells.html" role="menuitem">呈现壳</a>
+                <a class="more-menu-item" href="/stats.html" role="menuitem">Token</a>
+                <a class="more-menu-item" href="/settings.html" role="menuitem">设置</a>
+              </div>
+            </details>
           </div>
         </header>
 
@@ -77,8 +82,28 @@
             <div id="message-feed" class="message-feed">
               <p class="empty">点击左侧 + 新建作品</p>
             </div>
+            <div id="workspace-stage" class="workspace-stage" hidden aria-label="验收工作面"></div>
             <div id="questions-card-host" class="questions-card-host" hidden></div>
           </section>
+          <aside id="coord-rail" class="coord-rail" hidden aria-label="此前对话">
+            <button
+              type="button"
+              class="coord-rail-toggle"
+              id="btn-coord-toggle"
+              aria-expanded="false"
+              title="展开 / 收起此前对话"
+            >
+              <span class="coord-rail-toggle-label">对话</span>
+              <span id="coord-drawer-count" class="coord-drawer-count"></span>
+            </button>
+            <div class="coord-rail-panel">
+              <header class="coord-rail-head">
+                <span class="coord-rail-title">此前对话</span>
+                <button type="button" class="btn-sm coord-rail-collapse" id="btn-coord-collapse" title="收起" aria-label="收起此前对话">›</button>
+              </header>
+              <div id="coord-drawer-body" class="coord-drawer-body"></div>
+            </div>
+          </aside>
         </div>
 
         <footer class="composer" id="composer"></footer>
@@ -119,12 +144,13 @@
       <button type="button" class="context-menu-item" id="msg-menu-context" data-msg-menu-action="view-context" hidden>查看上下文</button>
       <button type="button" class="context-menu-item" id="msg-menu-edit" data-msg-menu-action="edit">编辑</button>
       <button type="button" class="context-menu-item" id="msg-menu-copy" data-msg-menu-action="copy">复制</button>
-      <button type="button" class="context-menu-item context-menu-danger" id="msg-menu-delete" data-msg-menu-action="delete">删除</button>
+      <button type="button" class="context-menu-item context-menu-separator-before" id="msg-menu-rollback" data-msg-menu-action="rollback" hidden>回退到这里</button>
+      <button type="button" class="context-menu-item context-menu-danger" id="msg-menu-delete" data-msg-menu-action="delete">从这里重开</button>
     </menu>
 
-    <dialog id="dialog-context-trace" class="dialog dialog-wide">
+    <dialog id="dialog-context-trace" class="dialog dialog-wide" aria-labelledby="context-trace-title">
       <form method="dialog" class="context-trace-form">
-        <h2>请求上下文</h2>
+        <h2 id="context-trace-title">上下文调用日志</h2>
         <p class="dialog-desc" id="context-trace-meta"></p>
         <pre id="context-trace-body" class="context-trace-body"></pre>
         <div class="dialog-actions">

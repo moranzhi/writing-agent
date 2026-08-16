@@ -12,7 +12,12 @@ import {
   displayWorkerLabel,
   formatAgentDisplayTitle,
   formatWorkerDisplayTitle,
+  reviewComposerCopy,
 } from "./display-labels.js";
+import {
+  isModuleOpeningQuestions,
+  normalizeQuestions,
+} from "../skills/question-protocol.js";
 
 export type AgentMessageKind =
   | "user_input"
@@ -167,6 +172,20 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
     };
   }
 
+  // 能力默认问题：正文在主栏说话面，调度消息只留短提示
+  const moduleOpeningMsg = trimmed.match(
+    /^\[Worker\]\s*(\S+)\s*·\s*默认问题/,
+  );
+  if (moduleOpeningMsg) {
+    return {
+      kind: "orchestrator_prompt",
+      actor: moduleOpeningMsg[1],
+      title: formatWorkerDisplayTitle(moduleOpeningMsg[1], "questions"),
+      body: "默认问题（请在主栏按引导作答）",
+      text: trimmed,
+    };
+  }
+
   const workerAskTagged = trimmed.match(
     /^\[Worker\]\s*(\S+)\s*提问[：:]\s*\n?([\s\S]*)$/,
   );
@@ -240,7 +259,7 @@ export function classifyAgentMessage(text: string): EnrichedMessage {
       title: "可选追问",
       body: formatWorkerQuestionBody(
         trimmed.replace(
-          /^\[Worker\]\s*可选追问（可跳过，直接接受(?:目前)?产物）[：:]\s*/,
+          /^\[Worker\]\s*可选追问（可跳过(?:,直接[^）]+)?）[：:]\s*/,
           "",
         ),
       ),
@@ -387,19 +406,52 @@ export function buildFocus(
 
   if (reason?.kind === "approve_step") {
     const worker = session.pendingDecision?.workerId ?? "skill";
+    const proposed =
+      typeof session.slots["创作.待确认步骤"] === "string"
+        ? (() => {
+            try {
+              return JSON.parse(String(session.slots["创作.待确认步骤"])) as {
+                name?: string;
+              };
+            } catch {
+              return null;
+            }
+          })()
+        : null;
     return {
       actorType: "orchestrator",
       actorId: "orchestrator",
-      actorLabel: "总管",
-      action: `建议调用 ${displayWorkerLabel(worker)}`,
+      actorLabel: "编排",
+      action: proposed?.name
+        ? `确认开始 · ${proposed.name}`
+        : `建议调用 ${displayWorkerLabel(worker)}`,
       detail: session.pendingDecision?.reason,
     };
   }
 
+  if (reason?.kind === "next_intent") {
+    return {
+      actorType: "user",
+      actorLabel: "你",
+      action: "下一步想写什么",
+      detail: "可留空；发送后会展示下一节点供确认开干",
+    };
+  }
+
   if (reason?.kind === "worker_questions") {
+    const qs = normalizeQuestions(reason.questions);
+    if (isModuleOpeningQuestions(qs)) {
+      return {
+        actorType: "user",
+        actorId: reason.workerId,
+        actorLabel: "你",
+        action: "按引导先说几句",
+        detail: (qs[0]?.prompt ?? "").slice(0, 200) || "想到什么写什么",
+      };
+    }
     const q =
-      reason.questions
-        ?.map((item) => item.prompt)
+      qs
+        .map((item) => item.prompt)
         .filter((s) => s?.trim())
         .join("；") ?? "";
     return {
@@ -413,13 +465,16 @@ export function buildFocus(
 
   if (reason?.kind === "review_artifact") {
     const art = session.artifacts.find((a) => a.id === session.pendingArtifactId);
+    const copy = reviewComposerCopy(art?.workerId, {
+      hasQuestions: Boolean(reason.questions?.length),
+    });
     const optionalQs = reason.questions?.length
       ? `；另有 ${reason.questions.length} 道可选追问`
       : "";
     return {
       actorType: "user",
       actorLabel: "你",
-      action: "验收产物",
+      action: copy.taskTitle,
       detail: `${art?.summary ?? displayWorkerLabel(art?.workerId) ?? ""}${optionalQs}`,
     };
   }

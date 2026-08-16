@@ -1,6 +1,12 @@
 import { renderIntakePanel } from "./intake-ui.js";
-import { getActiveQuestions, renderQuestionsCard } from "./questions-ui.js";
-import { displayWorkerLabel, formatWorkerDisplayTitle } from "./display-labels.js";
+import {
+  getActiveQuestions,
+  getModuleOpeningPrompt,
+  isModuleOpeningWaiting,
+  isQuestionCardDismissed,
+  renderQuestionsCard,
+} from "./questions-ui.js";
+import { displayWorkerLabel, formatWorkerDisplayTitle, reviewComposerCopy } from "./display-labels.js";
 import {
   PRESENT_SHELL_IDS,
   parsePresentDoc,
@@ -60,17 +66,20 @@ function renderThinkingBlock(thinking, { open = false } = {}) {
   </details>`;
 }
 
-function renderLiveStreamBody(live) {
-  if (!live) return "…";
+function renderLiveStreamBody(live, view) {
+  const thinking = (live?.thinking || view?.agentThinking || "").trim();
+  const output = (live?.output ?? "").trim();
+  const showOutput =
+    Boolean(output) && (view?.lifecycleStage ?? document.body.dataset.lifecycle) === "play";
   const parts = [];
-  if (live.thinking?.trim()) {
+  if (thinking) {
     parts.push(
-      `<section class="msg-live-section"><header>思考</header><pre class="msg-live-pre">${esc(live.thinking.trim())}</pre></section>`,
+      `<section class="msg-live-section"><header>思考</header><pre class="msg-live-pre">${esc(thinking)}</pre></section>`,
     );
   }
-  if (live.output?.trim()) {
+  if (showOutput) {
     parts.push(
-      `<section class="msg-live-section"><header>输出</header><pre class="msg-live-pre">${esc(live.output.trim())}</pre></section>`,
+      `<section class="msg-live-section"><header>输出</header><pre class="msg-live-pre">${esc(output)}</pre></section>`,
     );
   }
   return parts.length ? parts.join("") : "…";
@@ -102,38 +111,70 @@ function canRefreshMessage(msg) {
   return kind === "worker_questions" || kind === "worker_output";
 }
 
+/** ‹ n/total › 进退 + 可重出；后续输入基于当前激活版本 */
+function renderVariantNavHtml(msg) {
+  if (!msg?.id) return "";
+  const total = Math.max(1, Number(msg.branchTotal) || 1);
+  const index = Math.min(total, Math.max(1, (msg.branchIndex ?? 0) + 1));
+  const refreshable = canRefreshMessage(msg);
+  if (total <= 1 && !refreshable) return "";
+  const id = esc(msg.id);
+  const prevDis = index <= 1 ? " disabled" : "";
+  const nextDis = index >= total ? " disabled" : "";
+  const refresh = refreshable
+    ? `<button type="button" class="msg-action msg-action-primary" data-msg-action="refresh" data-msg-id="${id}" title="重出一版（新版本）">↻</button>`
+    : "";
+  return `<span class="msg-variant-nav" title="切换版本；在此版本上继续输入">
+    <button type="button" class="msg-action" data-msg-action="variant-prev" data-msg-id="${id}"${prevDis} aria-label="上一版">‹</button>
+    <span class="msg-variant-count">${index}/${total}</span>
+    <button type="button" class="msg-action" data-msg-action="variant-next" data-msg-id="${id}"${nextDis} aria-label="下一版">›</button>
+    ${refresh}
+  </span>`;
+}
+
+/** @deprecated 用 renderVariantNavHtml */
 function renderMsgVariantBadge(msg) {
-  const total = msg.branchTotal ?? 1;
-  if (total <= 1) return "";
-  const index = (msg.branchIndex ?? 0) + 1;
-  return `<span class="msg-variant-badge">${index}/${total}</span>`;
+  return renderVariantNavHtml(msg);
 }
 
 function hideMsgMenu() {
   const menu = document.getElementById("msg-action-menu");
   if (menu) menu.hidden = true;
   msgMenuState.messageId = null;
+  msgMenuState.rollbackMessageId = null;
+  msgMenuState.card = null;
 }
 
-const msgMenuState = { messageId: null, handlers: null };
+const msgMenuState = {
+  messageId: null,
+  rollbackMessageId: null,
+  card: null,
+  handlers: null,
+};
 
 function showMsgMenu(card, x, y) {
   const menu = document.getElementById("msg-action-menu");
   if (!menu || !card) return;
   const isReview = card.dataset.review === "1";
+  const isReadOnly = card.dataset.readOnly === "1";
   const canEdit = !isReview && card.dataset.canEdit === "1";
-  const canDelete = !isReview && Boolean(card.dataset.messageId);
+  const canDelete = !isReview && !isReadOnly && Boolean(card.dataset.messageId);
+  const canRollback = !isReview && !isReadOnly && Boolean(card.dataset.rollbackMessageId);
   const hasContext = card.dataset.hasContext === "1";
   const editBtn = document.getElementById("msg-menu-edit");
   const delBtn = document.getElementById("msg-menu-delete");
+  const rollbackBtn = document.getElementById("msg-menu-rollback");
   const ctxBtn = document.getElementById("msg-menu-context");
   if (editBtn) editBtn.toggleAttribute("hidden", !canEdit);
   if (delBtn) delBtn.toggleAttribute("hidden", !canDelete);
+  if (rollbackBtn) rollbackBtn.toggleAttribute("hidden", !canRollback);
   if (ctxBtn) ctxBtn.toggleAttribute("hidden", !hasContext);
   menu.hidden = false;
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
   msgMenuState.messageId = card.dataset.messageId ?? null;
+  msgMenuState.rollbackMessageId = card.dataset.rollbackMessageId ?? null;
+  msgMenuState.card = card;
   const rect = menu.getBoundingClientRect();
   if (rect.right > window.innerWidth) {
     menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
@@ -152,10 +193,11 @@ function wireMsgActionMenu(handlers) {
   menu.addEventListener("click", async (e) => {
     const action = e.target.closest("[data-msg-menu-action]")?.getAttribute("data-msg-menu-action");
     const messageId = msgMenuState.messageId;
+    const rollbackMessageId = msgMenuState.rollbackMessageId;
+    const card = msgMenuState.card;
     hideMsgMenu();
     if (!messageId || !action) return;
-    const card = document.querySelector(`[data-message-id="${messageId}"]`);
-    const bodyEl = card?.querySelector(".msg-body:not(.msg-body-editing)");
+    const bodyEl = card?.querySelector(".msg-body:not(.msg-body-editing), .coord-text");
     const body = bodyEl?.textContent ?? card?.dataset.originalText ?? "";
 
     if (action === "copy") {
@@ -174,8 +216,14 @@ function wireMsgActionMenu(handlers) {
       startInlineEdit(card, body);
       return;
     }
+    if (action === "rollback") {
+      if (!rollbackMessageId) return;
+      if (!confirm("回退到这条消息？之后的对话和创作状态将被移除。")) return;
+      msgMenuState.handlers?.onDeleteMessage?.(rollbackMessageId);
+      return;
+    }
     if (action === "delete") {
-      if (!confirm("删除此消息及之后的对话？")) return;
+      if (!confirm("从这里重开？这条消息及之后的对话和创作状态将被移除。")) return;
       msgMenuState.handlers?.onDeleteMessage?.(messageId);
     }
   });
@@ -186,11 +234,28 @@ function wireMessageContextMenu(feed, handlers) {
   feed.dataset.contextWired = "1";
   wireMsgActionMenu(handlers);
   feed.addEventListener("contextmenu", (e) => {
-    const bubble = e.target.closest(".msg-bubble");
+    const bubble = e.target.closest(".msg-bubble, .workspace-review, .coord-line");
     const card = e.target.closest("[data-message-id]");
     if (!bubble || !card || card.classList.contains("msg-pending")) return;
     e.preventDefault();
     showMsgMenu(card, e.clientX, e.clientY);
+  });
+  feed.addEventListener("click", (e) => {
+    const contextTrigger = e.target.closest("[data-context-trigger]");
+    const contextCard = contextTrigger?.closest("[data-message-id]");
+    if (contextTrigger && contextCard) {
+      e.preventDefault();
+      e.stopPropagation();
+      handlers?.onViewContext?.(contextCard.dataset.messageId);
+      return;
+    }
+    const trigger = e.target.closest("[data-msg-menu-trigger]");
+    const card = trigger?.closest("[data-message-id]");
+    if (!trigger || !card) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = trigger.getBoundingClientRect();
+    showMsgMenu(card, rect.right, rect.bottom + 4);
   });
 }
 
@@ -251,13 +316,19 @@ function cancelInlineEdit(card) {
 }
 
 function wireMessageFeedActions(feed, handlers) {
-  if (!feed || feed.dataset.actionsWired) return;
+  if (!feed) return;
+  // 每次刷新 handlers（委托仍挂一次；回调走最新）
+  feed._msgHandlers = handlers;
+  if (feed.dataset.actionsWired) return;
   feed.dataset.actionsWired = "1";
   feed.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-msg-action]");
     if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
     const action = btn.getAttribute("data-msg-action");
     const messageId = btn.getAttribute("data-msg-id");
+    const h = feed._msgHandlers || handlers;
     if (!messageId && action !== "edit-cancel" && action !== "edit-save") return;
 
     const card = btn.closest("[data-message-id]");
@@ -293,22 +364,22 @@ function wireMessageFeedActions(feed, handlers) {
       const original = (card?.dataset.originalText ?? body).trim();
       cancelInlineEdit(card);
       if (!next || next === original) return;
-      handlers.onEditMessage?.(messageId, next);
+      h.onEditMessage?.(messageId, next);
       return;
     }
 
     if (action === "refresh") {
-      handlers.onRefreshMessage?.(messageId);
+      h.onRefreshMessage?.(messageId);
       return;
     }
 
     if (action === "variant-prev") {
-      handlers.onSwitchVariant?.(messageId, "prev");
+      h.onSwitchVariant?.(messageId, "prev");
       return;
     }
 
     if (action === "variant-next") {
-      handlers.onSwitchVariant?.(messageId, "next");
+      h.onSwitchVariant?.(messageId, "next");
     }
   });
 }
@@ -316,10 +387,14 @@ function wireMessageFeedActions(feed, handlers) {
 function msgBody(msg, view) {
   let body = (msg.body ?? msg.text ?? "").trim();
   if (msg.kind === "worker_questions") {
+    // 能力默认问题走说话面，侧栏勿显示「提问中 · N 题」空壳索引
+    if (isModuleOpeningWaiting(view)) {
+      return body || "默认问题（主栏引导中）";
+    }
     if (getActiveQuestions(view)) {
       const qs = view.waitingReason?.questions ?? [];
       const n = Array.isArray(qs) ? qs.length : 0;
-      return `提问中 · ${n || "?"} 题（请在下方询问卡作答）`;
+      return `提问中 · ${n || "?"} 题`;
     }
     if (!body) {
       const wr = view.waitingReason;
@@ -405,6 +480,41 @@ export function renderSkillPicker(_view, _onPick) {
 let activeRailTab = "books";
 /** 用户手动展开侧栏后，在本会话保持展开，直到再点收起 */
 let railUserExpanded = false;
+/** 创作验收右侧「此前对话」：默认收起，把宽度留给产物 */
+let coordRailCollapsed = true;
+
+function syncCoordRailChrome() {
+  const rail = document.getElementById("coord-rail");
+  const toggle = document.getElementById("btn-coord-toggle");
+  document.body.classList.toggle("coord-rail-collapsed", coordRailCollapsed);
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", coordRailCollapsed ? "false" : "true");
+    toggle.title = coordRailCollapsed ? "展开此前对话" : "收起此前对话";
+  }
+  if (rail) {
+    rail.dataset.collapsed = coordRailCollapsed ? "1" : "0";
+  }
+}
+
+function setCoordRailCollapsed(collapsed) {
+  coordRailCollapsed = Boolean(collapsed);
+  syncCoordRailChrome();
+}
+
+function wireCoordRailChrome() {
+  const toggle = document.getElementById("btn-coord-toggle");
+  if (toggle && !toggle.dataset.wired) {
+    toggle.dataset.wired = "1";
+    toggle.addEventListener("click", () => {
+      setCoordRailCollapsed(!coordRailCollapsed);
+    });
+  }
+  const collapse = document.getElementById("btn-coord-collapse");
+  if (collapse && !collapse.dataset.wired) {
+    collapse.dataset.wired = "1";
+    collapse.addEventListener("click", () => setCoordRailCollapsed(true));
+  }
+}
 
 export function setRailTab(tab, { expand = false } = {}) {
   activeRailTab = tab === "log" ? "log" : "books";
@@ -474,10 +584,16 @@ function syncRailCollapse(view) {
 }
 
 export function resetRailChrome() {
-  railUserExpanded = true;
   activeRailTab = "books";
+  railUserExpanded = true;
+  coordRailCollapsed = true;
   document.body.dataset.railCanCollapse = "0";
-  document.body.classList.remove("rail-collapsed");
+  document.body.classList.remove("rail-collapsed", "coord-rail-collapsed");
+  const rail = document.getElementById("coord-rail");
+  if (rail) {
+    rail.hidden = true;
+    rail.dataset.collapsed = "1";
+  }
   setRailTab("books");
 }
 
@@ -497,6 +613,13 @@ function isStartupPromptMessage(msg, view) {
   return Boolean(prompt && body === prompt);
 }
 
+/** 产物挂载追问的历史空壳（旧会话可能仍有）；追问应跟产物同面，不单开气泡 */
+function isReviewSidecarQuestionStub(msg) {
+  if ((msg.kind ?? "") !== "worker_questions") return false;
+  const text = String(msg.text ?? msg.body ?? "").trim();
+  return /^\[Worker\]\s*可选追问/.test(text);
+}
+
 function shouldShowInFeed(msg, view) {
   if (msg.role === "user") return true;
   const kind = msg.kind ?? "system_info";
@@ -504,6 +627,7 @@ function shouldShowInFeed(msg, view) {
   if (FEED_HIDDEN_KINDS.has(kind)) return false;
   if (msg.compressed) return false;
   if (isSkillSelectionMessage(msg)) return false;
+  if (isReviewSidecarQuestionStub(msg)) return false;
   if (
     view.waitingReason?.kind === "intake" &&
     !hasUserMessages(view) &&
@@ -512,6 +636,10 @@ function shouldShowInFeed(msg, view) {
     return false;
   }
   if (kind === "worker_output" && view.waitingReason?.kind === "review_artifact") {
+    return false;
+  }
+  // 创作：编排器思考进「调度」，不占主区；游玩保持原样
+  if (kind === "orchestrator_thinking" && view.lifecycleStage !== "play") {
     return false;
   }
   if (kind === "orchestrator_prompt") return false;
@@ -1039,7 +1167,9 @@ function splitTaggedArtifactSections(text) {
 function softenJsonText(s) {
   return String(s || "")
     .replace(/^\uFEFF/, "")
-    .replace(/,\s*([\]}])/g, "$1");
+    .replace(/,\s*([\]}])/g, "$1")
+    .replace(/\u2026/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 }
 
 function tryParseJsonDoc(text) {
@@ -1053,10 +1183,24 @@ function tryParseJsonDoc(text) {
   const cleaned = softenJsonText(stripCodeFences(text));
   let parsed = tryParse(cleaned);
   if (parsed != null) return parsed;
+  // 双重编码：整段是 JSON 字符串
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    const inner = tryParse(cleaned);
+    if (typeof inner === "string") {
+      parsed = tryParse(softenJsonText(inner));
+      if (parsed != null) return parsed;
+    }
+  }
   const objStart = cleaned.indexOf("{");
   const objEnd = cleaned.lastIndexOf("}");
   if (objStart >= 0 && objEnd > objStart) {
     parsed = tryParse(cleaned.slice(objStart, objEnd + 1));
+    if (parsed != null) return parsed;
+    // 截断 JSON：从第一个 { 起尽量补全括号后再试
+    parsed = tryParse(repairTruncatedJsonObject(cleaned.slice(objStart)));
     if (parsed != null) return parsed;
   }
   const arrStart = cleaned.indexOf("[");
@@ -1068,16 +1212,105 @@ function tryParseJsonDoc(text) {
   return null;
 }
 
-function wrapArtifactRawDetails(rawText) {
+/** 截断的 {… 补齐引号/括号，便于验收卡仍能出 mosaic */
+function repairTruncatedJsonObject(slice) {
+  let s = String(slice || "").trim();
+  if (!s.startsWith("{")) return s;
+  // 去掉末尾半截键值
+  s = s.replace(/,\s*"[^"]*$/u, "");
+  s = s.replace(/,\s*$/u, "");
+  const opens = (s.match(/\{/g) || []).length;
+  const closes = (s.match(/\}/g) || []).length;
+  const openBrackets = (s.match(/\[/g) || []).length;
+  const closeBrackets = (s.match(/\]/g) || []).length;
+  // 未闭合字符串：奇数个未转义引号
+  const quoteCount = (s.match(/(?<!\\)"/g) || []).length;
+  if (quoteCount % 2 === 1) s += '"';
+  if (openBrackets > closeBrackets) s += "]".repeat(openBrackets - closeBrackets);
+  if (opens > closes) s += "}".repeat(opens - closes);
+  return s;
+}
+
+const FRAGMENT_HEADER_KEYS = new Set([
+  "schema",
+  "技能",
+  "skill",
+  "name",
+  "brief",
+  "概要",
+  "mount",
+  "挂载",
+  "稳变",
+  "稳定",
+  "stability",
+  "自评",
+  "追问",
+  "开放问题",
+  "open_questions",
+  "正文",
+  "body",
+]);
+
+/** 模型常把正文键摊在根上；验收展示时收进「正文」以便走 mosaic */
+function normalizeContextFragmentDoc(doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return doc;
+  const row = { ...doc };
+  const hasBody = row.正文 != null || row.body != null;
+  const looksFrag =
+    row.schema === "context-fragment.v1" ||
+    (typeof row.技能 === "string" && row.技能.trim()) ||
+    (typeof row.brief === "string" && typeof row.技能 === "string");
+  if (!looksFrag) return doc;
+  if (!hasBody) {
+    const body = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (FRAGMENT_HEADER_KEYS.has(k)) continue;
+      if (v == null || v === "") continue;
+      body[k] = v;
+      delete row[k];
+    }
+    if (Object.keys(body).length) row.正文 = body;
+  }
+  if (!row.schema) row.schema = "context-fragment.v1";
+  return row;
+}
+
+function wrapArtifactRawDetails(rawText, opts = {}) {
   const pretty = (() => {
     const parsed = tryParseJsonDoc(rawText);
     if (parsed != null) return JSON.stringify(parsed, null, 2);
     return String(rawText || "").trim();
   })();
+  if (!pretty) return "";
   const body = pretty.startsWith("{") || pretty.startsWith("[")
     ? `<code>${highlightJson(pretty)}</code>`
     : esc(pretty);
-  return `<details class="artifact-raw"><summary>原始 JSON</summary><pre class="json-pretty" tabindex="0">${body}</pre></details>`;
+  const quiet = opts.quiet === true;
+  const label = quiet ? "原文" : "原始 JSON";
+  return `<details class="artifact-raw${quiet ? " artifact-raw--quiet" : ""}"><summary>${label}</summary><pre class="json-pretty" tabindex="0">${body}</pre></details>`;
+}
+
+function isMetaPointerTag(title) {
+  const t = String(title || "");
+  return /当前步骤|当前单位|已验收单位|创作\.当前/.test(t);
+}
+
+function renderCrumbArtifact(title, leafText, rawSlice) {
+  const leaf = clampPreviewText(leafText, 120);
+  const raw = rawSlice
+    ? wrapArtifactRawDetails(rawSlice, { quiet: true })
+    : "";
+  return `<div class="artifact-crumb">
+    <nav class="artifact-crumb-path" aria-label="路径">
+      <span class="artifact-crumb-root">${esc(title || "产物")}</span>
+      ${
+        leaf
+          ? `<span class="artifact-crumb-sep" aria-hidden="true">/</span><span class="artifact-crumb-leaf">${esc(leaf)}</span>`
+          : ""
+      }
+    </nav>
+    ${raw}
+  </div>`;
 }
 
 function clampPreviewText(text, max = 140) {
@@ -1155,13 +1388,37 @@ function summarizeArtifactDoc(doc, tagTitle = "") {
 }
 
 function renderArtifactCompactCard(doc, tagTitle, rawSlice, opts = {}) {
-  const meta = summarizeArtifactDoc(doc, tagTitle);
+  // 进度指针不是产物：验收区完全隐藏
+  if (isMetaPointerTag(tagTitle)) return "";
+
+  const normalized =
+    doc && typeof doc === "object" && !Array.isArray(doc)
+      ? normalizeContextFragmentDoc(doc)
+      : doc;
+  const meta = summarizeArtifactDoc(normalized, tagTitle);
   const full =
-    renderKnownArtifactHtml(doc, {
+    renderKnownArtifactHtml(normalized, {
       embed: true,
       hideAskSidecar: opts.hideAskSidecar === true,
-    }) || renderStructuredDocHtml(doc);
-  const raw = rawSlice ? wrapArtifactRawDetails(rawSlice) : "";
+      hideScores: opts.hideScores === true || opts.flat === true,
+    }) || renderStructuredDocHtml(normalized);
+  const raw = rawSlice ? wrapArtifactRawDetails(rawSlice, { quiet: opts.flat === true }) : "";
+
+  // 验收展开态：不要 details 套盒 + 摘要预览再占一层；一条 meta，正文直接上场
+  if (opts.flat) {
+    const metaBits = [meta.chipsHtml, meta.scoresHtml].filter(Boolean).join("");
+    return `<article class="artifact-flat-review">
+      <header class="artifact-flat-meta">
+        <nav class="artifact-crumb-path artifact-flat-path" aria-label="产物">
+          <span class="artifact-crumb-root">${esc(meta.title)}</span>
+        </nav>
+        ${metaBits ? `<div class="artifact-flat-chips">${metaBits}</div>` : ""}
+        ${raw}
+      </header>
+      <div class="artifact-flat-body">${full}</div>
+    </article>`;
+  }
+
   const metaRow = [meta.chipsHtml, meta.scoresHtml].filter(Boolean).join("");
   const openAttr = opts.open ? " open" : "";
   return `<details class="artifact-compact"${openAttr}>
@@ -1180,7 +1437,23 @@ function renderArtifactCompactCard(doc, tagTitle, rawSlice, opts = {}) {
 }
 
 function renderPlainCompactCard(title, content, opts = {}) {
+  if (isMetaPointerTag(title)) {
+    return "";
+  }
   const preview = clampPreviewText(content, 160);
+  if (opts.flat) {
+    return `<article class="artifact-flat-review">
+      <header class="artifact-flat-meta">
+        <nav class="artifact-crumb-path artifact-flat-path" aria-label="产物">
+          <span class="artifact-crumb-root">${esc(title || "产物")}</span>
+        </nav>
+      </header>
+      <div class="artifact-flat-body">
+        <p class="ws-muted artifact-parse-hint">未能解析为可展示产物。</p>
+        <pre class="review-feed-plain">${esc(content)}</pre>
+      </div>
+    </article>`;
+  }
   const openAttr = opts.open ? " open" : "";
   const looksJson = /^\s*[{\[]/.test(String(content || ""));
   const body = looksJson
@@ -1200,7 +1473,7 @@ function renderPlainCompactCard(title, content, opts = {}) {
   </details>`;
 }
 
-/** 紧凑卡片：预览 + 展开详情；多 tag 各一张。opts.defaultOpen：验收时默认展开吃满阅读区 */
+/** 紧凑卡片：预览 + 展开详情；多 tag 各一张。opts.defaultOpen / flat：验收时扁平直出 */
 function formatArtifactBodyHtml(body, opts = {}) {
   const trimmed = (body || "").trim();
   if (!trimmed) {
@@ -1208,14 +1481,18 @@ function formatArtifactBodyHtml(body, opts = {}) {
   }
   const cardOpts = {
     open: opts.defaultOpen === true,
+    flat: opts.flat === true,
     hideAskSidecar: opts.hideAskSidecar === true,
+    hideScores: opts.hideScores === true,
   };
 
   const sections = splitTaggedArtifactSections(trimmed);
   const hasTagHeaders = sections.length > 1 || (sections.length === 1 && sections[0].title);
 
   if (hasTagHeaders) {
-    const cards = sections.map((sec) => {
+    const cards = sections
+      .filter((sec) => !isMetaPointerTag(sec.title))
+      .map((sec) => {
       const parsed = tryParseJsonDoc(sec.content);
       if (parsed != null && typeof parsed === "object") {
         return renderArtifactCompactCard(parsed, sec.title, sec.content, cardOpts);
@@ -1229,7 +1506,8 @@ function formatArtifactBodyHtml(body, opts = {}) {
         )}</div>`;
       }
       return renderPlainCompactCard(sec.title || "产物", sec.content, cardOpts);
-    });
+    })
+      .filter(Boolean);
     return `<div class="artifact-compact-list">${cards.join("")}</div>`;
   }
 
@@ -1315,41 +1593,48 @@ function renderPlaySlotsHtml(doc) {
 }
 
 function isContextFragmentLike(doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  if (doc.schema === "context-fragment.v1") return true;
   return (
     typeof doc.brief === "string" &&
-    (doc.正文 != null || doc.body != null) &&
+    (doc.正文 != null ||
+      doc.body != null ||
+      typeof doc.技能 === "string") &&
     (typeof doc.技能 === "string" || doc.schema === "context-fragment.v1")
   );
 }
 
 function renderContextFragmentHtml(doc, opts = {}) {
+  const frag = normalizeContextFragmentDoc(doc);
   const parts = [];
   // 紧凑卡外层已展示 brief/挂载，展开内不再重复头区
   if (!opts.embed) {
     const metaChips = [];
-    if (doc.技能) metaChips.push(`<span class="ws-badge ws-badge-review">${esc(String(doc.技能))}</span>`);
-    const stability = doc.稳变 || doc.稳定 || doc.stability;
+    if (frag.技能) metaChips.push(`<span class="ws-badge ws-badge-review">${esc(String(frag.技能))}</span>`);
+    const stability = frag.稳变 || frag.稳定 || frag.stability;
     if (stability) metaChips.push(`<span class="ws-badge ws-badge-continue">${esc(String(stability))}</span>`);
-    if (Array.isArray(doc.mount) && doc.mount.length) {
-      for (const m of doc.mount) {
+    if (Array.isArray(frag.mount) && frag.mount.length) {
+      for (const m of frag.mount) {
         metaChips.push(`<span class="ws-slot-chip ws-slot-on">${esc(String(m))}</span>`);
       }
+    } else if (typeof frag.mount === "string" && frag.mount.trim()) {
+      metaChips.push(`<span class="ws-slot-chip ws-slot-on">${esc(frag.mount.trim())}</span>`);
     }
-    if (doc.brief || metaChips.length) {
+    if (frag.brief || metaChips.length) {
       parts.push(`<header class="artifact-hero">
       ${metaChips.length ? `<div class="artifact-chip-row">${metaChips.join("")}</div>` : ""}
-      ${doc.brief ? `<p class="artifact-brief">${esc(String(doc.brief))}</p>` : ""}
+      ${frag.brief ? `<p class="artifact-brief">${esc(String(frag.brief))}</p>` : ""}
     </header>`);
     }
   }
 
-  const body = doc.正文 != null ? doc.正文 : doc.body;
+  const body = frag.正文 != null ? frag.正文 : frag.body;
   if (typeof body === "string" && body.trim()) {
     parts.push(
       `<section class="artifact-block"><h4>正文</h4>${renderProseHtml(body)}</section>`,
     );
   } else if (body && typeof body === "object") {
-    const specialty = renderSpecialtyBodyHtml(body, doc.技能);
+    const specialty = renderSpecialtyBodyHtml(body, frag.技能);
     if (specialty) {
       parts.push(specialty);
     } else {
@@ -1361,14 +1646,14 @@ function renderContextFragmentHtml(doc, opts = {}) {
 
   // 自评/追问已挂询问卡时：产物内保留评分条，追问不重复展示
   const hideAsk = opts.hideAskSidecar === true;
-  const scoreHtml = renderSelfScoreHtml(doc.自评);
+  const scoreHtml = opts.hideScores ? "" : renderSelfScoreHtml(frag.自评);
   if (scoreHtml) parts.push(scoreHtml);
 
   if (!hideAsk) {
-    const probeHtml = renderProbeHtml(doc.追问);
+    const probeHtml = renderProbeHtml(frag.追问);
     if (probeHtml) parts.push(probeHtml);
 
-    const openQs = Array.isArray(doc.开放问题) ? doc.开放问题 : [];
+    const openQs = Array.isArray(frag.开放问题) ? frag.开放问题 : [];
     if (openQs.length) {
       parts.push(
         `<section class="artifact-block"><h4>开放问题</h4><ul class="artifact-list">${openQs
@@ -1426,24 +1711,75 @@ function renderSpecialtyBodyHtml(body, skill) {
     skillName.includes("美学");
   if (!looksAesthetics) return "";
 
-  const order = ["设定逻辑", "交互范式", "美学纲领"];
-  const used = new Set();
-  const parts = [];
-  for (const key of order) {
-    if (body[key] == null) continue;
-    used.add(key);
-    const wide = key === "美学纲领";
-    parts.push(
-      `<section class="af-panel${wide ? " af-panel-wide" : ""}"><h4>${esc(key)}</h4>${renderAestheticsNodeHtml(body[key], key, 0)}</section>`,
-    );
-  }
-  for (const [k, v] of Object.entries(body)) {
-    if (used.has(k) || v == null || v === "") continue;
-    parts.push(
-      `<section class="af-panel"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, 0)}</section>`,
-    );
-  }
-  return parts.length ? `<div class="af-mosaic">${parts.join("")}</div>` : "";
+  // 左右约定（验收卡通用意向）：
+  //   左 = 最终会插入的游玩契约（美学纲领 + 交互范式）
+  //   右 = 评估/诊断（设定逻辑里的完备度、待探、区域化等）
+  // 注意：当前黑板仍存整份正文；full 投影时右栏也会进模型——布局先对齐「该审什么」。
+  const productKeys = [
+    {
+      key: "美学纲领",
+      hint: "体验内核与呈现要点",
+      missing: "（未写美学纲领）",
+    },
+    {
+      key: "交互范式",
+      hint: "人称、描写权限、后果与等待",
+      missing: "（未写交互范式）",
+    },
+  ];
+  const evalKeys = [
+    {
+      key: "设定逻辑",
+      hint: "变造定位 + 参与/内容维度诊断（完备度、依据、待探）",
+      missing: "（未写设定逻辑）",
+    },
+  ];
+  const used = new Set([...productKeys, ...evalKeys].map((b) => b.key));
+
+  const renderBlock = (b, cls) => {
+    const inner =
+      body[b.key] != null
+        ? renderAestheticsNodeHtml(body[b.key], b.key, 0)
+        : `<p class="ws-muted">${esc(b.missing)}</p>`;
+    const ok = body[b.key] != null;
+    return `<section class="af-block ${cls}" data-af-block="${esc(b.key)}">
+      <header class="af-block-head">
+        <h3 class="af-block-title">${esc(b.key)}${ok ? "" : `<span class="af-block-miss">缺</span>`}</h3>
+        <p class="af-block-hint">${esc(b.hint)}</p>
+      </header>
+      <div class="af-block-body">${inner}</div>
+    </section>`;
+  };
+
+  const productHtml = productKeys.map((b) => renderBlock(b, "af-block--product")).join("");
+  const evalHtml = evalKeys.map((b) => renderBlock(b, "af-block--eval")).join("");
+  const extra = Object.entries(body)
+    .filter(([k, v]) => !used.has(k) && v != null && v !== "")
+    .map(
+      ([k, v]) =>
+        `<section class="af-block af-block--extra" data-af-block="${esc(k)}">
+      <header class="af-block-head"><h3 class="af-block-title">${esc(k)}</h3></header>
+      <div class="af-block-body">${renderStructuredValueHtml(v, 0)}</div>
+    </section>`,
+    )
+    .join("");
+
+  return `<div class="af-split">
+    <div class="af-split-banner" role="note">
+      <span><b>左</b>游玩契约（插入意向）</span>
+      <span><b>右</b>设定诊断 / 评估</span>
+      <span class="af-split-banner-note">存盘仍是整份正文；默认 full 时两侧都会注入</span>
+    </div>
+    <div class="af-split-grid">
+      <div class="af-split-product" aria-label="游玩契约">
+        ${productHtml || `<p class="ws-muted">（契约块为空）</p>`}
+      </div>
+      <aside class="af-split-eval" aria-label="评估诊断">
+        ${evalHtml}
+        ${extra}
+      </aside>
+    </div>
+  </div>`;
 }
 
 /** 叙事指南 · 一份全文结构化卡（不强调双投影裁剪） */
@@ -1911,41 +2247,37 @@ function pctTone(pct) {
   return "high";
 }
 
-/** 统一百分比条：对齐 status-dot / badge 色阶 */
-function renderPctMeterHtml(pct, label = "完备度") {
+/** 行内完备度：染色百分比，不单开卡片 */
+function renderInlinePctHtml(pct, label) {
   if (pct == null || !Number.isFinite(pct)) return "";
   const n = Math.max(0, Math.min(100, Math.round(pct)));
   const tone = pctTone(n);
-  return `<div class="pct-meter tone-${tone}" role="meter" aria-valuenow="${n}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(label)} ${n}%">
-    <div class="pct-meter-head">
-      <span class="pct-meter-label">${esc(label)}</span>
-      <span class="pct-meter-value">${n}%</span>
-    </div>
-    <div class="pct-meter-track"><i style="width:${n}%"></i></div>
-  </div>`;
+  const lab = label
+    ? `<span class="pct-inline-label">${esc(label)}</span>`
+    : "";
+  return `<span class="pct-inline tone-${tone}" title="${esc(label || "完备度")} ${n}%">${lab}<b class="pct-inline-value">${n}%</b></span>`;
 }
 
-/** 自评十分制条 */
+/** @deprecated 卡片条已弃用；统一走行内百分比 */
+function renderPctMeterHtml(pct, label = "完备度") {
+  return renderInlinePctHtml(pct, label);
+}
+
+/** 自评十分制：同行染色数字 */
 function renderTenMeterHtml(ten, label = "评分") {
   if (ten == null || !Number.isFinite(ten)) return "";
   const score = Math.max(0, Math.min(10, ten));
-  const width = Math.round(score * 10);
   const tone = tenTone(score);
   const shown = formatTenScore(score);
-  return `<div class="pct-meter tone-${tone}" role="meter" aria-valuenow="${score}" aria-valuemin="0" aria-valuemax="10" aria-label="${esc(label)} ${shown}/10">
-    <div class="pct-meter-head">
-      <span class="pct-meter-label">${esc(label)}</span>
-      <span class="pct-meter-value">${shown}/10</span>
-    </div>
-    <div class="pct-meter-track"><i style="width:${width}%"></i></div>
-  </div>`;
+  const lab = label
+    ? `<span class="pct-inline-label">${esc(label)}</span>`
+    : "";
+  return `<span class="pct-inline tone-${tone}" title="${esc(label)} ${shown}/10">${lab}<b class="pct-inline-value">${shown}/10</b></span>`;
 }
 
-/** 瓷砖用迷你百分比（数字 + 细条），省纵向空间 */
+/** 标题旁迷你百分比 */
 function renderMiniPctHtml(pct) {
-  if (pct == null || !Number.isFinite(pct)) return "";
-  const n = Math.max(0, Math.min(100, Math.round(pct)));
-  return `<span class="pct-mini tone-${pctTone(n)}" title="完备度 ${n}%"><b>${n}</b><i style="--p:${n}%"></i></span>`;
+  return renderInlinePctHtml(pct);
 }
 
 function extractNodePct(value) {
@@ -1966,6 +2298,42 @@ function isDiagnosticNode(value) {
   );
 }
 
+/** 评价维度块：小标题 + 旁路完备度；结论/依据为从属行 */
+function renderDiagnosticDimHtml(title, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `<span class="ws-muted">—</span>`;
+  }
+  const pct = extractNodePct(value);
+  const head = `<header class="af-dim-head">
+    <h5 class="af-dim-title">${esc(title || "项")}</h5>
+    ${pct != null ? renderInlinePctHtml(pct) : ""}
+  </header>`;
+  const skipKey = (k) =>
+    isPctFieldKey(k) || /^(完备度|完成度|分数|覆盖度)$/.test(String(k).trim());
+  const preferred = ["结论", "依据", "已知", "待探", "焦点位置", "满足来源", "内容维度", "核心感觉"];
+  const keys = Object.keys(value).filter(
+    (k) => !skipKey(k) && value[k] != null && value[k] !== "",
+  );
+  keys.sort((a, b) => {
+    const ia = preferred.indexOf(a);
+    const ib = preferred.indexOf(b);
+    if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    return 0;
+  });
+  const rows = keys.map((k) => {
+    const v = value[k];
+    if (typeof v === "object") {
+      return `<div class="af-dim-row af-dim-row--block"><span class="af-dim-k">${esc(k)}</span><div class="af-dim-v">${
+        isDiagnosticNode(v)
+          ? renderDiagnosticDimHtml(k, v)
+          : renderAestheticsNodeHtml(v, k, 2)
+      }</div></div>`;
+    }
+    return `<div class="af-dim-row"><span class="af-dim-k">${esc(k)}</span><span class="af-dim-v">${esc(String(v))}</span></div>`;
+  });
+  return `<section class="af-dim">${head}${rows.length ? `<div class="af-dim-body">${rows.join("")}</div>` : ""}</section>`;
+}
+
 function isProseHeavyObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (isDiagnosticNode(value)) return false;
@@ -1981,6 +2349,15 @@ function isProseHeavyObject(value) {
 }
 
 function renderAfTile(title, value) {
+  // 诊断块统一走维度标题样式（不再用厚瓷砖+完备度条）
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value.结论 != null || value.完备度 != null || value.已知 != null || value.待探 != null)
+  ) {
+    return renderDiagnosticDimHtml(title, value);
+  }
   const pct = extractNodePct(value);
   const mini = pct != null ? renderMiniPctHtml(pct) : "";
   let body = "";
@@ -1988,15 +2365,7 @@ function renderAfTile(title, value) {
     body = `<span class="ws-muted">—</span>`;
   } else if (typeof value !== "object") {
     body = `<p class="af-tile-text">${esc(clampPreviewText(String(value), 100))}</p>`;
-  } else if (value.结论 != null || value.完备度 != null) {
-    const text = value.结论 != null ? String(value.结论) : "";
-    const basis = value.依据 ? `<span class="af-tile-sub">${esc(clampPreviewText(String(value.依据), 60))}</span>` : "";
-    body = `${text ? `<p class="af-tile-text">${esc(clampPreviewText(text, 90))}</p>` : ""}${basis}`;
-  } else if (value.已知 != null || value.待探 != null) {
-    body = `${value.已知 != null ? `<p class="af-tile-text">${esc(clampPreviewText(String(value.已知), 80))}</p>` : ""}
-      ${value.待探 != null && String(value.待探) !== "无" ? `<p class="af-tile-sub pending">${esc(clampPreviewText(`待探：${value.待探}`, 60))}</p>` : ""}`;
   } else {
-    // 非诊断对象不应进瓷砖；通栏回退
     return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(title)}${mini}</div>${renderAestheticsNodeHtml(value, title, 1)}</div>`;
   }
   return `<article class="af-tile"><header class="af-tile-head"><span class="af-tile-name">${esc(title)}</span>${mini}</header>${body}</article>`;
@@ -2034,12 +2403,12 @@ function renderAestheticsNodeHtml(value, keyHint, depth) {
   }
   if (Array.isArray(value)) return renderStructuredValueHtml(value, depth);
 
-  // 单点诊断：由上层 af-tile 承载；此处给非网格调用兜底
+  // 单点诊断：维度标题 + 行内完备度
   if (value.结论 != null || value.完备度 != null) {
-    return renderAfTile(keyHint || "项", value);
+    return renderDiagnosticDimHtml(keyHint || "项", value);
   }
   if (value.已知 != null || value.待探 != null) {
-    return renderAfTile(keyHint || "项", value);
+    return renderDiagnosticDimHtml(keyHint || "项", value);
   }
 
   // 美学纲领：体验内核通栏；诊断块可瓷砖；呈现要点等散文块通栏堆叠
@@ -2077,8 +2446,16 @@ function renderAestheticsNodeHtml(value, keyHint, depth) {
     return parts.join("");
   }
 
-  // 呈现要点等：子键多为长文 → 通栏 KV（标签在上）
-  if (keyHint === "呈现要点" || isProseHeavyObject(value)) {
+  // 呈现要点 / 交互范式子树：定键长文，统一自适应定义列表（不按字数硬切换行）
+  if (
+    keyHint === "呈现要点" ||
+    keyHint === "交互范式" ||
+    keyHint === "前置配置" ||
+    keyHint === "叙事视角" ||
+    keyHint === "描写权限" ||
+    keyHint === "后果与叙事控制" ||
+    isProseHeavyObject(value)
+  ) {
     return renderObjectKvHtml(value, depth);
   }
 
@@ -2087,13 +2464,13 @@ function renderAestheticsNodeHtml(value, keyHint, depth) {
   const entries = Object.entries(value).filter(([, v]) => v != null && v !== "");
   if (!entries.length) return `<span class="ws-muted">（空）</span>`;
 
-  // 仅同构短诊断块进瓷砖网格
+  // 同构评价维度：用标题切开，不用瓷砖墙
   const allDiagnostic = entries.every(([, v]) => isDiagnosticNode(v));
   if (allDiagnostic && entries.length >= 2) {
-    return `<div class="af-tile-grid">${entries.map(([k, v]) => renderAfTile(k, v)).join("")}</div>`;
+    return `<div class="af-dim-stack">${entries.map(([k, v]) => renderDiagnosticDimHtml(k, v)).join("")}</div>`;
   }
 
-  // 混合：分组标题 + 内部再网格/kv（通栏）
+  // 混合：大标题分组 + 维度块
   const nestedGroups = entries.filter(
     ([, v]) =>
       v &&
@@ -2105,12 +2482,12 @@ function renderAestheticsNodeHtml(value, keyHint, depth) {
     return `<div class="af-stack">${entries
       .map(([k, v]) => {
         if (isDiagnosticNode(v)) {
-          return renderAfTile(k, v);
+          return renderDiagnosticDimHtml(k, v);
         }
         if (v && typeof v === "object" && !Array.isArray(v)) {
-          return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(k)}</div>${renderAestheticsNodeHtml(v, k, depth + 1)}</div>`;
+          return `<section class="af-section"><h4 class="af-section-title">${esc(k)}</h4>${renderAestheticsNodeHtml(v, k, depth + 1)}</section>`;
         }
-        return `<div class="af-group af-group-wide"><div class="af-group-title">${esc(k)}</div>${renderScalarOrPctHtml(v, k)}</div>`;
+        return `<section class="af-section"><h4 class="af-section-title">${esc(k)}</h4>${renderScalarOrPctHtml(v, k)}</section>`;
       })
       .join("")}</div>`;
   }
@@ -2136,7 +2513,7 @@ function renderSelfScoreHtml(自评) {
         ? `<p class="artifact-score-note">${esc(clampPreviewText(String(d.说明), 80))}</p>`
         : "";
       if (ten == null) {
-        return `<div class="artifact-score"><div class="pct-meter-head"><span class="pct-meter-label">${esc(String(name))}</span><span class="ws-muted">未评分</span></div>${note}</div>`;
+        return `<div class="artifact-score"><span class="af-dim-k">${esc(String(name))}</span> <span class="ws-muted">未评分</span>${note}</div>`;
       }
       return `<div class="artifact-score">${renderTenMeterHtml(ten, String(name))}${note}</div>`;
     })
@@ -2146,7 +2523,7 @@ function renderSelfScoreHtml(自评) {
     weak = `<p class="artifact-weak"><span class="ws-badge ws-badge-warn">薄弱点</span> ${esc(String(自评.薄弱点))}</p>`;
   }
   if (!bars.length && !weak) return "";
-  return `<section class="artifact-block artifact-scores-block"><h4>自评</h4><div class="artifact-scores af-score-grid">${bars.join("")}</div>${weak}</section>`;
+  return `<section class="artifact-block artifact-scores-block"><h4>自评</h4><div class="artifact-scores">${bars.join("")}</div>${weak}</section>`;
 }
 
 function renderProbeHtml(追问) {
@@ -2319,6 +2696,10 @@ function renderStructuredValueHtml(value, depth) {
     if (depth > 5) {
       return `<details class="artifact-raw nested"><summary>嵌套对象</summary><pre class="json-pretty"><code>${highlightJson(JSON.stringify(value, null, 2))}</code></pre></details>`;
     }
+    // 结论/完备度块：走维度小标题，避免 KV 再拆出「完备度」行
+    if (isDiagnosticNode(value)) {
+      return renderDiagnosticDimHtml("项", value);
+    }
     return renderObjectKvHtml(value, depth);
   }
   return `<span class="artifact-scalar">${esc(String(value))}</span>`;
@@ -2370,31 +2751,52 @@ function renderArrayItemCard(item, index, depth) {
 }
 
 function renderObjectKvHtml(obj, depth) {
+  if (isDiagnosticNode(obj)) {
+    return renderDiagnosticDimHtml("项", obj);
+  }
   const entries = Object.entries(obj).filter(
     ([k, v]) => !ARTIFACT_SKIP_KEYS.has(k) && v != null && v !== "",
   );
   if (!entries.length) return `<span class="ws-muted">（空）</span>`;
+
+  // 全是评价维度 → 小标题栈
+  if (
+    entries.length >= 1 &&
+    entries.every(([, v]) => isDiagnosticNode(v))
+  ) {
+    return `<div class="af-dim-stack">${entries
+      .map(([k, v]) => renderDiagnosticDimHtml(k, v))
+      .join("")}</div>`;
+  }
+
   const rows = entries
     .map(([k, v]) => {
       const isComplex = v != null && typeof v === "object";
-      if (!isComplex) {
-        const leaf = renderScalarOrPctHtml(v, k);
-        // 百分比条自带标签，不再并排挤「完备度」键名
-        if (isPctFieldKey(k) && parseCompleteness(v) != null) {
-          return `<div class="artifact-kv-row complex"><div class="artifact-kv-val">${leaf}</div></div>`;
-        }
-        // 长文：标签在上，吃满横向宽度（避免窄列硬折行）
-        const longProse =
-          typeof v === "string" && (v.length > 40 || v.includes("\n"));
-        if (longProse) {
-          return `<div class="artifact-kv-row complex"><div class="artifact-kv-key">${esc(k)}</div><div class="artifact-kv-val">${leaf}</div></div>`;
-        }
-        return `<div class="artifact-kv-row"><div class="artifact-kv-key">${esc(k)}</div><div class="artifact-kv-val">${leaf}</div></div>`;
+      if (isComplex && isDiagnosticNode(v)) {
+        return renderDiagnosticDimHtml(k, v);
       }
-      return `<div class="artifact-kv-row complex"><div class="artifact-kv-key">${esc(k)}</div><div class="artifact-kv-val">${renderStructuredValueHtml(v, depth + 1)}</div></div>`;
+      if (!isComplex) {
+        if (isPctFieldKey(k) && parseCompleteness(v) != null) {
+          return renderAdaptiveDefHtml(k, renderInlinePctHtml(parseCompleteness(v)));
+        }
+        return renderAdaptiveDefHtml(k, renderScalarOrPctHtml(v, k));
+      }
+      // 嵌套对象：小节标题 + 内部继续自适应，不跟叶子混用两套换行规则
+      return `<section class="af-section">
+        <h4 class="af-section-title">${esc(k)}</h4>
+        ${renderStructuredValueHtml(v, depth + 1)}
+      </section>`;
     })
     .join("");
-  return `<div class="artifact-kv">${rows}</div>`;
+  return `<div class="af-def-list artifact-kv artifact-kv--adaptive">${rows}</div>`;
+}
+
+/** 标签+内容：CSS 自适应并排/折行，禁止按字数猜换行 */
+function renderAdaptiveDefHtml(key, valueHtml) {
+  return `<div class="af-def">
+    <div class="af-def-k">${esc(key)}</div>
+    <div class="af-def-v">${valueHtml}</div>
+  </div>`;
 }
 
 function isSettlementLike(doc) {
@@ -2558,8 +2960,13 @@ function renderCreationFlowView(flowView) {
       const paramsHtml = paramsText
         ? `<span class="flow-params">${esc(paramsText)}</span>`
         : "";
-      return `<li class="flow-step">
+      const runState = s.runState === "done" || s.runState === "current" ? s.runState : "pending";
+      const runLabel =
+        runState === "done" ? "已执行" : runState === "current" ? "将要执行" : "未执行";
+      const currentAttr = runState === "current" ? ' aria-current="step"' : "";
+      return `<li class="flow-step" data-run="${esc(runState)}"${currentAttr}>
         <span class="flow-order">${esc(String(s.order))}</span>
+        <span class="flow-run">${esc(runLabel)}</span>
         <span class="flow-name">${nameLabel}${occ}</span>
         ${paramsHtml}
         ${paramsMissing}
@@ -2569,7 +2976,6 @@ function renderCreationFlowView(flowView) {
     .join("");
 
   return `<section class="ws-section ws-creation-flow">
-    <h4>创作流程</h4>
     ${brief}
     ${statusHtml}
     <ol class="flow-steps">${rows}</ol>
@@ -2635,7 +3041,7 @@ function wireContextOrderEditor(root, sessionId) {
   });
 }
 
-function renderReviewFeedCard(review, opts = {}) {
+function renderReviewWorkspace(review, opts = {}) {
   const flowHtml = review.creationFlowView
     ? renderCreationFlowView(review.creationFlowView)
     : "";
@@ -2654,8 +3060,10 @@ function renderReviewFeedCard(review, opts = {}) {
       omitFocusBody: true,
     });
   }
+  const hasStructured = Boolean(structured);
   const artifactHtml = formatArtifactBodyHtml(review.body, {
-    defaultOpen: true,
+    defaultOpen: !hasStructured,
+    flat: !hasStructured,
     hideAskSidecar: opts.hideAskSidecar === true,
     asPresentFallback:
       review.workerId === "narrator" ||
@@ -2665,22 +3073,49 @@ function renderReviewFeedCard(review, opts = {}) {
   const contextId = review.sourceMessageId || review.id || "";
   const hasContext = review.contextTrace ? "1" : "0";
   const label = displayWorkerLabel(review.workerId) || "产物";
+  const copy = reviewComposerCopy(review.workerId);
+  const sourceMsg =
+    opts.sourceMessage ||
+    (review.sourceMessageId
+      ? { id: review.sourceMessageId, kind: "worker_output", branchIndex: 0, branchTotal: 1 }
+      : null);
+  // 有源消息时尽量用真实 branch 元数据；至少给出可重出入口
+  const navMsg = opts.sourceMessage
+    ? {
+        ...opts.sourceMessage,
+        kind: opts.sourceMessage.kind || "worker_output",
+      }
+    : sourceMsg
+      ? { ...sourceMsg, kind: "worker_output" }
+      : null;
+  const variantNav = navMsg ? renderVariantNavHtml(navMsg) : "";
 
   return `
-    <article class="msg msg-assistant-row msg-review" data-review="1" data-message-id="${esc(contextId)}" data-can-edit="0" data-has-context="${hasContext}">
-      <div class="msg-bubble msg-review-bubble">
-        <header class="msg-head">
-          <div class="msg-head-main">
-            <span class="msg-tag">待验收</span>
-            <span class="msg-subtitle">${esc(label)}</span>
-          </div>
-        </header>
-        ${structured ? `<div class="review-worker-set">${structured}</div>` : ""}
-        <section class="review-json-block">
-          ${artifactHtml}
-        </section>
+    <section class="workspace-review" data-review="1" data-review-kind="${esc(copy.kind)}" data-message-id="${esc(contextId)}" data-can-edit="0" data-has-context="${hasContext}">
+      <header class="workspace-review-head workspace-review-head--slim">
+        <div class="workspace-review-titles">
+          <span class="workspace-review-kicker">${esc(copy.kicker)}</span>
+          <h2 class="workspace-review-title">${esc(label)}</h2>
+        </div>
+        ${variantNav ? `<div class="workspace-review-nav">${variantNav}</div>` : ""}
+      </header>
+      ${structured ? `<div class="review-worker-set">${structured}</div>` : ""}
+      <div class="workspace-review-body review-json-block">
+        ${
+          hasStructured
+            ? `<details class="workspace-raw-details">
+        <summary>原始产物</summary>
+        <div class="workspace-raw-body">${artifactHtml}</div>
+      </details>`
+            : artifactHtml
+        }
       </div>
-    </article>`;
+    </section>`;
+}
+
+/** @deprecated 验收已迁入 workspace-stage */
+function renderReviewFeedCard(review, opts = {}) {
+  return renderReviewWorkspace(review, opts);
 }
 
 /** @deprecated 验收已在主对话；无侧栏面板 */
@@ -2709,7 +3144,8 @@ export function renderAgentPanel(view, loading) {
   if (badgeEl && view.burst) {
     const show = view.burst.count > 0 || view.phase === "running";
     badgeEl.hidden = !show;
-    badgeEl.textContent = `burst ${view.burst.count}/${view.burst.max}`;
+    badgeEl.textContent = `${view.burst.count}/${view.burst.max}`;
+    badgeEl.title = `burst ${view.burst.count}/${view.burst.max}`;
   }
 
   if (traceEl) {
@@ -2741,6 +3177,7 @@ export function renderAgentPanel(view, loading) {
     const kind = msg.kind ?? "system_info";
     if (HIDE_KINDS.has(kind)) continue;
     if (isSkillSelectionMessage(msg)) continue;
+    if (isReviewSidecarQuestionStub(msg)) continue;
     items.push({
       kind,
       title: msg.title ?? msgLabel(msg),
@@ -2774,6 +3211,245 @@ export function renderAgentPanel(view, loading) {
   timelineEl.scrollTop = timelineEl.scrollHeight;
 }
 
+function renderCoordLine(msg, view, opts = {}) {
+  const isUser = msg.role === "user";
+  const kind = msg.kind ?? (isUser ? "user_input" : "system_info");
+  const who = isUser ? "你" : msgLabel(msg);
+  const raw = msgBody(msg, view).replace(/\s+/g, " ").trim();
+  const text = raw.length > 320 ? `${raw.slice(0, 320)}…` : raw;
+  const nav = renderVariantNavHtml(msg);
+  const allMessages = view.messages ?? [];
+  const messageIndex = allMessages.findIndex((item) => item.id === msg.id);
+  const rollbackMessageId = messageIndex >= 0 ? allMessages[messageIndex + 1]?.id : null;
+  const rollbackAttr = rollbackMessageId
+    ? ` data-rollback-message-id="${esc(rollbackMessageId)}"`
+    : "";
+  const contextAttr = msg.contextTrace ? ` data-has-context="1"` : "";
+  const readOnlyAttr = opts.traceOnly ? ` data-read-only="1"` : "";
+  const trace = msg.contextTrace;
+  const traceMeta = trace
+    ? `<button type="button" class="coord-context-trigger" data-context-trigger aria-label="查看 ${esc(who)} 的完整请求上下文">
+        <span class="coord-context-label">保留上下文</span>
+        <span>${trace.messages?.length ?? 0} 段</span>
+        <span>${((trace.charCount ?? 0) / 1024).toFixed(1)} KB</span>
+      </button>
+      <div class="coord-trace-meta">
+        <span title="调用方">${esc(trace.caller || msg.tokenUsage?.caller || "unknown")}</span>
+        <span title="模型">${esc(trace.model || msg.tokenUsage?.model || "model?")}</span>
+        ${msg.tokenUsage?.totalTokens ? `<span title="本次调用 Token">${Number(msg.tokenUsage.totalTokens).toLocaleString("zh-CN")} tok</span>` : ""}
+      </div>`
+    : "";
+  const traceClass = trace ? " coord-line--trace" : "";
+  return `<div class="coord-line ${isUser ? "coord-user" : "coord-agent"}${traceClass}" data-message-id="${esc(msg.id)}" data-kind="${esc(kind)}"${rollbackAttr}${contextAttr}${readOnlyAttr}>
+    <button type="button" class="coord-line-menu" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>
+    <div class="coord-who"><span>${esc(who)}</span><span class="coord-kind">${esc(kind)}</span><span class="coord-time">${fmtTime(msg.createdAt)}</span>${nav}</div>
+    <div class="coord-text">${esc(text || "（空）")}</div>
+    ${traceMeta}
+  </div>`;
+}
+
+function getRollbackMessageId(messages, messageId) {
+  const messageIndex = messages.findIndex((item) => item.id === messageId);
+  return messageIndex >= 0 ? messages[messageIndex + 1]?.id ?? null : null;
+}
+
+/** @returns {"speak"|"answer"|"review"|"busy"|null} */
+function resolveDesignSurface(view, loading) {
+  if (view.lifecycleStage === "play") return null;
+  if (view.phase === "done") return null;
+  const busy = Boolean(loading || (view.phase === "running" && !view.waitingReason));
+  if (busy) return "busy";
+  if (view.phase === "error") return "speak";
+  if (view.waitingReason?.kind === "review_artifact" && view.reviewArtifact) {
+    return "review";
+  }
+  // 能力默认问题：说话面 + openingGuide（勿进空答题壳）
+  if (isModuleOpeningWaiting(view)) return "speak";
+  // 本轮题已收起时不排答题面，否则主区只剩空壳
+  if (
+    getActiveQuestions(view)?.questions?.length &&
+    !isQuestionCardDismissed(view)
+  ) {
+    return "answer";
+  }
+  if (
+    view.phase === "waiting_user" ||
+    view.waitingReason ||
+    view.phase === "idle"
+  ) {
+    // 已打开作品、等人开口或补充
+    if (view.bookId || view.waitingReason) return "speak";
+  }
+  return null;
+}
+
+function ensureQuestionsHostIn(parent) {
+  const host = document.getElementById("questions-card-host");
+  if (!host || !parent) return host;
+  if (host.parentElement !== parent) parent.appendChild(host);
+  return host;
+}
+
+function proposedOutputCopy(proposed) {
+  const params = proposed?.params;
+  const target =
+    params && typeof params === "object"
+      ? params.target ?? params.object ?? params["对象"] ?? params["生成对象"]
+      : null;
+  const targetText =
+    typeof target === "string" || typeof target === "number"
+      ? String(target).trim()
+      : "";
+  if (targetText) {
+    return `将生成「${targetText}」的${proposed.name}。`;
+  }
+  return `接下来将生成：${proposed?.name || "下一项内容"}。`;
+}
+
+function renderSpeakWorkspace(view) {
+  const wr = view.waitingReason;
+  const guide = view.openingGuide;
+  const moduleOpening = isModuleOpeningWaiting(view);
+  const openingText = moduleOpening
+    ? (guide?.text || getModuleOpeningPrompt(view) || "").trim()
+    : guide?.text &&
+        !hasUserMessages(view) &&
+        view.lifecycleStage !== "play"
+      ? String(guide.text).trim()
+      : "";
+  const showOpening = Boolean(openingText);
+
+  let title = "继续说";
+  let hint = "在底栏输入你的想法。";
+  let guideHtml = "";
+
+  if (showOpening) {
+    title = guide?.stepName || (moduleOpening ? "按引导先说几句" : "开局");
+    hint = moduleOpening
+      ? "按下面几点先说几句即可，不必整齐；写完发送后继续产出。"
+      : "按下面几点先说几句即可，不必整齐。";
+    guideHtml = `<div class="workspace-opening-guide">${esc(openingText)}</div>`;
+  } else if (moduleOpening) {
+    // 兜底：waiting 已识别为默认问题，但题干缺失
+    title = guide?.stepName || "按引导先说几句";
+    hint = "想到什么写什么，写完发送即可。";
+  } else if (view.phase === "error") {
+    title = "说明后重试";
+    hint = view.hints?.[0] ?? "说明问题或直接发送继续。";
+  } else if (wr?.kind === "intake") {
+    const hasUser = hasUserMessages(view);
+    title = hasUser ? "继续补充" : "描述你想创作什么";
+    hint = hasUser
+      ? "继续说细节；信息齐后可确认。"
+      : "用几句话说明题材、玩法或爽点即可。";
+  } else if (wr?.kind === "revision") {
+    title = "说明修改意见";
+    hint = "写清楚要改哪里；发送后在现有产物上修改。";
+  } else if (wr?.kind === "next_intent") {
+    title = "下一步想写什么";
+    hint = "说说接下来想做什么；可留空，发送后会展示下一节点供确认。";
+  } else if (wr?.kind === "approve_step") {
+    title = view.proposedNextStep?.name
+      ? `接下来生成 · ${view.proposedNextStep.name}`
+      : "确认下一步";
+    hint = view.proposedNextStep
+      ? proposedOutputCopy(view.proposedNextStep)
+      : view.focus?.detail || "确认执行，或在底栏说明意见。";
+  } else if (wr?.kind === "input") {
+    title = "继续说";
+    hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
+  } else if (view.uiPrompt && !hasUserMessages(view)) {
+    title = "描述你想创作什么";
+    hint = String(view.uiPrompt).trim().slice(0, 280);
+  }
+  const recipe =
+    view.selectedRecipe?.name && !hasUserMessages(view)
+      ? `<p class="workspace-intent-meta">配方：${esc(view.selectedRecipe.name)}</p>`
+      : "";
+  const intake =
+    wr?.kind === "intake" && view.intake?.fields?.length && hasUserMessages(view)
+      ? `<div class="intake-panel">${renderIntakePanel(view.intake, { variant: "feed" })}</div>`
+      : "";
+  return `<section class="workspace-intent">
+    <span class="workspace-surface-kicker">说话</span>
+    <h2 class="workspace-intent-title">${esc(title)}</h2>
+    <p class="workspace-intent-hint">${esc(hint)}</p>
+    ${recipe}
+    ${guideHtml}
+    ${intake}
+  </section>`;
+}
+
+function renderAnswerWorkspaceShell() {
+  return `<section class="workspace-answer" id="workspace-answer-slot">
+    <header class="workspace-answer-head workspace-answer-head--slim">
+      <span class="workspace-surface-kicker">答题</span>
+      <p class="workspace-answer-hint">点字母选中，文案可改；点卡片展开，点顶条收起。</p>
+    </header>
+  </section>`;
+}
+
+function fillCoordRail(visible, view, handlers) {
+  const coordRail = document.getElementById("coord-rail");
+  const drawerBody = document.getElementById("coord-drawer-body");
+  const drawerCount = document.getElementById("coord-drawer-count");
+  if (!coordRail) return;
+  const visibleIds = new Set(visible.map((message) => message.id));
+  const history = (view.messages ?? []).filter((message) => {
+    if (isReviewSidecarQuestionStub(message)) return false;
+    return visibleIds.has(message.id) || Boolean(message.contextTrace);
+  });
+  const traceCount = history.filter((message) => message.contextTrace).length;
+  coordRail.hidden = false;
+  if (drawerBody) {
+    drawerBody.innerHTML = history.length
+      ? history
+          .map((m) => renderCoordLine(m, view, { traceOnly: !visibleIds.has(m.id) }))
+          .join("")
+      : `<p class="coord-empty">暂无对话摘要</p>`;
+    wireMessageFeedActions(drawerBody, handlers);
+    wireMessageContextMenu(drawerBody, handlers);
+  }
+  if (drawerCount) {
+    drawerCount.textContent = history.length ? String(history.length) : "";
+    drawerCount.title = traceCount ? `${traceCount} 条保留了完整请求上下文` : "";
+  }
+  syncCoordRailChrome();
+}
+
+function resolveReviewSourceMessage(view) {
+  const id = view?.reviewArtifact?.sourceMessageId;
+  if (!id) return null;
+  const found = (view.messages ?? []).find((m) => m.id === id);
+  if (found) return found;
+  return {
+    id,
+    role: "system",
+    kind: "worker_output",
+    branchIndex: 0,
+    branchTotal: 1,
+  };
+}
+
+function mountReviewWorkspace(stage, view, handlers, opts = {}) {
+  if (!stage || !view.reviewArtifact) return;
+  stage.hidden = false;
+  const askSlot = opts.mountAskCard
+    ? `<div class="workspace-review-ask" id="workspace-review-ask" aria-label="基于本产物的追问"></div>`
+    : "";
+  stage.innerHTML =
+    renderReviewWorkspace(view.reviewArtifact, {
+      hideAskSidecar: opts.hideAskSidecar === true,
+      sourceMessage: resolveReviewSourceMessage(view),
+    }) + askSlot;
+  wireMessageFeedActions(stage, handlers);
+  wireMessageContextMenu(stage, handlers);
+  if (opts.mountAskCard) {
+    const askHost = document.getElementById("workspace-review-ask");
+    if (askHost) ensureQuestionsHostIn(askHost);
+  }
+}
+
 export function renderMessageFeed(view, loading, handlers = {}) {
   const feed = document.getElementById("message-feed");
   if (!feed) return;
@@ -2782,17 +3458,54 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     return;
   }
 
+  wireCoordRailChrome();
+
+  const stage = document.getElementById("workspace-stage");
+  const panelFeed = document.getElementById("panel-feed");
+  const coordRail = document.getElementById("coord-rail");
+  const surface = resolveDesignSurface(view, loading);
+  const designWorkspace = surface != null;
   const reviewingNow =
     view.waitingReason?.kind === "review_artifact" && Boolean(view.reviewArtifact);
+
   document.body.classList.toggle("is-reviewing", reviewingNow);
+  document.body.classList.toggle("design-workspace", designWorkspace);
+  if (reviewingNow) {
+    document.body.dataset.reviewKind = reviewComposerCopy(
+      view.reviewArtifact?.workerId,
+    ).kind;
+  } else {
+    delete document.body.dataset.reviewKind;
+  }
+  if (designWorkspace) {
+    document.body.dataset.designSurface = surface;
+    syncCoordRailChrome();
+  } else {
+    document.body.classList.remove("coord-rail-collapsed");
+    delete document.body.dataset.designSurface;
+  }
 
   const intake =
     view.waitingReason?.kind === "intake" && view.intake?.fields?.length;
-  const showIntakePanel = intake && hasUserMessages(view);
+  const activeQuestions = getActiveQuestions(view);
 
   feed.innerHTML = "";
+  if (stage) {
+    stage.hidden = true;
+    stage.innerHTML = "";
+  }
+  if (coordRail) {
+    coordRail.hidden = true;
+    const drawerBody = document.getElementById("coord-drawer-body");
+    const drawerCount = document.getElementById("coord-drawer-count");
+    if (drawerBody) drawerBody.innerHTML = "";
+    if (drawerCount) drawerCount.textContent = "";
+  }
+  // 默认把询问卡停回主列底部槽位
+  if (panelFeed) ensureQuestionsHostIn(panelFeed);
 
-  if (showIntakePanel) {
+  const showIntake = intake && hasUserMessages(view);
+  if (showIntake && !designWorkspace) {
     const box = document.createElement("div");
     box.className = "intake-panel";
     box.innerHTML = renderIntakePanel(view.intake, { variant: "feed" });
@@ -2801,33 +3514,77 @@ export function renderMessageFeed(view, loading, handlers = {}) {
 
   const visible = (view.messages ?? []).filter((m) => shouldShowInFeed(m, view));
 
-  if (!visible.length && !loading) {
-    const reviewing =
-      view.waitingReason?.kind === "review_artifact" && view.reviewArtifact;
-    if (!reviewing) {
-      const p = document.createElement("p");
-      p.className = "empty";
-      if (view.lifecycleStage === "play") {
-        p.textContent = "游玩模式：Agent 将按 Worker 集调度，推进世界与叙事。";
-      } else if (view.uiPrompt) {
-        const recipeLine = view.selectedRecipe?.name
-          ? `\n\n已选配方：${view.selectedRecipe.name}`
-          : view.recipes?.length
-            ? "\n\n（请先在新建作品时选定配方）"
-            : "";
-        p.textContent = `${view.uiPrompt}${recipeLine}`;
-        p.classList.add("empty-intake");
-      } else if (view.waitingReason?.kind === "worker_questions") {
-        p.textContent = "在下方回答 Skill 的提问。";
-      } else if (intake) {
-        p.textContent = "在下方描述你想创作什么；Agent 会收成 Worker 集供你验收。";
-      } else {
-        p.textContent = "在下方继续对话。";
-      }
-      p.classList.add("empty-intake");
-      feed.appendChild(p);
+  // —— 创作伪 0 层：主柱随任务换，历史进右侧 ——
+  if (designWorkspace) {
+    fillCoordRail(visible, view, handlers);
+
+    if (!stage) return;
+
+    if (surface === "busy" || loading) {
+      stage.hidden = false;
+      const live = view.liveStream;
+      const label = live?.label ?? view.focus?.action ?? "处理中";
+      stage.innerHTML = `
+        <div class="workspace-pending" id="msg-live-pending">
+          <header class="workspace-pending-head">
+            <span class="msg-tag">${esc(label)}</span>
+            <span class="msg-live-indicator">流式输出中</span>
+          </header>
+          <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
+        </div>`;
       return;
     }
+
+    if (surface === "review" && view.reviewArtifact) {
+      const hasHungAsk = Boolean(activeQuestions?.questions?.length);
+      mountReviewWorkspace(stage, view, handlers, {
+        hideAskSidecar: hasHungAsk,
+        mountAskCard: hasHungAsk,
+      });
+      // 无挂载追问时询问卡停回主列底部；有则已嵌在产物下方
+      if (!hasHungAsk && panelFeed) ensureQuestionsHostIn(panelFeed);
+      return;
+    }
+
+    if (surface === "answer") {
+      stage.hidden = false;
+      stage.innerHTML = renderAnswerWorkspaceShell();
+      const slot = document.getElementById("workspace-answer-slot");
+      if (slot) ensureQuestionsHostIn(slot);
+      return;
+    }
+
+    // speak（含 approve / intake / revision / error）
+    stage.hidden = false;
+    stage.innerHTML = renderSpeakWorkspace(view);
+    if (panelFeed) ensureQuestionsHostIn(panelFeed);
+    return;
+  }
+
+  // —— 游玩：保持原对话流 ——
+  if (!visible.length && !loading) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    if (view.lifecycleStage === "play") {
+      p.textContent = "游玩模式：Agent 将按 Worker 集调度，推进世界与叙事。";
+    } else if (view.uiPrompt) {
+      const recipeLine = view.selectedRecipe?.name
+        ? `\n\n已选配方：${view.selectedRecipe.name}`
+        : view.recipes?.length
+          ? "\n\n（请先在新建作品时选定配方）"
+          : "";
+      p.textContent = `${view.uiPrompt}${recipeLine}`;
+      p.classList.add("empty-intake");
+    } else if (view.waitingReason?.kind === "worker_questions") {
+      p.textContent = "在下方回答提问。";
+    } else if (intake) {
+      p.textContent = "在下方描述你想创作什么；Agent 会收成 Worker 集供你验收。";
+    } else {
+      p.textContent = "在下方继续对话。";
+    }
+    p.classList.add("empty-intake");
+    feed.appendChild(p);
+    return;
   }
 
   for (const msg of visible) {
@@ -2837,6 +3594,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     const card = document.createElement("article");
     card.className = `msg ${MSG_CLASS[kind] ?? "system"}${isUser ? " msg-user-row" : " msg-assistant-row"}`;
     card.dataset.messageId = msg.id;
+    const rollbackMessageId = getRollbackMessageId(view.messages ?? [], msg.id);
+    if (rollbackMessageId) card.dataset.rollbackMessageId = rollbackMessageId;
 
     const label = msgLabel(msg);
     const subtitle = (msg.title ?? "").trim();
@@ -2854,26 +3613,31 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         </div>
         ${renderMsgVariantBadge(msg)}
         <span class="msg-time">${fmtTime(msg.createdAt)}</span>`;
+    const menuTrigger = `<button type="button" class="msg-menu-trigger" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>`;
 
     card.dataset.canEdit = canEditMessage(msg) ? "1" : "0";
     card.dataset.hasContext = msg.contextTrace ? "1" : "0";
     card.dataset.originalText = body;
 
+    const questionsActive = kind === "worker_questions" && Boolean(activeQuestions);
+    const showThinking =
+      !isUser && msg.thinking && view.lifecycleStage === "play";
+    const bodyHtml = questionsActive
+      ? `<p class="msg-q-index">${esc(body)}</p>`
+      : kind === "worker_questions"
+        ? formatQuestionsHtml(body)
+        : kind === "worker_output"
+          ? formatArtifactBodyHtml(body)
+          : shouldRenderPlayPresent(msg, view)
+            ? formatPlayPresentHtml(body, view)
+            : esc(body);
+
     card.innerHTML = `
-      <div class="msg-bubble">
-        ${!isUser && kind === "worker_questions" ? `<div class="msg-questions-banner">需要你回答</div>` : ""}
-        ${isUser ? "" : `<header class="msg-head">${headInner}</header>`}
-        ${!isUser && msg.thinking ? renderThinkingBlock(msg.thinking) : ""}
-        <div class="msg-body">${
-          kind === "worker_questions"
-            ? formatQuestionsHtml(body)
-            : kind === "worker_output"
-              ? formatArtifactBodyHtml(body)
-              : shouldRenderPlayPresent(msg, view)
-                ? formatPlayPresentHtml(body, view)
-                : esc(body)
-        }</div>
-        ${isUser ? `<footer class="msg-foot">${headInner}</footer>` : ""}
+      <div class="msg-bubble${questionsActive ? " msg-bubble-index" : ""}">
+        ${isUser ? "" : `<header class="msg-head">${headInner}${menuTrigger}</header>`}
+        ${showThinking ? renderThinkingBlock(msg.thinking) : ""}
+        <div class="msg-body">${bodyHtml}</div>
+        ${isUser ? `<footer class="msg-foot">${headInner}${menuTrigger}</footer>` : ""}
       </div>`;
     feed.appendChild(card);
   }
@@ -2881,17 +3645,12 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   wireMessageFeedActions(feed, handlers);
   wireMessageContextMenu(feed, handlers);
 
-  if (
-    view.waitingReason?.kind === "review_artifact" &&
-    view.reviewArtifact &&
-    !loading
-  ) {
-    const wrap = document.createElement("div");
-    wrap.innerHTML = renderReviewFeedCard(view.reviewArtifact, {
-      hideAskSidecar: Boolean(getActiveQuestions(view)),
+  if (reviewingNow && view.reviewArtifact && !loading && stage) {
+    const hasHungAsk = Boolean(activeQuestions?.questions?.length);
+    mountReviewWorkspace(stage, view, handlers, {
+      hideAskSidecar: hasHungAsk,
+      mountAskCard: hasHungAsk,
     });
-    const card = wrap.firstElementChild;
-    if (card) feed.appendChild(card);
   }
 
   if (loading) {
@@ -2903,12 +3662,13 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     pending.innerHTML = `
       <div class="msg-bubble">
         <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span></header>
-        <div class="msg-body msg-live-body">${renderLiveStreamBody(live)}</div>
+        <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
       </div>`;
     feed.appendChild(pending);
   }
 
   feed.scrollTop = feed.scrollHeight;
+  if (stage && !stage.hidden) stage.scrollTop = 0;
 }
 
 /** 轮询时仅更新流式 pending 卡片，避免整页重绘 */
@@ -2920,9 +3680,16 @@ export function updateLiveStreamPanel(view) {
   const live = view.liveStream;
   const labelEl = pending.querySelector(".msg-tag");
   if (labelEl && live?.label) labelEl.textContent = live.label;
-  body.innerHTML = renderLiveStreamBody(live);
+  const next = renderLiveStreamBody(live, view);
+  const hadThinking = Boolean(body.querySelector(".msg-live-pre"));
+  if (next === "…" && hadThinking) return;
+  body.innerHTML = next;
+  const pre = body.querySelector(".msg-live-pre:last-of-type");
+  if (pre) pre.scrollTop = pre.scrollHeight;
   const feed = document.getElementById("message-feed");
-  if (feed) feed.scrollTop = feed.scrollHeight;
+  if (feed && !document.body.classList.contains("design-workspace")) {
+    feed.scrollTop = feed.scrollHeight;
+  }
 }
 
 export function renderBoardPanel(view) {
@@ -2999,13 +3766,16 @@ export function renderBoardPanel(view) {
 export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
   renderLifecycle(view);
   renderSkillPicker(view);
+  // 先铺主柱（可能把询问卡移进答题槽），再渲染卡
+  renderMessageFeed(view, loading, handlers);
   const qHost = document.getElementById("questions-card-host");
   if (qHost) {
     renderQuestionsCard(qHost, view, {
       onSkipQuestions: () => handlers.onSkipQuestions?.(),
+      onAnswersChange: () => handlers.onQuestionAnswersChange?.(),
+      onCardEnter: () => handlers.onQuestionCardEnter?.(),
     });
   }
-  renderMessageFeed(view, loading, handlers);
   renderAgentPanel(view, loading);
 }
 

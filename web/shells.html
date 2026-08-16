@@ -28,44 +28,42 @@
 
     <div class="st-shell shells-shell">
       <aside class="st-rail" aria-label="壳列表">
-        <p class="st-rail-label">呈现壳</p>
+        <p class="st-rail-label">选壳</p>
+        <p class="st-rail-hint">按「要同时看见什么」选，不是按好看选。</p>
         <nav class="shells-list" id="shell-list" role="tablist"></nav>
-        <p class="st-rail-label shells-tone-label">装饰语气</p>
-        <div class="shells-tones" id="tone-list" role="group" aria-label="tone_chrome"></div>
-        <p class="st-rail-label shells-tone-label">正文长度</p>
-        <div class="shells-tones" id="length-list" role="group" aria-label="body length"></div>
         <p class="st-rail-note">
-          正文按 600~3000 字设计：随字数撑高、页面滚动；侧栏/选择坞钉住。创作只改内容绑定。
+          主任务永远是读正文（常 600~3000 字）。侧栏只换壳；长度/语气在预览顶栏。
         </p>
       </aside>
 
-      <main class="st-main">
-        <header class="st-main-head">
-          <div>
-            <h1 id="panel-title">呈现壳预览</h1>
-            <p class="st-sub" id="panel-subtitle">用示例数据看布局与可调项</p>
+      <main class="st-main shells-main">
+        <div class="shells-toolbar" role="toolbar" aria-label="预览条件">
+          <div class="shells-toolbar-block">
+            <span class="shells-toolbar-label" id="length-label">正文长度</span>
+            <div class="shells-tones" id="length-list" role="group" aria-labelledby="length-label"></div>
           </div>
-        </header>
-        <div class="st-body shells-body">
-          <section class="shells-meta" id="shell-meta"></section>
-          <section class="shells-preview-wrap">
-            <h2 class="shells-preview-label">预览</h2>
-            <div id="shell-preview" class="shells-preview"></div>
-          </section>
-          <section class="shells-tweaks">
-            <h2>本页可调（对应创作「微调轴」）</h2>
-            <div class="shells-tweak-grid" id="tweak-controls"></div>
-          </section>
-          <section class="shells-help">
-            <h2>设计意图</h2>
-            <ul>
-              <li>正文默认装得下单轮 <strong>600~3000 字</strong>：区域随内容长高，由页面/消息区滚动，不塞进固定小框。</li>
-              <li>双栏壳：侧栏 sticky；选择坞：选项区 sticky 贴底——长文读完控件还在。</li>
-              <li>壳差在「谁占主柱」；可改的是字段/显示名/行动开关/tone，不是重画布局。</li>
-            </ul>
-            <p class="muted">说明文档：<code>docs/play-presentation-shells.md</code></p>
-          </section>
+          <div class="shells-toolbar-block">
+            <span class="shells-toolbar-label" id="tone-label">语气</span>
+            <div class="shells-tones" id="tone-list" role="group" aria-labelledby="tone-label"></div>
+          </div>
+          <div class="shells-toolbar-block shells-toolbar-meta" id="shell-meta"></div>
         </div>
+
+        <section class="shells-preview-wrap" aria-label="壳预览主工作面">
+          <div id="shell-preview" class="shells-preview"></div>
+        </section>
+
+        <details class="shells-details">
+          <summary>微调轴与说明</summary>
+          <div class="shells-details-body">
+            <div class="shells-tweak-grid" id="tweak-controls"></div>
+            <ul class="shells-help-list">
+              <li>主工作面 = 上面的壳。读长文时正文撑高，页面滚动；侧栏 / 选择坞钉住。</li>
+              <li>壳差在「必须同时看见什么」：只正文 / 正文+状态 / 正文+线索 / 正文+选项…</li>
+              <li>创作只改字段绑定与显示名，不发明新布局。文档：<code>docs/play-presentation-shells.md</code></li>
+            </ul>
+          </div>
+        </details>
       </main>
     </div>
 

@@ -2,9 +2,14 @@
  * 结构化询问卡：点字母选中，点文案编辑；左右分页。
  * 询问是对同一次发送的可选增强：有选中则问+答拼接；未选中则不带问。
  * 点发送即答复 → 收起本轮卡（卡上无独立发送钮）。
- * 产物验收挂载题：底栏有字优先按「改产物」发送；无字时才提交所选答案。
+ * 产物验收挂载题：选项 + 底栏意见一并随「按意见修改」写回产物；空内容点该钮不等于接受。
  * 分页 / 跳过为悬浮控件，不占独立 header/footer 行。
+ *
+ * 能力「默认问题」(id=module-opening) 不是追问：对齐美学纲领开局，走说话面 + openingGuide。
  */
+
+/** 与 phase-runtime maybeAskModuleOpening 写入的 id 对齐 */
+export const MODULE_OPENING_QUESTION_ID = "module-opening";
 
 function esc(s) {
   return String(s ?? "")
@@ -12,6 +17,22 @@ function esc(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** 当前等待是否为能力默认问题（应呈现为开场引导，而非答题卡） */
+export function isModuleOpeningWaiting(view) {
+  const wr = view?.waitingReason;
+  if (wr?.kind !== "worker_questions" || !Array.isArray(wr.questions)) return false;
+  const qs = normalizeQuestions(wr.questions);
+  return qs.length === 1 && qs[0].id === MODULE_OPENING_QUESTION_ID;
+}
+
+/** 取出默认问题正文（供 openingGuide / 说话面展示） */
+export function getModuleOpeningPrompt(view) {
+  if (!isModuleOpeningWaiting(view)) return null;
+  const qs = normalizeQuestions(view.waitingReason.questions);
+  const prompt = qs[0]?.prompt?.trim();
+  return prompt || null;
 }
 
 function normalizeQuestions(raw) {
@@ -64,6 +85,8 @@ export function getActiveQuestions(view) {
   // 默认每页 1 题，左右切换；勿一次堆多题
   const pageSize = Math.max(1, Number(wr.pageSize) || 1);
   if (wr.kind === "worker_questions" && wr.questions?.length) {
+    // 能力默认问题：不进答题卡（与美学纲领 openingGuide 同形）
+    if (isModuleOpeningWaiting(view)) return null;
     return {
       questions: normalizeQuestions(wr.questions),
       workerId: wr.workerId,
@@ -112,6 +135,18 @@ export function getActiveQuestions(view) {
     };
   }
   return null;
+}
+
+/**
+ * 本轮题是否已答复收起（卡不会再画出来）。
+ * 此时若仍把主区排成答题面，用户只会看到一片空壳。
+ */
+export function isQuestionCardDismissed(view, host) {
+  const el = host ?? document.getElementById("questions-card-host");
+  const active = getActiveQuestions(view);
+  if (!el?._qDismissed || !active?.questions?.length) return false;
+  const key = JSON.stringify(active.questions.map((q) => q.id));
+  return el._qDismissed.sessionId === view?.id && el._qDismissed.key === key;
 }
 
 function persistDraftsFromDom(host, state) {
@@ -224,7 +259,9 @@ export function clearQuestionCardState(host, view) {
   host._qState = null;
   host.hidden = true;
   host.innerHTML = "";
-  host.classList.remove("is-open");
+  host.classList.remove("is-open", "is-expanded", "has-pager", "has-skip");
+  host.removeAttribute("role");
+  host.removeAttribute("aria-label");
 }
 
 /**
@@ -238,7 +275,9 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
   if (!active?.questions?.length) {
     host.hidden = true;
     host.innerHTML = "";
-    host.classList.remove("is-open");
+    host.classList.remove("is-open", "is-expanded", "has-pager", "has-skip");
+    host.removeAttribute("role");
+    host.removeAttribute("aria-label");
     host._qDismissed = null;
     return false;
   }
@@ -251,7 +290,9 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
   ) {
     host.hidden = true;
     host.innerHTML = "";
-    host.classList.remove("is-open");
+    host.classList.remove("is-open", "is-expanded", "has-pager", "has-skip");
+    host.removeAttribute("role");
+    host.removeAttribute("aria-label");
     return false;
   }
 
@@ -264,11 +305,14 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
         sessionId: view.id,
         key: qKey,
         page: 0,
+        expanded: false,
         // questionId -> { optionId?, text, otherText? }
         answers: {},
         drafts: {}, // option key -> edited label
       };
+  if (typeof state.expanded !== "boolean") state.expanded = false;
   host._qState = state;
+  host.classList.toggle("is-expanded", state.expanded);
 
   const { questions, pageSize, assessment, optional, skipLabel, dismissOnAccept } =
     active;
@@ -303,20 +347,24 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
     ? `<button type="button" class="qcard-skip" data-qskip title="Esc">${esc(skipLabel || "跳过")}</button>`
     : "";
 
-  const chromeClass = [
-    "qcard",
+  const chromeMods = [
     pageCount > 1 ? "has-pager" : "",
     optional ? "has-skip" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].filter(Boolean);
+
+  host.classList.remove("has-pager", "has-skip");
+  for (const c of chromeMods) host.classList.add(c);
+  host.setAttribute("role", "dialog");
+  host.setAttribute("aria-label", "询问");
 
   host.innerHTML = `
-    <div class="${chromeClass}" role="dialog" aria-label="询问">
       <div class="qcard-float">
         ${pagerHtml}
         ${skipHtml}
       </div>
+      <button type="button" class="qcard-top" data-qtop title="${state.expanded ? "点击收起" : "点击展开"}" aria-label="${state.expanded ? "收起询问卡" : "展开询问卡"}">
+        <span class="qcard-top-grip" aria-hidden="true"></span>
+      </button>
       <div class="qcard-body">
         ${dismissNote}
         ${assessmentHtml}
@@ -364,8 +412,43 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
             </section>`;
           })
           .join("")}
-      </div>
-    </div>`;
+      </div>`;
+
+  const setExpanded = (next) => {
+    state.expanded = next;
+    host.classList.toggle("is-expanded", next);
+    const top = host.querySelector("[data-qtop]");
+    if (top) {
+      top.title = next ? "点击收起" : "点击展开";
+      top.setAttribute("aria-label", next ? "收起询问卡" : "展开询问卡");
+    }
+  };
+
+  host.querySelector("[data-qtop]")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpanded(!state.expanded);
+  });
+
+  host.querySelector(".qcard-body")?.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    if (
+      t.closest(
+        ".qcard-letter, .qcard-other-input, [contenteditable=true], .qcard-nav, .qcard-skip, .qcard-pager",
+      )
+    ) {
+      return;
+    }
+    // 展开后点题干 / 评估区收起；收起时点内容区展开
+    if (state.expanded) {
+      if (t.closest(".qcard-prompt, .qcard-assessment, .qcard-optional-note")) {
+        setExpanded(false);
+      }
+      return;
+    }
+    setExpanded(true);
+  });
 
   host.querySelector("[data-qskip]")?.addEventListener("click", () => {
     _handlers.onSkipQuestions?.();
@@ -401,17 +484,37 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
         text = (labelEl?.textContent ?? state.drafts[draftKey] ?? "").trim();
         state.answers[qid] = { optionId: oid, text };
       }
-      renderQuestionsCard(host, view, _handlers);
+      // 只切换选中态，避免整卡 innerHTML 重绘把 .qcard-body 滚回顶部
+      section.querySelectorAll(".qcard-opt").forEach((li) => {
+        li.classList.toggle("is-selected", li.getAttribute("data-oid") === oid);
+      });
+      if (!state.expanded) setExpanded(true);
+      _handlers.onAnswersChange?.();
     });
+  });
+
+  host.querySelectorAll("[data-other]").forEach((el) => {
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      persistDraftsFromDom(host, state);
+      el.blur();
+      _handlers.onCardEnter?.();
+    });
+    el.addEventListener("input", () => _handlers.onAnswersChange?.());
   });
 
   host.querySelectorAll("[data-draft]").forEach((el) => {
     el.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        el.blur();
-      }
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      persistDraftsFromDom(host, state);
+      const key = el.getAttribute("data-draft");
+      if (key) state.drafts[key] = el.textContent ?? "";
+      el.blur();
+      _handlers.onCardEnter?.();
     });
+    el.addEventListener("input", () => _handlers.onAnswersChange?.());
     el.addEventListener("blur", () => {
       const key = el.getAttribute("data-draft");
       if (key) state.drafts[key] = el.textContent ?? "";

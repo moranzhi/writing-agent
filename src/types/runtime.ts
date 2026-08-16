@@ -51,7 +51,13 @@ export type WaitingReason =
       questions: QuestionItem[];
       pageSize?: number;
     } // worker 无产物时的阻塞提问
-  | { kind: "revision"; instruction?: string }; // 产物被拒或程序验收失败
+  | { kind: "revision"; instruction?: string } // 无意见打回时等补交；有意见则直接重跑
+  | {
+      /** 上一步已验收：先问「下一步想写什么」（可留空），再提案并确认开干 */
+      kind: "next_intent";
+      afterWorkerId?: string;
+      afterUnitId?: string;
+    };
 
 /** 与 src/skills/types 对齐的最小 skill 索引字段，避免 runtime 强依赖 skills 模块 */
 export type SkillIndexEntry = {
@@ -250,6 +256,11 @@ export type RuntimeEvent =
       };
     }
   | {
+      /** 按意见重跑没写出新产物：退回上一版产物验收，重试追问改挂为可选 */
+      type: "worker_revision_produced_nothing";
+      payload: { artifactId: string; questions?: QuestionItem[] | string[] };
+    }
+  | {
       /** 验收态下作答/跳过挂载追问：不离开 review_artifact */
       type: "user_resolved_sidecar_questions";
       payload: { answersText?: string };
@@ -316,7 +327,9 @@ export type PhaseEffect =
     }
   | { type: "resume_worker" }
   | { type: "run_programmatic_review"; artifactId: string }
-  | { type: "emit_message"; message: string };
+  | { type: "emit_message"; message: string }
+  /** 根据流程与用户下一步意向，提案下一节点并进入确认 */
+  | { type: "propose_next_creation_step" };
 
 /** applyEvent 的返回值：新会话快照 + 待处理副作用 + 可选错误 */
 export type ApplyEventResult = {
