@@ -4,8 +4,13 @@
 # name = 固定中文名（流程 JSON 的 name；同能力可多次时靠 step.id 区分）
 # declaration = catalog 短声明（可被 prompt.md ```meta 覆盖）
 # artifact = 执行期产物 tag（程序映射；不写进流程 JSON）
-# repeatable = true 时允许同能力多次编入增量 DAG（如生成规则、具体实例）
-# params = 可选；编排进 DAG 时 steps[].params 的声明（required 须在执行前钉齐）
+# repeatable = true 时允许同能力多次**新建**编入增量 DAG（如生成规则、具体实例）。
+# 回头修改已完成节点不是 repeatable：DAG 用 mode=revise + revises，继承旧产物。
+# closer = true 时为创作终节点：选定后程序落库、关 DAG、保存定稿
+# auto = true 时为程序步：不抛默认问题、不经「同意并开始」，提案后直接执行（产物仍验收）
+# kind = 节点特性。缺省=普通执行步。prior-artifact=先验产物（须先定写什么；params 是规划产物，不拦执行）
+# params = 可选；普通节点=编排进 DAG 时 steps[].params 的声明（required 须在执行前钉齐）
+#          〔先验产物〕=规划产物字段（可提前填，空则步内钉）
 # opening = 可选；覆盖 prompt.md 里 ```opening 默认问题（一般只写在 prompt.md）
 #
 # 编排选型：程序会读取各 modules/{id}/prompt.md 的 meta
@@ -15,8 +20,10 @@
 # 后来写能力：同结构 prompt.md（含默认问题）+ 本表一行索引
 #
 # 世界模拟器常用能力见下「体验→世界→机制→呈现→收成」；编排按需选用，勿默认全选。
-# 流程是可变增量 DAG：勿一次排完全程；可反复调用标了 repeatable 的能力。
-# 有编排参数的能力：DAG 步骤必须是带 params 的具体调用，禁止空壳进 design-step。
+# 流程是可变增量 DAG：勿一次排完全程；可反复调用标了 repeatable 的能力（每次=彻底新建）。
+# 已完成节点要改：编排 mode=revise（继承旧稿），不要再排一条 fresh。
+# 有编排参数的普通能力：DAG 步骤必须是带 params 的具体调用，禁止空壳进 design-step。
+# 〔先验产物〕例外：params 是规划产物，可空；「写什么」在步内钉。
 
 modules:
   # —— 体验契约 ——
@@ -37,6 +44,7 @@ modules:
 
   - id: generation-rules
     name: 生成规则
+    kind: prior-artifact
     repeatable: true
     declaration: >-
       仅当某类内容既重要又无法凭基底稳定生成时：写出规则
@@ -45,19 +53,17 @@ modules:
     params:
       - key: target
         label: 生成对象
-        required: true
-        hint: 本轮为哪一类内容建规则；编排时 askUser 给选项+其它；用户改对象时必须同步改 rule_id 与步骤 id
+        hint: 规划字段；编排器已知写哪一类就填。空则步内钉
       - key: rule_id
         label: 规则 id
-        required: false
-        hint: 英文 kebab-case，须与 target 对应（女租客→female-tenants，丧尸→zombies）；改对象时禁止沿用旧 id
+        hint: 英文 kebab-case，须与 target 对应（女租客→female-tenants）；改对象时禁止沿用旧 id
       - key: lifecycle_intent
         label: 生命周期意图
-        required: false
-        hint: runtime_only | seed_only | seed_and_runtime；不明则 askUser
+        hint: runtime_only | seed_only | seed_and_runtime；不明则步内钉
 
   - id: concrete-instances
     name: 具体实例
+    kind: prior-artifact
     repeatable: true
     declaration: >-
       按预生成规则原样产出实际产物；不设计、不改合同；可按 rule_id/批次反复调用
@@ -65,15 +71,12 @@ modules:
     params:
       - key: rule_id
         label: 调用规则
-        required: true
-        hint: 必须来自已验收生成规则中 seed_only/seed_and_runtime 的真实 rule_id；编排时给选项
+        hint: 规划字段；须来自已验收生成规则中 seed_only/seed_and_runtime 的 rule_id。空则步内钉
       - key: batch_goal
         label: 批次目标
-        required: false
         hint: 本批要锚定什么（如开局重要NPC）
       - key: count
         label: 数量
-        required: false
         hint: 数字或「按规则」；contextual 时写清规模依据
 
   - id: narrative
@@ -127,9 +130,10 @@ modules:
   # —— 开局（创作偏晚） ——
   - id: opening-setup
     name: 开场白与开场变量
+    closer: true
     declaration: >-
-      写出遵循正文组成/叙事等契约的开场一小段，并钉同真相的开场变量初值；
-      开场为主、填表为辅；可与 opening-generator 落库
+      创作终节点：写出 1～多条开场白并钉同真相初值；
+      选定后程序落库、结束创作并保存定稿
     artifact: 设计.开场白与开场变量
 
   # —— 收成 / 钉声明（共用；世界模拟器按需） ——
@@ -144,9 +148,10 @@ modules:
   - id: context-order
     name: 上下文投影排序
     repeatable: false
+    auto: true
     declaration: >-
-      根据各上游上下文概括，为启用槽写出扁平投影序（含对话.历史与 projection）；
-      挂谁已定、排第几在本步；不发明执行单元、不重写长文
+      先抄固定执行单元名册，再为每个已启用者写出扁平投影序
+      （含对话.历史与 projection）；不发明槽、不重写长文、不演情节选择题
     artifact: 设计.上下文投影排序
 
   - id: refine

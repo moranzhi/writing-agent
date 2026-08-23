@@ -121,7 +121,8 @@
   "steps": [
     { "id": "美学纲领与交互范式", "name": "美学纲领与交互范式", "depends_on": [] },
     { "id": "生成规则", "name": "生成规则", "depends_on": ["美学纲领与交互范式"] },
-    { "id": "生成规则#2", "name": "生成规则", "depends_on": ["生成规则"] }
+    { "id": "生成规则#2", "name": "生成规则", "depends_on": ["生成规则"] },
+    { "id": "美学纲领与交互范式·改", "name": "美学纲领与交互范式", "mode": "revise", "revises": "美学纲领与交互范式", "depends_on": ["生成规则#2"] }
   ]
 }
 ```
@@ -133,9 +134,13 @@
 | `id` | 本局步骤唯一键；同技能多次必须不同 |
 | `name` | 必须与技能目录中的**固定中文名**完全一致（可重复） |
 | `depends_on` | 依赖的其它步骤 **id**（若某 name 在本流程唯一，也可写 name） |
+| `mode` | 可选。缺省 / `fresh` = 从零新建；`revise` = 回头修改，继承 `revises` 所指那步的既有产物 |
+| `revises` | `mode=revise` 时必填：被改的既有步骤 id（须更前、同 name） |
+| `params` | 可选。普通节点=编排参数。〔先验产物〕=编排器规划的产物内容（可空；执行注入【规划产物】） |
 
 程序用中文 `name` 映射到 `artifact` tag；流程 JSON **不写**英文模块 id / tag。  
-**禁止**一次排死全程固定长链；「生成规则」「具体实例」等标了 `repeatable` 的技能应允许多次编入。
+**禁止**一次排死全程固定长链；「生成规则」「具体实例」等标了 `repeatable` 的技能应允许多次**新建**编入。已完成节点要改用 `mode=revise`，不要再排一条 fresh。  
+〔先验产物〕节点可提前规划多条「写什么」写入 params；规划可空，「生成什么」在步内钉。
 
 ## 2.5 已合并技能（勿拆回）
 
@@ -326,6 +331,8 @@ boundary: |
 |------|------|
 | `declaration` | 插入编排提示，选型 |
 | `name` / `artifact` | 流程与执行映射 |
+| `kind` | 可选；节点特性。`prior-artifact` = 先验产物（须先定写什么；params 是规划产物，执行注入【规划产物】，不拦确认开干） |
+| `params` | 可选；普通节点=编排参数。〔先验产物〕=规划产物字段（可提前填，空则步内钉） |
 | `opening` | 可选覆盖；一般只写在 prompt 的 `opening` 块 |
 
 改 `name` 会破坏已有工作流计划 JSON，尽量不改。
@@ -462,12 +469,12 @@ artifact：
 | 美学纲领与交互范式 | `aesthetics-interaction` | 范例 |
 | 实现机制 | `mechanism` | 已写 |
 | 舞台骨架 | `world-blueprint` | 已写（`context-fragment.v1`；社会结构 + 世界状况） |
-| 生成规则 | `generation-rules` | 已写（`context-fragment.v1`；可反复；合同严、正文可长） |
-| 具体实例 | `concrete-instances` | 已写（`context-fragment.v1`；可反复；只按规则执行） |
+| 生成规则 | `generation-rules` | 已写（`context-fragment.v1`；可反复；〔先验产物〕；合同严、正文可长） |
+| 具体实例 | `concrete-instances` | 已写（`context-fragment.v1`；可反复；〔先验产物〕；只按规则执行） |
 | 叙事指南与故事推进 | `narrative` | 已写（`context-fragment.v1`；遣词/笔墨/禁忌+推进；旧称叙事指南） |
-| 正文组成 | `reply-format` | 已写（用户可见版式+隐藏段+前端拆分；旧称设计回复格式） |
+| 正文组成 | `reply-format` | 已写（壳适配 + 示例 present 预览看美化；旧称设计回复格式） |
 | 设计监控栏 | `status-bar` | 已写（只盯会变信息；旧称设计状态栏） |
-| 开场白与开场变量 | `opening-setup` | 已写（开场正文+初值；守正文组成） |
+| 开场白与开场变量 | `opening-setup` | 已写（〔收口〕：1～多条开场；选定后落库并保存定稿） |
 | 拓扑图谱 | `topology` | 待细写 |
 | 变量设计与更新规则 | `variable-design` | 已写；见 progressive-data-design.md |
 | 变量控制上下文 | `variable-context` | 已写 |

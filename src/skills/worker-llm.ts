@@ -3,16 +3,13 @@ import {
   OpenAiCompatibleProvider,
   type LlmProvider,
 } from "../llm/client.js";
-import { PresetLlmProvider } from "../llm/preset-wrapper.js";
-import { resolveActivePreset } from "../preset/store.js";
-import { loadAppSettings } from "../config/settings.js";
 import {
-  TokenTrackingProvider,
-  type LlmTrackingContext,
-} from "../llm/token-tracker.js";
+  wrapLlmForSession,
+  type LlmTrackingRef,
+} from "../llm/preset-wrapper.js";
 import type { ParsedWorkerSkill, SkillWorkerLlmBindings } from "./types.js";
 
-type LlmTrackingRef = { current: LlmTrackingContext };
+export type { LlmTrackingContext } from "../llm/token-tracker.js";
 
 /** 按 ApiProfile.id 构建 LLM；找不到 profile 时回退 fallback */
 export function createLlmForProfileId(
@@ -25,17 +22,10 @@ export function createLlmForProfileId(
     return fallback;
   }
 
-  let inner: LlmProvider = new OpenAiCompatibleProvider(
-    profileToLlmConfig(profile),
+  return wrapLlmForSession(
+    new OpenAiCompatibleProvider(profileToLlmConfig(profile)),
+    trackingRef,
   );
-  const preset = resolveActivePreset(loadAppSettings().activePresetId);
-  if (preset) {
-    inner = new PresetLlmProvider(inner, () =>
-      resolveActivePreset(loadAppSettings().activePresetId),
-    );
-  }
-  if (!trackingRef) return inner;
-  return new TokenTrackingProvider(inner, () => trackingRef.current);
 }
 
 /**
@@ -142,5 +132,3 @@ export function filterInputsForRolePerspective(
   }
   return filtered;
 }
-
-export type { LlmTrackingContext };

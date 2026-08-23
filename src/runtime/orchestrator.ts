@@ -158,6 +158,8 @@ export class RuntimeOrchestrator {
           await this.runProgrammaticReview(effect.artifactId);
           break;
         case "invoke_main_agent":
+        case "propose_next_creation_step":
+        case "seal_creation_opening":
           break;
       }
     }

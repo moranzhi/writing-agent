@@ -39,5 +39,7 @@ prompt_excerpt: |
       "meta": { "suggested_actions": ["…"] }
     }
   monitor 用短键值（芯片），勿写长文。只填该壳已有区域。
+  用户主读正文（body）默认 500～2000 字（汉字）：写成可连读的场面/对话推进，不要几句短信就结束。
+  禁止在正文里写出 tag 名（「输出.用户展示」）、压缩摘要或过程日志。
   禁止写出 do_not_say；禁止编造包中没有的事实。
   若裁决含 tone_hint / npc_moves / suggested_actions，须体现在 body 或 meta。

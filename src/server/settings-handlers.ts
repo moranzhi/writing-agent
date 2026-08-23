@@ -22,12 +22,17 @@ import {
   patchPresetEntries,
   type PresetEntryPatch,
 } from "../preset/entries.js";
+import { runPresetProbe } from "../preset/probe.js";
 import {
   deletePreset,
   getPreset,
   importAndSavePreset,
   listPresets,
 } from "../preset/store.js";
+import {
+  createLlmForPreset,
+  hasRealLlmConfig,
+} from "../runtime/llm-factory.js";
 import { sessionManager } from "./session-manager.js";
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -223,6 +228,52 @@ export async function handleSettingsApi(
       sessionManager.reloadAllLlms();
     }
     json(res, 201, { ...report, activePresetId: activate ? report.preset.id : null });
+    return true;
+  }
+
+  const presetProbeMatch = pathname.match(/^\/api\/presets\/([^/]+)\/probe$/);
+  if (presetProbeMatch && req.method === "POST") {
+    const id = decodeURIComponent(presetProbeMatch[1]);
+    const preset = getPreset(id);
+    if (!preset) {
+      json(res, 404, { error: "预设不存在" });
+      return true;
+    }
+    const body = JSON.parse(await readBody(req)) as {
+      message?: string;
+      loreBefore?: string;
+      history?: string;
+      loreAfter?: string;
+      postTurn?: string;
+      complete?: boolean;
+    };
+    try {
+      const wantComplete = body.complete !== false;
+      const canComplete = wantComplete && hasRealLlmConfig();
+      const llm = canComplete ? createLlmForPreset(preset) : null;
+      const result = await runPresetProbe({
+        preset,
+        input: {
+          message: body.message ?? "",
+          loreBefore: body.loreBefore,
+          history: body.history,
+          loreAfter: body.loreAfter,
+          postTurn: body.postTurn,
+        },
+        complete: llm
+          ? (messages) =>
+              llm.complete(messages, { caller: "preset-probe" })
+          : undefined,
+      });
+      if (!llm && wantComplete) {
+        result.skipReason = "未配置 API Key，只返回拼装后的上下文";
+      }
+      json(res, 200, result);
+    } catch (err) {
+      json(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return true;
   }
 

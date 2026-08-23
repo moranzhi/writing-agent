@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { LlmProvider } from "../llm/client.js";
+import { createLocalLlmDriver, type AgentDriver } from "../runtime/driver.js";
 import { normalizeQuestions } from "../skills/question-protocol.js";
 import type { BlackboardTagIndex } from "../types/blackboard.js";
 import type { MainAgentDecision, RuntimeSession } from "../types/runtime.js";
@@ -45,7 +46,14 @@ ${workerLines}
 }
 
 export class MainAgent {
-  constructor(private readonly llm: LlmProvider) {}
+  private readonly driver: AgentDriver;
+
+  constructor(
+    private readonly llm: LlmProvider,
+    driver?: AgentDriver,
+  ) {
+    this.driver = driver ?? createLocalLlmDriver(llm);
+  }
 
   /** @deprecated 单次 JSON 决策；请用 runToolLoop */
   async decide(context: MainAgentContext): Promise<MainAgentDecision> {
@@ -70,6 +78,7 @@ export class MainAgent {
       this.llm,
       context,
       options.handlers,
+      this.driver,
     );
     return decision;
   }

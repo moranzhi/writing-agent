@@ -1,12 +1,14 @@
 import type { ChatMessage } from "../llm/client.js";
 import type { PresetPackage } from "../types/preset.js";
+import { isStUnfilledMarker } from "./markers.js";
 
 export type MarkerResolver = (identifier: string) => string | null;
 
 const defaultMarkerResolver: MarkerResolver = () => null;
 
 /**
- * 按 prompt_order 装配 preset 消息，插入在所有业务 prompt 之前。
+ * 按 prompt_order 装配 preset 消息。
+ * 酒馆角色卡 / WI marker 不走 resolver（空洞跳过）；自有洞由 resolver 填。
  */
 export function assemblePresetMessages(
   preset: PresetPackage,
@@ -25,8 +27,10 @@ export function assemblePresetMessages(
     if (!entry || !entry.enabled) continue;
 
     let content = entry.content.trim();
-    if (!content && entry.marker) {
-      const resolved = resolveMarker(entry.sourceIdentifier);
+    const markerId = entry.sourceIdentifier || entry.id;
+    const skipFill = isStUnfilledMarker(markerId);
+    if (!content && entry.marker && !skipFill) {
+      const resolved = resolveMarker(markerId);
       if (resolved?.trim()) content = resolved.trim();
     }
 

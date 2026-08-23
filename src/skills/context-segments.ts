@@ -89,17 +89,40 @@ function readTagContent(
   return items[items.length - 1]?.content?.trim() ?? "";
 }
 
+/** 单段投影正文（不含 label）。供世界书 marker 填洞复用。 */
+export function renderContextSegmentBody(
+  segment: ContextSegmentDef,
+  inputs: Record<string, string>,
+  blackboard: Blackboard,
+  inputMerge: BlackboardInputMerge,
+  skipExact?: Set<string>,
+  skipTags?: Set<string>,
+): string {
+  return formatSegmentBody(
+    segment,
+    inputs,
+    blackboard,
+    inputMerge,
+    skipExact,
+    skipTags,
+  );
+}
+
 function formatSegmentBody(
   segment: ContextSegmentDef,
   inputs: Record<string, string>,
   blackboard: Blackboard,
   inputMerge: BlackboardInputMerge,
+  skipExact?: Set<string>,
+  skipTags?: Set<string>,
 ): string {
   if (segment.inline?.trim()) {
     return applyProjection(segment.inline.trim(), segment.projection);
   }
   const parts: string[] = [];
+  const seen = new Set<string>();
   for (const tag of segment.tags) {
+    if (skipTags?.has(tag)) continue;
     let content: string;
     if (isDialogueHistoryRef(tag)) {
       content = resolveDialogueHistory(inputs, blackboard, inputMerge);
@@ -115,8 +138,22 @@ function formatSegmentBody(
       content = applyPolicy(content, segment.policy);
       content = applyProjection(content, segment.projection);
     }
-    if (!content.trim()) continue;
-    parts.push(content.trim());
+    const trimmed = content.trim();
+    if (!trimmed) continue;
+    if (skipExact?.has(trimmed)) continue;
+    if (seen.has(trimmed)) continue;
+    if (
+      parts.some(
+        (p) =>
+          p === trimmed ||
+          p.includes(`\n\n${trimmed}`) ||
+          p.startsWith(`${trimmed}\n\n`),
+      )
+    ) {
+      continue;
+    }
+    seen.add(trimmed);
+    parts.push(trimmed);
   }
   return parts.join("\n\n");
 }
@@ -139,6 +176,61 @@ function resolveDialogueHistory(
 function applyProjection(content: string, projection?: string): string {
   if (!projection || projection === "full") return content;
   return projectFragmentContent(content, projection);
+}
+
+const USER_REQUIREMENT_TAGS = new Set([
+  "用户.需求",
+  "book.brief",
+  "用户.最新输入",
+  "用户.worker答复",
+  "用户.修订说明",
+]);
+
+const CREATION_REVIEW_WORKERS = new Set([
+  "design-step",
+  "design-flow",
+  "opening-generator",
+]);
+
+function alreadyCovered(parts: string[], next: string): boolean {
+  const trimmed = next.trim();
+  if (!trimmed) return true;
+  return parts.some(
+    (p) =>
+      p === trimmed ||
+      p.includes(`\n\n${trimmed}`) ||
+      p.startsWith(`${trimmed}\n\n`),
+  );
+}
+
+function pushUnique(parts: string[], next: string): void {
+  const trimmed = next.trim();
+  if (!trimmed || alreadyCovered(parts, trimmed)) return;
+  parts.push(trimmed);
+}
+
+/** 创作步：用户要求按时间排；冲突只看较新，旧条未点名推翻则仍有效。 */
+function collectUserRequirementBlock(params: {
+  inputs: Record<string, string>;
+  blackboard: Blackboard;
+  inputMerge: BlackboardInputMerge;
+}): string {
+  const { inputs, blackboard, inputMerge } = params;
+  const ordered = [
+    readTagContent("用户.需求", inputs, blackboard, inputMerge),
+    readTagContent("book.brief", inputs, blackboard, inputMerge),
+    readTagContent("用户.worker答复", inputs, blackboard, inputMerge),
+    readTagContent("用户.最新输入", inputs, blackboard, inputMerge),
+    readTagContent("用户.修订说明", inputs, blackboard, inputMerge),
+  ];
+  const parts: string[] = [];
+  for (const item of ordered) pushUnique(parts, item);
+  if (!parts.length) return "";
+  return [
+    "## 【用户要求】按先后排列。冲突时以较新的为准；未被较新要求改写的旧条仍有效。",
+    "",
+    ...parts,
+  ].join("\n\n");
 }
 
 /**
@@ -178,10 +270,49 @@ export function assembleWorkerContext(params: {
     );
   }
 
+  const revisionNote = readTagContent(
+    "用户.修订说明",
+    params.inputs,
+    params.blackboard,
+    inputMerge,
+  ).trim();
+  const inheritExisting = segments.some((s) => s.id === "inherit-existing");
+  const splitUserReq = CREATION_REVIEW_WORKERS.has(params.workerId);
+
+  const draftBlocks: string[] = [];
+  for (const tag of params.outputTags) {
+    const alreadyInSegments = segments.some((s) => s.tags.includes(tag));
+    if (alreadyInSegments) continue;
+    const draft = readTagContent(
+      tag,
+      params.inputs,
+      params.blackboard,
+      inputMerge,
+    ).trim();
+    if (!draft) continue;
+    draftBlocks.push(`### \`${tag}\`\n\n${draft}`);
+  }
+
+  // 只有本步真有底稿（或回头修改）才算修订；上一步残留的修订说明仍作为用户要求保留
+  const inheritMode = inheritExisting || (Boolean(revisionNote) && draftBlocks.length > 0);
+
+  const skipTags = new Set<string>();
+  if (splitUserReq) {
+    for (const tag of USER_REQUIREMENT_TAGS) skipTags.add(tag);
+  }
+
   const blocks: string[] = [];
 
   const render = (seg: ContextSegmentDef) => {
-    const body = formatSegmentBody(seg, params.inputs, params.blackboard, inputMerge);
+    if (inheritMode && seg.id === "module-opening") return;
+    const body = formatSegmentBody(
+      seg,
+      params.inputs,
+      params.blackboard,
+      inputMerge,
+      undefined,
+      skipTags,
+    );
     if (!body) return;
     if (seg.label) {
       blocks.push(`${seg.label}\n\n${body}`);
@@ -193,6 +324,15 @@ export function assembleWorkerContext(params: {
   // 严格按 segments 数组顺序（投影排序表顺序）；不再按 static/dynamic 重排
   for (const seg of segments) render(seg);
 
+  if (splitUserReq) {
+    const reqBlock = collectUserRequirementBlock({
+      inputs: params.inputs,
+      blackboard: params.blackboard,
+      inputMerge,
+    });
+    if (reqBlock) blocks.push(reqBlock);
+  }
+
   // 定稿摘要：若未在 segments 中声明，仍附在末尾
   const brief = params.inputs[CONTEXT_BRIEF_TAG]?.trim();
   const briefInSegments = segments.some((s) => s.tags.includes(CONTEXT_BRIEF_TAG));
@@ -200,39 +340,17 @@ export function assembleWorkerContext(params: {
     blocks.push(`## 上下文.定稿摘要\n\n${brief}`);
   }
 
-  // 修订态：把本步 outputTags 上已有正文钉成「待改底稿」，禁止无故推倒重写
-  const revisionNote = readTagContent(
-    "用户.修订说明",
-    params.inputs,
-    params.blackboard,
-    inputMerge,
-  ).trim();
-  const draftBlocks: string[] = [];
-  if (revisionNote) {
-    for (const tag of params.outputTags) {
-      const alreadyInSegments = segments.some((s) => s.tags.includes(tag));
-      if (alreadyInSegments) continue;
-      const draft = readTagContent(
-        tag,
-        params.inputs,
-        params.blackboard,
-        inputMerge,
-      ).trim();
-      if (!draft) continue;
-      draftBlocks.push(`### \`${tag}\`\n\n${draft}`);
-    }
-    if (draftBlocks.length) {
-      blocks.push(
-        [
-          "## 【待改底稿】",
-          "",
-          "下列为**当前已有产物**。按「用户.修订说明」以及「用户.worker答复」中的追问作答（选项与补充）在其上修改，并写回同名 outputTags。",
-          "节点方法（task / principles / probe / output）仍须遵守。保留未要求改动的结构与结论；禁止无故整份重写。",
-          "",
-          ...draftBlocks,
-        ].join("\n"),
-      );
-    }
+  if (inheritMode && draftBlocks.length) {
+    blocks.push(
+      [
+        "## 【待改底稿】",
+        "",
+        "下列为**当前已有产物**（只保留这一份最新稿）。在其上落实【用户要求】里较新的条目；与旧要求冲突时以较新的为准，未点名改写的旧条仍须保留在产物里。",
+        "节点方法（task / principles / probe / output）仍须遵守。禁止无视较新要求原样交回。",
+        "",
+        ...draftBlocks,
+      ].join("\n"),
+    );
   }
 
   const taskLines = [
@@ -243,10 +361,12 @@ export function assembleWorkerContext(params: {
     `- outputTags: ${params.outputTags.map((t) => `\`${t}\``).join("、") || "（无）"}`,
     "",
   ];
-  if (revisionNote) {
+  if (inheritMode) {
     taskLines.push(
-      "**修订模式**：接着上方【待改底稿】（若有）与依赖产物，落实「用户.修订说明」以及「用户.worker答复」里的追问作答（选项与补充意见）。",
-      "不要从零另起一份；不要扩大修改面。标为「只读 / 已定稿」的分区仍不可改。节点方法仍有效。",
+      inheritExisting
+        ? "**回头修改**：接着上方【既有产物 · 继承修改】（以及【待改底稿】若有）继续改，写回同一产物。"
+        : "**修订模式**：以【待改底稿】为底，落实【用户要求】；冲突时以较新的为准。",
+      "不要从零另起一份。标为「只读 / 已定稿」的分区仍不可改。",
     );
   } else {
     taskLines.push(

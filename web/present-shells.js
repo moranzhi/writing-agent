@@ -82,6 +82,20 @@ function formatBlockContent(value) {
   return String(value);
 }
 
+/** 模型常把 tag 名写进正文开头；展示前剥掉 */
+export function stripPresentSourceFences(raw) {
+  let s = String(raw ?? "").trim();
+  for (let i = 0; i < 3; i += 1) {
+    const next = s
+      .replace(/^(#{1,6}\s*)?输出[.:：]?\s*(用户展示|开场白)(?:\s*\n+|\s*$)/u, "")
+      .replace(/^【\s*输出[.:：]?\s*(用户展示|开场白)\s*】(?:\s*\n+|\s*$)/u, "")
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
 function normalizeBlocks(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const out = {};
@@ -90,6 +104,7 @@ function normalizeBlocks(raw) {
   }
   if (out.body === undefined && raw.正文 !== undefined) out.body = raw.正文;
   if (out.monitor === undefined && raw.监控 !== undefined) out.monitor = raw.监控;
+  if (typeof out.body === "string") out.body = stripPresentSourceFences(out.body);
   return out;
 }
 
@@ -162,7 +177,7 @@ export function presentFromPlain(text, shell = "prose") {
   return {
     schema: "present.v1",
     shell: isPresentShellId(shell) ? shell : "prose",
-    blocks: { body: text ?? "" },
+    blocks: { body: stripPresentSourceFences(text ?? "") },
     meta: { suggested_actions: [] },
   };
 }

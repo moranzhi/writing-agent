@@ -77,6 +77,9 @@ const EFFECT_LABEL: Record<string, string> = {
   run_programmatic_review: "程序验收",
   emit_message: "发消息",
   propose_next_creation_step: "提案下一步",
+  seal_creation_opening: "收口开场白",
+  run_play_turn: "开游玩回合",
+  continue_play_turn: "续游玩管线",
 };
 
 const TOOL_LABEL: Record<string, string> = {

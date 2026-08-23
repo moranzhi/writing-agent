@@ -17,7 +17,7 @@ describe("resolveAcceptanceModeForWorker", () => {
     expect(mode).toBe("user_confirmed");
   });
 
-  it("maps review → user_confirmed and continue → no_confirmation", () => {
+  it("maps review → user_confirmed and continue → no_confirmation in design", () => {
     const bb = new Blackboard();
     const yaml = JSON.stringify({
       version: 1,
@@ -32,7 +32,7 @@ describe("resolveAcceptanceModeForWorker", () => {
       slots: {
         ...createSession().slots,
         designInstanceReady: true,
-        uiLifecycleStage: "play",
+        uiLifecycleStage: "design",
       },
     };
 
@@ -50,6 +50,34 @@ describe("resolveAcceptanceModeForWorker", () => {
         workerId: "narrator",
       }),
     ).toBe("user_confirmed");
+  });
+
+  it("play ignores worker-set review and auto-continues", () => {
+    const bb = new Blackboard();
+    bb.write({
+      tag: "设计.worker集",
+      content: JSON.stringify({
+        version: 1,
+        workers: [{ ref: "narrator", acceptance: "review" }],
+      }),
+      source: "test",
+    });
+    const session = {
+      ...createSession(),
+      slots: {
+        ...createSession().slots,
+        designInstanceReady: true,
+        uiLifecycleStage: "play",
+        playLayerActive: true,
+      },
+    };
+    expect(
+      resolveAcceptanceModeForWorker({
+        session,
+        blackboard: bb,
+        workerId: "narrator",
+      }),
+    ).toBe("no_confirmation");
   });
 });
 
@@ -92,5 +120,6 @@ describe("buildDeclaredWorkerSkill", () => {
     expect(promptBody).toContain("残酷但不虐主");
     expect(promptBody).toContain("主角免疫");
     expect(promptBody).toContain("声明驱动");
+    expect(promptBody).toContain("500～2000");
   });
 });

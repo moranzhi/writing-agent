@@ -800,6 +800,226 @@ code {
   background: rgba(24, 24, 27, 0.4);
 }
 
+/* —— Preset probe —— */
+.probe-dialog {
+  border: none;
+  border-radius: 10px;
+  padding: 0;
+  background: var(--st-surface);
+  color: var(--st-text);
+  width: min(1080px, calc(100% - 24px));
+  height: min(780px, calc(100% - 24px));
+  max-width: none;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.18);
+}
+
+.probe-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.probe-dialog::backdrop {
+  background: rgba(24, 24, 27, 0.45);
+}
+
+.probe-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--st-border);
+  flex-shrink: 0;
+}
+
+.probe-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.probe-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.probe-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+}
+
+.probe-composer,
+.probe-inspect {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 20px;
+}
+
+.probe-composer {
+  border-right: 1px solid var(--st-border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.probe-composer label,
+.probe-extras label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--st-muted);
+  font-weight: 500;
+}
+
+.probe-composer textarea,
+.probe-extras textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 9px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--st-border-strong);
+  background: var(--st-bg);
+  color: var(--st-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.probe-composer textarea:focus,
+.probe-extras textarea:focus {
+  outline: none;
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px var(--st-accent-soft);
+  background: var(--st-surface);
+}
+
+.probe-extras {
+  border: 1px solid var(--st-border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  background: var(--st-bg);
+}
+
+.probe-extras summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--st-text);
+  margin-bottom: 8px;
+}
+
+.probe-extras[open] summary {
+  margin-bottom: 10px;
+}
+
+.probe-composer-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.probe-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.probe-inspect h4 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--st-muted);
+  letter-spacing: 0.02em;
+}
+
+.probe-empty {
+  margin: 8px 0;
+  color: var(--st-faint);
+  font-size: 13px;
+}
+
+.probe-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.probe-msg {
+  border: 1px solid var(--st-border);
+  border-radius: 8px;
+  background: var(--st-bg);
+  overflow: hidden;
+}
+
+.probe-msg header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--st-border);
+  background: var(--st-surface);
+}
+
+.probe-role {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--st-accent);
+}
+
+.probe-role.user {
+  color: #0f766e;
+}
+
+.probe-role.assistant {
+  color: #7c3aed;
+}
+
+.probe-index {
+  font-size: 11px;
+  color: var(--st-faint);
+}
+
+.probe-msg pre,
+.probe-reply pre {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.probe-reply {
+  margin-top: 18px;
+}
+
+@media (max-width: 800px) {
+  .probe-dialog {
+    height: calc(100% - 16px);
+  }
+
+  .probe-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .probe-composer {
+    border-right: none;
+    border-bottom: 1px solid var(--st-border);
+    max-height: 42vh;
+  }
+}
+
 .profile-dialog form {
   padding: 22px;
   display: flex;

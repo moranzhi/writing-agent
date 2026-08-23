@@ -53,7 +53,10 @@ export type WaitingReason =
     } // worker 无产物时的阻塞提问
   | { kind: "revision"; instruction?: string } // 无意见打回时等补交；有意见则直接重跑
   | {
-      /** 上一步已验收：先问「下一步想写什么」（可留空），再提案并确认开干 */
+      /**
+       * 旧路径：上一步验收后先问「下一步想写什么」。
+       * 现已改为验收后直接提案；保留此 kind 以兼容未完成的旧会话。
+       */
       kind: "next_intent";
       afterWorkerId?: string;
       afterUnitId?: string;
@@ -329,7 +332,13 @@ export type PhaseEffect =
   | { type: "run_programmatic_review"; artifactId: string }
   | { type: "emit_message"; message: string }
   /** 根据流程与用户下一步意向，提案下一节点并进入确认 */
-  | { type: "propose_next_creation_step" };
+  | { type: "propose_next_creation_step" }
+  /** 选定开场白：落库、关 DAG、标记创作收口 */
+  | { type: "seal_creation_opening" }
+  /** 游玩：按运行规格开一轮（旁观 → 主世界层 → 转述） */
+  | { type: "run_play_turn" }
+  /** 游玩：跑管线里的下一个执行单元；队空则等下一条用户输入 */
+  | { type: "continue_play_turn" };
 
 /** applyEvent 的返回值：新会话快照 + 待处理副作用 + 可选错误 */
 export type ApplyEventResult = {

@@ -106,9 +106,127 @@ describe("contextSegments assembly", () => {
       outputTags: ["设计.美学纲领与交互范式"],
     });
     expect(text).toContain("待改底稿");
-    expect(text).toContain("用户.worker答复");
+    expect(text).toContain("用户要求");
+    expect(text).toContain("冲突时以较新的为准");
     expect(text).toContain("偏冷");
     expect(text).toContain("再冷一点");
+    expect(text.split("再冷一点").length - 1).toBe(1);
+  });
+
+  it("stale revision note without a draft stays as a user requirement, not revision mode", () => {
+    const bb = new Blackboard();
+    const text = assembleWorkerContext({
+      inputs: {
+        "用户.修订说明": "上一步留下的意见",
+        "用户.需求": "网恋对话",
+      },
+      segments: [
+        {
+          id: "user",
+          tier: "dynamic",
+          tags: ["用户.需求", "用户.修订说明"],
+          label: "## 用户表述",
+        },
+      ],
+      blackboard: bb,
+      workerId: "design-step",
+      workerName: "创作 · 正文组成",
+      outputTags: ["设计.正文组成"],
+    });
+    expect(text).not.toContain("修订模式");
+    expect(text).not.toContain("待改底稿");
+    expect(text).toContain("用户要求");
+    expect(text).toContain("上一步留下的意见");
+    expect(text).toContain("网恋对话");
+    expect(text).toContain("按 SKILL 与上方分区完成任务");
+  });
+
+  it("collapses duplicate user-demand tags in the same segment", () => {
+    const bb = new Blackboard();
+    const text = assembleWorkerContext({
+      inputs: {
+        "用户.需求": "开场需求\n\n需要正文和选项",
+        "用户.worker答复": "需要正文和选项",
+        "用户.最新输入": "需要正文和选项",
+      },
+      segments: [
+        {
+          id: "user",
+          tier: "dynamic",
+          tags: ["用户.需求", "用户.worker答复", "用户.最新输入"],
+          label: "## 用户表述",
+        },
+      ],
+      blackboard: bb,
+      workerId: "design-step",
+      workerName: "创作 · 正文组成",
+      outputTags: ["设计.正文组成"],
+    });
+    expect(text.split("需要正文和选项").length - 1).toBe(1);
+  });
+
+  it("keeps earlier user requirements and puts the newer revision last", () => {
+    const bb = new Blackboard();
+    bb.write({
+      tag: "设计.正文组成",
+      content: '{"shell":"split_board"}',
+      source: "worker",
+    });
+    const text = assembleWorkerContext({
+      inputs: {
+        "用户.需求": "需要正文和监控",
+        "用户.修订说明": "状态放到上面",
+        "设计.正文组成": '{"shell":"split_board"}',
+      },
+      segments: [
+        {
+          id: "user",
+          tier: "dynamic",
+          tags: ["用户.需求", "用户.修订说明"],
+          label: "## 用户表述",
+        },
+      ],
+      blackboard: bb,
+      workerId: "design-step",
+      workerName: "创作 · 正文组成",
+      outputTags: ["设计.正文组成"],
+    });
+    expect(text).toContain("需要正文和监控");
+    expect(text).toContain("状态放到上面");
+    expect(text.indexOf("需要正文和监控")).toBeLessThan(text.indexOf("状态放到上面"));
+    expect(text).toContain("冲突时以较新的为准");
+    expect(text).toContain("待改底稿");
+    expect(text).toContain("split_board");
+  });
+
+  it("inherit-existing asks the worker to keep the draft without a revision note", () => {
+    const bb = new Blackboard();
+    bb.write({
+      tag: "设计.美学纲领与交互范式",
+      content: '{"tone":"warm"}',
+      source: "worker",
+    });
+    const text = assembleWorkerContext({
+      inputs: {
+        "设计.美学纲领与交互范式": '{"tone":"warm"}',
+      },
+      segments: [
+        {
+          id: "inherit-existing",
+          tier: "static",
+          tags: ["设计.美学纲领与交互范式"],
+          label: "## 【既有产物 · 继承修改】在下列正文上继续改",
+        },
+      ],
+      blackboard: bb,
+      workerId: "design-step",
+      workerName: "创作 · 回头修改 · 美学纲领与交互范式",
+      outputTags: ["设计.美学纲领与交互范式"],
+    });
+    expect(text).toContain("既有产物 · 继承修改");
+    expect(text).toContain("回头修改");
+    expect(text).toContain("warm");
+    expect(text).not.toContain("按 SKILL 与上方分区完成任务");
   });
 
   it("falls back to JSON inputs without segments", () => {

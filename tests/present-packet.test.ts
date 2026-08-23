@@ -51,6 +51,31 @@ describe("present.v1", () => {
     expect(p.shell).toBe("chapter_reader");
     expect(p.blocks.body).toBe("hello");
   });
+
+  it("strips 输出.用户展示 heading from plain body", () => {
+    const view = parsePresentPacket("### 输出.用户展示\n\n叮！账户来了。");
+    expect(view.packet.blocks.body).toBe("叮！账户来了。");
+    expect(String(view.packet.blocks.body)).not.toContain("用户展示");
+  });
+
+  it("strips heading then parses present JSON", () => {
+    const view = parsePresentPacket(
+      '### 输出.用户展示\n\n{"schema":"present.v1","shell":"prose","blocks":{"body":"场面很长"}}',
+    );
+    expect(view.fallbackPlain).toBe(false);
+    expect(view.packet.blocks.body).toBe("场面很长");
+  });
+
+  it("strips heading inside blocks.body", () => {
+    const view = parsePresentPacket(
+      JSON.stringify({
+        schema: "present.v1",
+        shell: "prose",
+        blocks: { body: "### 输出.用户展示\n正文" },
+      }),
+    );
+    expect(view.packet.blocks.body).toBe("正文");
+  });
 });
 
 describe("shell adaptation from reply-format", () => {

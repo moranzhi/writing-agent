@@ -399,7 +399,10 @@ export function buildFocus(
     return {
       actorType: "user",
       actorLabel: "你",
-      action: "补充说明",
+      action:
+        reason.message && /创作已收口/.test(reason.message)
+          ? "创作已收口"
+          : "补充说明",
       detail: reason.message?.slice(0, 120),
     };
   }
@@ -412,6 +415,7 @@ export function buildFocus(
             try {
               return JSON.parse(String(session.slots["创作.待确认步骤"])) as {
                 name?: string;
+                mode?: string;
               };
             } catch {
               return null;
@@ -423,7 +427,9 @@ export function buildFocus(
       actorId: "orchestrator",
       actorLabel: "编排",
       action: proposed?.name
-        ? `确认开始 · ${proposed.name}`
+        ? proposed.mode === "revise"
+          ? `回头修改 · ${proposed.name}`
+          : `确认开始 · ${proposed.name}`
         : `建议调用 ${displayWorkerLabel(worker)}`,
       detail: session.pendingDecision?.reason,
     };
@@ -467,6 +473,7 @@ export function buildFocus(
     const art = session.artifacts.find((a) => a.id === session.pendingArtifactId);
     const copy = reviewComposerCopy(art?.workerId, {
       hasQuestions: Boolean(reason.questions?.length),
+      outputTags: art?.outputTags,
     });
     const optionalQs = reason.questions?.length
       ? `；另有 ${reason.questions.length} 道可选追问`

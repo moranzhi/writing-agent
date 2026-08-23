@@ -1,5 +1,6 @@
 import type { BlackboardItem } from "../types/blackboard.js";
 import type { RuntimeSession } from "../types/runtime.js";
+import { SLOT_PLAY_TURN_QUEUE, SLOT_PLAY_LAYER_ACTIVE } from "../skills/play-turn.js";
 
 /**
  * 判断黑板 tag 是否属于 run 阶段（非实例化确认稿）。
@@ -12,9 +13,14 @@ export function isRunPhaseBlackboardTag(tag: string): boolean {
   if (/^book\./.test(tag)) return false;
   if (/^情境\./.test(tag)) return false;
   if (/^博弈\./.test(tag)) return false;
+  // 锁定开局：跟规格一起进 instance
+  if (tag === "输出.开场白" || tag === "运行.初始变量" || tag === "变量.当前") {
+    return false;
+  }
 
-  // run 层：剥离
+  // run 层：剥离（含聊天历史，不写进角色卡）
   return (
+    tag === "对话.历史" ||
     /^运行\./.test(tag) ||
     /^世界\.(当前|裁决)/.test(tag) ||
     /^场景\.公开/.test(tag) ||
@@ -35,6 +41,11 @@ export function prepareRuntimeSessionForInstance(session: RuntimeSession): Runti
   copy.pendingDecision = undefined;
   copy.currentWorkerId = undefined;
   copy.waitingReason = undefined;
+  copy.slots = {
+    ...copy.slots,
+    [SLOT_PLAY_TURN_QUEUE]: undefined,
+    [SLOT_PLAY_LAYER_ACTIVE]: undefined,
+  };
   copy.artifacts = copy.artifacts.filter((a) =>
     a.outputTags.every((tag) => !isRunPhaseBlackboardTag(tag)),
   );

@@ -45,5 +45,11 @@ describe("display-labels", () => {
     const opening = reviewComposerCopy("opening-generator");
     expect(opening.acceptLabel).toBe("选定此开场");
     expect(opening.kicker).toBe("待选定");
+
+    const setup = reviewComposerCopy("design-step", {
+      outputTags: ["设计.开场白与开场变量"],
+    });
+    expect(setup.acceptLabel).toBe("选定此开场");
+    expect(setup.kind).toBe("opening");
   });
 });

@@ -1,23 +1,21 @@
 import { profileToLlmConfig } from "../config/api-profiles.js";
 import {
   ensureActiveProfileDefault,
-  loadAppSettings,
   resolveActiveProfile,
 } from "../config/settings.js";
-import { resolveActivePreset } from "../preset/store.js";
 import {
   createMockMainAgentResponse,
   MockLlmProvider,
   OpenAiCompatibleProvider,
   type LlmProvider,
 } from "../llm/client.js";
-import { PresetLlmProvider } from "../llm/preset-wrapper.js";
+import type { PresetPackage } from "../types/preset.js";
 import {
-  TokenTrackingProvider,
-  type LlmTrackingContext,
-} from "../llm/token-tracker.js";
+  wrapLlmForSession,
+  type LlmTrackingRef,
+} from "../llm/preset-wrapper.js";
 
-export type LlmTrackingRef = { current: LlmTrackingContext };
+export type { LlmTrackingRef };
 
 function buildInnerLlm(): LlmProvider {
   ensureActiveProfileDefault();
@@ -42,22 +40,11 @@ function buildInnerLlm(): LlmProvider {
   ]);
 }
 
-function wrapWithPreset(inner: LlmProvider): LlmProvider {
-  const settings = loadAppSettings();
-  const preset = resolveActivePreset(settings.activePresetId);
-  if (!preset) return inner;
-  return new PresetLlmProvider(inner, () =>
-    resolveActivePreset(loadAppSettings().activePresetId),
-  );
-}
-
 /** Web/CLI 默认 LLM：本地 profile + 全局 preset + token 统计 */
 export function createDefaultMainAgentLlm(
   trackingRef?: LlmTrackingRef,
 ): LlmProvider {
-  const llm = wrapWithPreset(buildInnerLlm());
-  if (!trackingRef) return llm;
-  return new TokenTrackingProvider(llm, () => trackingRef.current);
+  return wrapLlmForSession(buildInnerLlm(), trackingRef);
 }
 
 export function hasRealLlmConfig(): boolean {
@@ -75,4 +62,9 @@ export function reloadDefaultMainAgentLlm(
   trackingRef?: LlmTrackingRef,
 ): LlmProvider {
   return createDefaultMainAgentLlm(trackingRef);
+}
+
+/** 试跑指定预设：生成参数跟这条预设走，不依赖当前选用。 */
+export function createLlmForPreset(preset: PresetPackage): LlmProvider {
+  return wrapLlmForSession(buildInnerLlm(), undefined, () => preset);
 }

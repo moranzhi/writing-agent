@@ -98,5 +98,14 @@ describe("worker-declaration", () => {
       },
     };
     expect(inferLifecycleStage(s2)).toBe("play");
+
+    const s3 = {
+      ...sessionWithAcceptedWorkerSet(),
+      slots: {
+        ...sessionWithAcceptedWorkerSet().slots,
+        playLayerActive: true,
+      },
+    };
+    expect(inferLifecycleStage(s3)).toBe("play");
   });
 });

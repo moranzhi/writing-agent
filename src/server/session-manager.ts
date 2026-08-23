@@ -10,6 +10,22 @@ import {
 import type { RunSnapshot, RunSnapshotMeta, SnapshotKind } from "../types/run-snapshot.js";
 import { toRunSnapshotMeta } from "../types/run-snapshot.js";
 import { materializeInstanceSnapshotPayload } from "../book/snapshot-filters.js";
+import {
+  CREATION_SEALED_WAITING_MESSAGE,
+  INSTANCE_OPENING_SNAPSHOT_LABEL,
+  OPENING_OUTPUT_TAG,
+  SLOT_CREATION_SEALED_BY_OPENING,
+} from "../skills/opening-seal.js";
+import {
+  PLAY_WORKING_SNAPSHOT_ID,
+  PLAY_WORKING_SNAPSHOT_LABEL,
+  SLOT_PLAY_LAYER_ACTIVE,
+  isPlayLayerActive,
+} from "../skills/play-turn.js";
+import {
+  DIALOGUE_HISTORY_TAG,
+  appendDialogueHistoryTurn,
+} from "../skills/dialogue-history.js";
 import { PhaseRuntime, createDecision } from "../runtime/phase-runtime.js";
 import { createSession } from "../runtime/phase-machine.js";
 import {
@@ -18,6 +34,7 @@ import {
   reloadDefaultMainAgentLlm,
   type LlmTrackingRef,
 } from "../runtime/llm-factory.js";
+import { isAbortError, runWithAbortSignal } from "../llm/run-abort.js";
 import { getSessionTokenTotals, type MessageTokenUsage } from "../stats/token-store.js";
 import type { PersistedBookSession } from "../types/book-session.js";
 import type { RuntimeSession, WaitingReason } from "../types/runtime.js";
@@ -179,6 +196,8 @@ export type SessionView = {
   /** @deprecated 用 skillCatalog */
   pipeline: StageStep[];
   lifecycleStage: LifecycleStage;
+  /** 已从定稿开出聊天层（不是只把顶栏标成游玩） */
+  playLayerActive: boolean;
   playReady: boolean;
   skillCatalog: SkillCatalogEntry[];
   toolTrace: ToolTraceEntry[];
@@ -271,7 +290,13 @@ export type ProposedNextStepView = {
     required: boolean;
     hint?: string;
   }>;
+  /** 节点特性：prior-artifact = 先验产物（不在确认开干时钉「写什么」） */
+  kind?: string;
+  /** 用户在「下一步想写什么」里写的意向（与步骤 mode 不同） */
   intent?: string;
+  /** 步骤怎么跑：revise = 回头修改既有产物 */
+  mode?: "fresh" | "revise";
+  revises?: string;
 };
 
 export type ReviewArtifactView = {
@@ -279,6 +304,7 @@ export type ReviewArtifactView = {
   workerId: string;
   summary?: string;
   body: string;
+  outputTags?: string[];
   /** 产出该产物的 worker_output 消息（验收态下 feed 会隐藏该消息） */
   sourceMessageId?: string;
   /** 与 sourceMessage 同源的全量 LLM 上下文，供待验收卡片右键查看 */
@@ -301,6 +327,12 @@ type ManagedSession = {
   recipeOptions?: RecipeCatalogEntry[];
   /** 开局模块 opening，缓存给意图页 */
   openingGuide?: { stepId: string; stepName: string; text: string } | null;
+  /** 当前 LLM 请求的取消器（停止并重试） */
+  runAbort?: AbortController;
+  /** 递增世代：后一次请求作废前一次 */
+  runGen?: number;
+  /** 本轮开始时的消息条数，取消时裁掉执行中产生的调度句 */
+  runMessageCutoff?: number;
 };
 
 export class SessionManager {
@@ -327,7 +359,11 @@ export class SessionManager {
     if (stage === "play" && !canEnterPlay(session)) {
       throw new Error("实例尚未就绪，无法进入游玩");
     }
-    s.runtime.setLifecycleStage(stage);
+    if (stage === "play") {
+      this.enterPlayLayer(s, { resume: true });
+    } else {
+      this.enterDesignLayer(s);
+    }
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
   }
@@ -582,10 +618,10 @@ export class SessionManager {
     return toRunSnapshotMeta(snapshot);
   }
 
-  /** 列出某 Book 的全部存档 */
+  /** 列出某 Book 的全部存档（不含内部「当前游玩」工作副本） */
   listGameSnapshots(bookId: string): RunSnapshotMeta[] {
     if (!getBook(bookId)) throw new Error("Book 不存在");
-    return listRunSnapshots(bookId);
+    return listRunSnapshots(bookId).filter((s) => s.id !== PLAY_WORKING_SNAPSHOT_ID);
   }
 
   /** 仅游玩 run 存档（UI 抽屉用） */
@@ -604,7 +640,7 @@ export class SessionManager {
     if (!canEnterPlay(session)) {
       throw new Error("须先验收 Worker 集，才能保存游玩存档");
     }
-    if (inferLifecycleStage(session) !== "play") {
+    if (inferLifecycleStage(session) !== "play" || !isPlayLayerActive(session.slots)) {
       throw new Error("请先切换到「游玩」再保存游玩存档");
     }
     return this.saveGameSnapshot(sessionId, label, "run", note);
@@ -618,16 +654,97 @@ export class SessionManager {
     if (!canEnterPlay(session)) {
       throw new Error("须先验收 Worker 集，才能开始游玩");
     }
+    this.archivePlayWorking(s.bookId);
+    this.enterPlayLayer(s, { resume: false });
+    this.persist(s);
+    return this.toView(sessionId);
+  }
 
-    let runtimeSession = structuredClone(session);
+  /** 进入游玩层：resume 时恢复「当前游玩」，否则从定稿新开一条聊天 */
+  private enterPlayLayer(
+    s: ManagedSession,
+    opts: { resume: boolean },
+  ): void {
+    const session = s.runtime.getSession();
+    if (!canEnterPlay(session)) {
+      throw new Error("实例尚未就绪，无法进入游玩");
+    }
+    if (
+      opts.resume &&
+      isPlayLayerActive(session.slots) &&
+      inferLifecycleStage(session) === "play"
+    ) {
+      this.sanitizePlayHitl(s);
+      return;
+    }
+    if (s.bookId) this.ensureInstanceSnapshot(s);
+    if (opts.resume && s.bookId) {
+      const working = loadRunSnapshotFile(s.bookId, PLAY_WORKING_SNAPSHOT_ID);
+      if (working?.kind === "run") {
+        this.restoreSnapshotInPlace(s, working, "play");
+        return;
+      }
+    }
+    this.beginNewPlayFromInstance(s);
+    if (s.bookId) this.savePlayWorking(s);
+  }
+
+  /** 回到创作层：先把当前聊天写入「当前游玩」，再加载定稿 */
+  private enterDesignLayer(s: ManagedSession): void {
+    const session = s.runtime.getSession();
+    if (
+      inferLifecycleStage(session) === "design" &&
+      !isPlayLayerActive(session.slots)
+    ) {
+      s.runtime.setLifecycleStage("design");
+      return;
+    }
+    if (s.bookId && isPlayLayerActive(session.slots)) {
+      this.savePlayWorking(s);
+    }
+    const instance = s.bookId ? this.latestInstanceSnapshot(s.bookId) : null;
+    if (instance) {
+      this.restoreSnapshotInPlace(s, instance, "design");
+      return;
+    }
+    let runtimeSession = structuredClone(s.runtime.getSession());
     let blackboardItems = s.runtime.getBlackboard().exportItems();
     ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
       runtimeSession,
       blackboardItems,
     }));
+    runtimeSession.id = session.id;
+    runtimeSession.slots = {
+      ...runtimeSession.slots,
+      uiLifecycleStage: "design",
+      [SLOT_PLAY_LAYER_ACTIVE]: undefined,
+    };
+    runtimeSession.phase = "waiting_user";
+    runtimeSession.waitingReason = { kind: "input" };
+    s.runtime.restoreFromCheckpoint(runtimeSession, blackboardItems);
+  }
+
+  private beginNewPlayFromInstance(s: ManagedSession): void {
+    const keepId = s.runtime.getSession().id;
+    let runtimeSession: RuntimeSession;
+    let blackboardItems: import("../types/blackboard.js").BlackboardItem[];
+    const instance = s.bookId ? this.latestInstanceSnapshot(s.bookId) : null;
+    if (instance) {
+      runtimeSession = structuredClone(instance.runtimeSession);
+      blackboardItems = structuredClone(instance.blackboardItems);
+    } else {
+      runtimeSession = structuredClone(s.runtime.getSession());
+      blackboardItems = s.runtime.getBlackboard().exportItems();
+    }
+    ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
+      runtimeSession,
+      blackboardItems,
+    }));
+    runtimeSession.id = keepId;
     runtimeSession.slots = {
       ...runtimeSession.slots,
       uiLifecycleStage: "play",
+      [SLOT_PLAY_LAYER_ACTIVE]: true,
       startupCompleted: true,
     };
     runtimeSession.phase = "waiting_user";
@@ -636,10 +753,166 @@ export class SessionManager {
     runtimeSession.pendingDecision = undefined;
     runtimeSession.currentWorkerId = undefined;
     runtimeSession.resumeContext = undefined;
-
     s.runtime.restoreFromCheckpoint(runtimeSession, blackboardItems);
-    this.persist(s);
-    return this.toView(sessionId);
+    const opening =
+      s.runtime.getBlackboard().getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
+    if (opening) {
+      s.runtime.getBlackboard().write({
+        tag: DIALOGUE_HISTORY_TAG,
+        content: appendDialogueHistoryTurn("", { role: "助手", text: opening }),
+        source: "runtime",
+      });
+      s.messages = [this.playOpeningMessage(opening)];
+    } else {
+      s.messages = [];
+    }
+    s.branchState = createMessageBranchState();
+  }
+
+  private restoreSnapshotInPlace(
+    s: ManagedSession,
+    snapshot: RunSnapshot,
+    layer: LifecycleStage,
+  ): void {
+    const keepId = s.runtime.getSession().id;
+    let runtimeSession = structuredClone(snapshot.runtimeSession);
+    let blackboardItems = structuredClone(snapshot.blackboardItems);
+    if (snapshot.kind === "instance" || layer === "design") {
+      ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
+        runtimeSession,
+        blackboardItems,
+      }));
+    }
+    runtimeSession.id = keepId;
+    runtimeSession.slots = {
+      ...runtimeSession.slots,
+      uiLifecycleStage: layer,
+      [SLOT_PLAY_LAYER_ACTIVE]: layer === "play" ? true : undefined,
+      startupCompleted: true,
+    };
+    if (layer === "play") {
+      runtimeSession.phase = runtimeSession.phase === "done"
+        ? "waiting_user"
+        : runtimeSession.phase;
+      if (!runtimeSession.waitingReason) {
+        runtimeSession.waitingReason = { kind: "input" };
+      }
+    } else {
+      const sealed = Boolean(runtimeSession.slots[SLOT_CREATION_SEALED_BY_OPENING]);
+      runtimeSession.phase = "waiting_user";
+      runtimeSession.waitingReason = {
+        kind: "input",
+        ...(sealed ? { message: CREATION_SEALED_WAITING_MESSAGE } : {}),
+      };
+      runtimeSession.pendingArtifactId = undefined;
+      runtimeSession.pendingDecision = undefined;
+      runtimeSession.currentWorkerId = undefined;
+    }
+    s.runtime.restoreFromCheckpoint(runtimeSession, blackboardItems);
+    s.messages = snapshot.messages.map((m) => ({ ...m })) as ChatMessage[];
+    s.branchState = createMessageBranchState();
+    if (layer === "play") this.sanitizePlayHitl(s);
+  }
+
+  /** 游玩层不保留创作 HITL（验收 / 确认下一步 / 修订） */
+  private sanitizePlayHitl(s: ManagedSession): void {
+    const session = s.runtime.getSession();
+    const play =
+      isPlayLayerActive(session.slots) || inferLifecycleStage(session) === "play";
+    if (!play) return;
+    const kind = session.waitingReason?.kind;
+    if (
+      kind !== "review_artifact" &&
+      kind !== "approve_step" &&
+      kind !== "revision" &&
+      kind !== "next_intent"
+    ) {
+      return;
+    }
+    session.phase = "waiting_user";
+    session.waitingReason = { kind: "input" };
+    session.pendingArtifactId = undefined;
+    session.pendingDecision = undefined;
+    session.currentWorkerId = undefined;
+    session.resumeContext = undefined;
+    session.updatedAt = new Date().toISOString();
+  }
+
+  private savePlayWorking(s: ManagedSession): void {
+    if (!s.bookId) return;
+    const book = getBook(s.bookId);
+    const runtimeSession = structuredClone(s.runtime.getSession());
+    const snapshot: RunSnapshot = {
+      version: 1,
+      id: PLAY_WORKING_SNAPSHOT_ID,
+      bookId: s.bookId,
+      label: PLAY_WORKING_SNAPSHOT_LABEL,
+      kind: "run",
+      orchestratorId:
+        sessionSkillPackId(runtimeSession) ??
+        (book ? bookSkillPackId(book) : "") ??
+        "",
+      runtimeSession,
+      blackboardItems: s.runtime.getBlackboard().exportItems(),
+      messages: s.messages.map((m) => ({ ...m })),
+      createdAt: new Date().toISOString(),
+      note: "切换创作/游玩时自动保存的当前聊天",
+    };
+    saveRunSnapshotFile(snapshot);
+  }
+
+  private archivePlayWorking(bookId: string): void {
+    const working = loadRunSnapshotFile(bookId, PLAY_WORKING_SNAPSHOT_ID);
+    if (!working) return;
+    if (!working.messages.some((m) => m.role === "user")) return;
+    const stamped: RunSnapshot = {
+      ...working,
+      id: randomUUID(),
+      label: `游玩 ${new Date().toLocaleString("zh-CN", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`,
+      createdAt: new Date().toISOString(),
+      note: "新建游玩前自动保存",
+    };
+    saveRunSnapshotFile(stamped);
+  }
+
+  private ensureInstanceSnapshot(s: ManagedSession): void {
+    if (!s.bookId) return;
+    if (this.latestInstanceSnapshot(s.bookId)) return;
+    if (!canEnterPlay(s.runtime.getSession())) return;
+    try {
+      this.saveGameSnapshot(
+        s.runtime.getSession().id,
+        INSTANCE_OPENING_SNAPSHOT_LABEL,
+        "instance",
+        "进入游玩前自动保存定稿",
+      );
+    } catch (err) {
+      console.warn("[会话] 进入游玩前保存定稿失败", err);
+    }
+  }
+
+  private latestInstanceSnapshot(bookId: string): RunSnapshot | null {
+    const meta = this.listGameSnapshots(bookId).find((s) => s.kind === "instance");
+    if (!meta) return null;
+    return loadRunSnapshotFile(bookId, meta.id);
+  }
+
+  private playOpeningMessage(text: string): ChatMessage {
+    return {
+      id: randomUUID(),
+      role: "system",
+      text,
+      createdAt: new Date().toISOString(),
+      kind: "system_info",
+      actor: "narrator",
+      title: "开场白",
+      body: text,
+    };
   }
 
   /** 从存档读档：替换当前作品进度，可继续创作 */
@@ -665,10 +938,16 @@ export class SessionManager {
         runtimeSession,
         blackboardItems,
       }));
+      runtimeSession.slots = {
+        ...runtimeSession.slots,
+        uiLifecycleStage: "design",
+        [SLOT_PLAY_LAYER_ACTIVE]: undefined,
+      };
     } else {
       runtimeSession.slots = {
         ...runtimeSession.slots,
         uiLifecycleStage: "play",
+        [SLOT_PLAY_LAYER_ACTIVE]: true,
       };
     }
 
@@ -725,6 +1004,16 @@ export class SessionManager {
     opts?: { answers?: QuestionAnswer[] },
   ): Promise<SessionView> {
     const s = this.require(id);
+    this.sanitizePlayHitl(s);
+    const waitingBefore = s.runtime.getSession().waitingReason;
+    if (
+      inferLifecycleStage(s.runtime.getSession()) === "play" &&
+      !isPlayLayerActive(s.runtime.getSession().slots) &&
+      waitingBefore?.kind === "input"
+    ) {
+      this.enterPlayLayer(s, { resume: true });
+      if (s.bookId) this.persist(s);
+    }
     this.clearAgentThinking(id);
     recordPreMessageCheckpoint(
       s.branchState,
@@ -764,35 +1053,36 @@ export class SessionManager {
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     }
     try {
-      if (reason?.kind === "approve_step") {
-        await s.runtime.rejectStep(trimmed || text);
-      } else if (reason?.kind === "review_artifact") {
-        // 先把卡上追问（问+选项+补充）写入「用户.worker答复」，再按意见改产物
-        if (sidecarAnswers.length && reason.questions?.length) {
-          const qaText = formatQuestionAnswersForAi(
-            normalizeQuestions(reason.questions),
-            sidecarAnswers,
-            trimmed || undefined,
-          );
-          await s.runtime.resolveSidecarQuestions(qaText);
+      const owned = await this.runExclusive(id, s, async () => {
+        if (reason?.kind === "approve_step") {
+          await s.runtime.rejectStep(trimmed || text);
+        } else if (reason?.kind === "review_artifact") {
+          // 先把卡上追问（问+选项+补充）写入「用户.worker答复」，再按意见改产物
+          if (sidecarAnswers.length && reason.questions?.length) {
+            const qaText = formatQuestionAnswersForAi(
+              normalizeQuestions(reason.questions),
+              sidecarAnswers,
+              trimmed || undefined,
+            );
+            await s.runtime.resolveSidecarQuestions(qaText);
+          }
+          if (trimmed || sidecarAnswers.length) {
+            await s.runtime.rejectArtifact(
+              trimmed || "按追问作答更新产物",
+            );
+          }
+        } else {
+          await s.runtime.submitInput(trimmed || text);
         }
-        if (trimmed || sidecarAnswers.length) {
-          await s.runtime.rejectArtifact(
-            trimmed || "按追问作答更新产物",
-          );
-        }
-      } else {
-        await s.runtime.submitInput(trimmed || text);
-      }
+      });
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 发送消息失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
-    } finally {
-      this.clearAgentThinking(id);
-      this.syncCreationDialogue(s);
     }
+    this.syncCreationDialogue(s);
     this.persist(s);
     return this.toView(id);
   }
@@ -838,22 +1128,23 @@ export class SessionManager {
     if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
 
     try {
-      if (isSidecar) {
-        await s.runtime.resolveSidecarQuestions(aiText);
-        // 作答必须写回产物，否则验收后进度空转、追问在美学/交互间打转
-        await s.runtime.rejectArtifact("按追问作答更新产物");
-      } else {
-        await s.runtime.submitInput(aiText);
-      }
+      const owned = await this.runExclusive(id, s, async () => {
+        if (isSidecar) {
+          await s.runtime.resolveSidecarQuestions(aiText);
+          // 作答必须写回产物，否则验收后进度空转、追问在美学/交互间打转
+          await s.runtime.rejectArtifact("按追问作答更新产物");
+        } else {
+          await s.runtime.submitInput(aiText);
+        }
+      });
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 回答追问失败", detail);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
-    } finally {
-      this.clearAgentThinking(id);
-      this.syncCreationDialogue(s);
     }
+    this.syncCreationDialogue(s);
     this.persist(s);
     return this.toView(id);
   }
@@ -872,7 +1163,10 @@ export class SessionManager {
       this.clearAgentThinking(id);
       s.messages.push(this.msg("user", "跳过可选追问"));
       try {
-        await s.runtime.resolveSidecarQuestions();
+        const owned = await this.runExclusive(id, s, () =>
+          s.runtime.resolveSidecarQuestions(),
+        );
+        if (!owned) return this.toView(id);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         s.messages.push(this.msg("system", formatRuntimeError(detail)));
@@ -918,7 +1212,10 @@ export class SessionManager {
     if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
 
     try {
-      await s.runtime.submitInput(trimmed);
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.submitInput(trimmed),
+      );
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
@@ -974,7 +1271,10 @@ export class SessionManager {
     if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
 
     try {
-      await s.runtime.rerunWorker(workerId);
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.rerunWorker(workerId),
+      );
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
@@ -993,6 +1293,32 @@ export class SessionManager {
       m.branchTotal = branch.variants.length;
     }
 
+    this.persist(s);
+    return this.toView(id);
+  }
+
+  /** 中止当前生成并重跑卡住的 worker / 总管 */
+  async abortAndRetry(id: string): Promise<SessionView> {
+    const s = this.require(id);
+    const session = s.runtime.getSession();
+    if (session.phase !== "running" || session.waitingReason) {
+      throw new Error("当前没有正在执行的任务");
+    }
+    const cutoff = s.runMessageCutoff ?? s.messages.length;
+    s.messages = s.messages.slice(0, cutoff);
+    if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    try {
+      const owned = await this.runExclusive(id, s, async () => {
+        await s.runtime.retryStuckRun();
+      });
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 停止并重试失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+      if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    }
+    this.syncCreationDialogue(s);
     this.persist(s);
     return this.toView(id);
   }
@@ -1053,7 +1379,10 @@ export class SessionManager {
   ): Promise<SessionView> {
     const s = this.require(id);
     try {
-      await s.runtime.approve(stepParams);
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.approve(stepParams),
+      );
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 确认开干失败", detail);
@@ -1065,7 +1394,10 @@ export class SessionManager {
   async confirmIntake(id: string): Promise<SessionView> {
     const s = this.require(id);
     try {
-      await s.runtime.confirmIntake();
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.confirmIntake(),
+      );
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 确认需求失败", detail);
@@ -1075,7 +1407,10 @@ export class SessionManager {
     return this.toView(id);
   }
 
-  async accept(id: string): Promise<SessionView> {
+  async accept(
+    id: string,
+    opts?: { openingIndex?: number },
+  ): Promise<SessionView> {
     const s = this.require(id);
     const pendingId = s.runtime.getSession().pendingArtifactId;
     const waiting = s.runtime.getSession().waitingReason;
@@ -1085,7 +1420,21 @@ export class SessionManager {
       ? s.runtime.getSession().artifacts.find((a) => a.id === pendingId)
       : undefined;
     const stageBefore = inferLifecycleStage(s.runtime.getSession());
-    await s.runtime.acceptArtifact();
+    const sealedBefore = Boolean(
+      s.runtime.getSession().slots[SLOT_CREATION_SEALED_BY_OPENING],
+    );
+    try {
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.acceptArtifact(undefined, opts),
+      );
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 接受产物失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+      this.persist(s);
+      return this.toView(id);
+    }
     // 接受产物 = 不再用追问完善；询问模块随 waitingReason 清除而收起
     if (hadSidecarQuestions) {
       s.messages.push(
@@ -1101,6 +1450,8 @@ export class SessionManager {
       }
     }
     this.persist(s);
+    this.maybeSaveOpeningInstance(s, sealedBefore);
+    this.persist(s);
     return this.toView(id);
   }
 
@@ -1109,13 +1460,16 @@ export class SessionManager {
     const s = this.require(id);
     const waiting = s.runtime.getSession().waitingReason;
     try {
-      if (waiting?.kind === "approve_step") {
-        await s.runtime.rejectStep(reason ?? "用户暂不执行");
-      } else if (waiting?.kind === "review_artifact") {
-        await s.runtime.rejectArtifact(reason ?? "用户要求重新来");
-      } else {
-        throw new Error("当前没有可拒绝的确认或验收");
-      }
+      const owned = await this.runExclusive(id, s, async () => {
+        if (waiting?.kind === "approve_step") {
+          await s.runtime.rejectStep(reason ?? "用户暂不执行");
+        } else if (waiting?.kind === "review_artifact") {
+          await s.runtime.rejectArtifact(reason ?? "用户要求重新来");
+        } else {
+          throw new Error("当前没有可拒绝的确认或验收");
+        }
+      });
+      if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 打回失败", detail);
@@ -1127,26 +1481,42 @@ export class SessionManager {
 
   async runOutline(id: string): Promise<SessionView> {
     const s = this.require(id);
-    await s.runtime.submitDecision(
-      createDecision({
-        action: "run_worker",
-        reason: "根据创作简报生成大纲",
-        workerId: "outline",
-        requiresApproval: true,
-      }),
-    );
+    try {
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.submitDecision(
+          createDecision({
+            action: "run_worker",
+            reason: "根据创作简报生成大纲",
+            workerId: "outline",
+            requiresApproval: true,
+          }),
+        ),
+      );
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+    }
     return this.toView(id);
   }
 
   async finish(id: string): Promise<SessionView> {
     const s = this.require(id);
-    await s.runtime.submitDecision(
-      createDecision({
-        action: "finish",
-        reason: "创作流程结束",
-        requiresApproval: false,
-      }),
-    );
+    try {
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.submitDecision(
+          createDecision({
+            action: "finish",
+            reason: "创作流程结束",
+            requiresApproval: false,
+          }),
+        ),
+      );
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+    }
     return this.toView(id);
   }
 
@@ -1308,6 +1678,42 @@ export class SessionManager {
     }
   }
 
+  /** 选定开场后正式保存一份 instance 定稿（可进游玩的规格+开局） */
+  private maybeSaveOpeningInstance(
+    s: ManagedSession,
+    sealedBefore: boolean,
+  ): void {
+    if (sealedBefore) return;
+    if (!s.bookId) return;
+    const session = s.runtime.getSession();
+    if (!session.slots[SLOT_CREATION_SEALED_BY_OPENING]) return;
+    if (!canEnterPlay(session)) {
+      s.messages.push(
+        this.msg(
+          "system",
+          "[创作收口] 开场已选定，但 Worker 集尚未验收，未写入创作定稿存档。",
+        ),
+      );
+      return;
+    }
+    try {
+      const meta = this.saveGameSnapshot(
+        session.id,
+        INSTANCE_OPENING_SNAPSHOT_LABEL,
+        "instance",
+        "选定开场后自动保存",
+      );
+      s.messages.push(
+        this.msg("system", `[创作收口] 已保存创作定稿「${meta.label}」。`),
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      s.messages.push(
+        this.msg("system", `[创作收口] 开场已选定，定稿存档未写入：${detail}`),
+      );
+    }
+  }
+
   private persist(s: ManagedSession): void {
     if (!s.bookId) return;
     const book = getBook(s.bookId);
@@ -1423,7 +1829,7 @@ export class SessionManager {
 
   private buildLiveStreamView(sessionId: string): LiveStreamView | undefined {
     const worker = this.workerLive.get(sessionId);
-    if (worker && (worker.thinking || worker.output)) {
+    if (worker) {
       return {
         actor: "worker",
         actorId: worker.workerId,
@@ -1447,6 +1853,42 @@ export class SessionManager {
     const s = this.sessions.get(id);
     if (!s) throw new Error("会话不存在");
     return s;
+  }
+
+  private beginRun(s: ManagedSession, sessionId: string): number {
+    s.runAbort?.abort();
+    s.runAbort = new AbortController();
+    s.runGen = (s.runGen ?? 0) + 1;
+    s.runMessageCutoff = s.messages.length;
+    this.clearAgentThinking(sessionId);
+    return s.runGen;
+  }
+
+  private isCurrentRun(s: ManagedSession, gen: number): boolean {
+    return s.runGen === gen;
+  }
+
+  /** true = 本轮仍有效；false = 已被停止并重试取代 */
+  private async runExclusive(
+    id: string,
+    s: ManagedSession,
+    fn: () => Promise<unknown>,
+  ): Promise<boolean> {
+    const gen = this.beginRun(s, id);
+    try {
+      await runWithAbortSignal(s.runAbort!.signal, fn);
+      return this.isCurrentRun(s, gen);
+    } catch (err) {
+      if (isAbortError(err) && !this.isCurrentRun(s, gen)) {
+        return false;
+      }
+      throw err;
+    } finally {
+      if (this.isCurrentRun(s, gen)) {
+        this.clearAgentThinking(id);
+        s.runAbort = undefined;
+      }
+    }
   }
 
   private enrichDisplayMessages(
@@ -1595,6 +2037,7 @@ export class SessionManager {
 
   private toView(id: string, resumed = false, resumeHint?: string): SessionView {
     const s = this.require(id);
+    this.sanitizePlayHitl(s);
     const session = s.runtime.getSession();
     const reason = session.waitingReason;
     const book = s.bookId ? getBook(s.bookId) : null;
@@ -1667,7 +2110,15 @@ export class SessionManager {
           : "描述你想写什么…",
       });
     } else if (reason?.kind === "input") {
-      if (reason.questions?.length) {
+      const playNow =
+        inferLifecycleStage(session) === "play" || isPlayLayerActive(session.slots);
+      if (playNow) {
+        actions.push({
+          type: "send_message",
+          label: "发送",
+          placeholder: "说你要做什么…",
+        });
+      } else if (reason.questions?.length) {
         const qs = normalizeQuestions(reason.questions);
         const hasAssessment = Boolean(reason.message?.trim());
         hints.push(
@@ -1732,11 +2183,17 @@ export class SessionManager {
       );
       if (proposed) {
         hints.push(
-          `确认开始「${proposed.name}」${
-            proposed.paramsMissing.length
-              ? `（请先补齐：${proposed.paramsMissing.join("、")}）`
-              : ""
-          }`,
+          proposed.mode === "revise"
+            ? `回头修改「${proposed.name}」${
+                proposed.paramsMissing.length
+                  ? `（请先补齐：${proposed.paramsMissing.join("、")}）`
+                  : "（继承既有产物继续改，不是从零再生成）"
+              }`
+            : `确认开始「${proposed.name}」${
+                proposed.paramsMissing.length
+                  ? `（请先补齐：${proposed.paramsMissing.join("、")}）`
+                  : ""
+              }`,
         );
         actions.push({
           type: "approve",
@@ -1749,10 +2206,10 @@ export class SessionManager {
       actions.push({
         type: "send_message",
         label: "说明意见",
-        placeholder: "不同意可说明要改成什么…",
+        placeholder: "改排、回头改某步，或说明不要这一步…",
       });
     } else if (reason?.kind === "next_intent") {
-      hints.push("下一步想写什么？可留空，发送后会展示下一节点供你确认。");
+      hints.push("下一步想写什么？可留空；也可说回头改某步。发送后会展示下一节点供你确认。");
       actions.push({
         type: "send_message",
         label: "继续",
@@ -1859,6 +2316,7 @@ export class SessionManager {
       actions,
       pipeline: buildPipeline(session),
       lifecycleStage,
+      playLayerActive: isPlayLayerActive(session.slots),
       playReady: canEnterPlay(session),
       skillCatalog,
       toolTrace: buildToolTrace(messages),
@@ -2246,7 +2704,10 @@ function readProposedNextStep(
             }))
             .filter((p) => p.key)
         : [],
+      kind: typeof doc.kind === "string" ? doc.kind : undefined,
       intent: typeof doc.intent === "string" ? doc.intent : undefined,
+      mode: doc.mode === "revise" ? "revise" : undefined,
+      revises: typeof doc.revises === "string" ? doc.revises : undefined,
     };
   } catch {
     return undefined;
@@ -2416,6 +2877,7 @@ function buildReviewArtifactView(
     workerId: art.workerId,
     summary,
     body,
+    outputTags: art.outputTags,
     sourceMessageId: outputMsg?.id,
     contextTrace: outputMsg?.contextTrace,
     workerSet,

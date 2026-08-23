@@ -28,6 +28,29 @@ const sectionStorageEl = document.getElementById("section-storage");
 const activeSettingsBarEl = document.getElementById("active-settings-bar");
 const settingsToastEl = document.getElementById("settings-toast");
 const contextTraceKeepEl = document.getElementById("context-trace-keep");
+const probeDialog = document.getElementById("preset-probe-dialog");
+const probePresetNameEl = document.getElementById("probe-preset-name");
+const probeMessageEl = document.getElementById("probe-message");
+const probeLoreBeforeEl = document.getElementById("probe-lore-before");
+const probeHistoryEl = document.getElementById("probe-history");
+const probeLoreAfterEl = document.getElementById("probe-lore-after");
+const probePostTurnEl = document.getElementById("probe-post-turn");
+const probeSendEl = document.getElementById("probe-send");
+const probeStatusEl = document.getElementById("probe-status");
+const probeMessagesEl = document.getElementById("probe-messages");
+const probeReplyWrapEl = document.getElementById("probe-reply-wrap");
+const probeReplyEl = document.getElementById("probe-reply");
+
+const DEFAULT_PROBE_CONTEXT = {
+  message: "我推开门。",
+  loreBefore: "一座雨夜的港口旅馆。柜台点着油灯。",
+  history: "店员：今晚只剩阁楼那间。\n你：好。",
+  loreAfter: "时间：深夜。地点：旅馆大厅。",
+  postTurn: "",
+};
+
+let probingPresetId = null;
+let probeBusy = false;
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -192,6 +215,7 @@ function renderPresets() {
       </div>
       <div class="config-card-actions">
         ${activateButtonHtml(active, p.id, "activate-preset")}
+        <button type="button" data-action="probe-preset" data-id="${p.id}">试跑</button>
         <button type="button" data-action="toggle-preset-entries" data-id="${p.id}">
           ${expanded ? "收起条目" : "编辑条目"}
         </button>
@@ -476,6 +500,8 @@ presetsListEl.addEventListener("click", async (e) => {
   try {
     if (action === "activate-preset") {
       await activatePreset(id);
+    } else if (action === "probe-preset") {
+      openProbeDialog(id);
     } else if (action === "toggle-preset-entries") {
       await togglePresetEntries(id);
     } else if (action === "delete-preset") {
@@ -570,6 +596,120 @@ presetFileEl.addEventListener("change", async () => {
     showToast(err.message, true);
   } finally {
     presetFileEl.value = "";
+  }
+});
+
+function resetProbeForm() {
+  probeMessageEl.value = DEFAULT_PROBE_CONTEXT.message;
+  probeLoreBeforeEl.value = DEFAULT_PROBE_CONTEXT.loreBefore;
+  probeHistoryEl.value = DEFAULT_PROBE_CONTEXT.history;
+  probeLoreAfterEl.value = DEFAULT_PROBE_CONTEXT.loreAfter;
+  probePostTurnEl.value = DEFAULT_PROBE_CONTEXT.postTurn;
+  probeStatusEl.hidden = true;
+  probeStatusEl.textContent = "";
+  probeReplyWrapEl.hidden = true;
+  probeReplyEl.textContent = "";
+  probeMessagesEl.innerHTML =
+    '<p class="probe-empty">发送后显示实际拼进请求的消息。</p>';
+}
+
+function openProbeDialog(presetId) {
+  const preset = state.presets.find((p) => p.id === presetId);
+  probingPresetId = presetId;
+  probePresetNameEl.textContent = preset?.name ?? presetId;
+  resetProbeForm();
+  probeDialog.showModal();
+  probeMessageEl.focus();
+  probeMessageEl.select();
+}
+
+function renderProbeMessages(messages) {
+  if (!messages?.length) {
+    probeMessagesEl.innerHTML =
+      '<p class="probe-empty">这次没有拼出任何消息。</p>';
+    return;
+  }
+  probeMessagesEl.innerHTML = messages
+    .map(
+      (m, i) => `
+      <article class="probe-msg">
+        <header>
+          <span class="probe-role ${escapeHtml(m.role)}">${escapeHtml(m.role)}</span>
+          <span class="probe-index">#${i + 1}</span>
+        </header>
+        <pre>${escapeHtml(m.content)}</pre>
+      </article>`,
+    )
+    .join("");
+}
+
+function setProbeBusy(busy) {
+  probeBusy = busy;
+  probeSendEl.disabled = busy;
+  probeSendEl.textContent = busy ? "发送中…" : "发送一轮";
+}
+
+async function sendProbe() {
+  if (probeBusy || !probingPresetId) return;
+  const message = probeMessageEl.value.trim();
+  if (!message) {
+    probeStatusEl.hidden = false;
+    probeStatusEl.textContent = "请填写本轮输入";
+    probeMessageEl.focus();
+    return;
+  }
+
+  setProbeBusy(true);
+  probeStatusEl.hidden = false;
+  probeStatusEl.textContent = "正在拼装上下文…";
+  probeReplyWrapEl.hidden = true;
+
+  try {
+    const result = await api(`/api/presets/${probingPresetId}/probe`, {
+      method: "POST",
+      body: JSON.stringify({
+        message,
+        loreBefore: probeLoreBeforeEl.value,
+        history: probeHistoryEl.value,
+        loreAfter: probeLoreAfterEl.value,
+        postTurn: probePostTurnEl.value,
+      }),
+    });
+    renderProbeMessages(result.messages);
+    if (result.reply) {
+      probeReplyWrapEl.hidden = false;
+      probeReplyEl.textContent = result.reasoning
+        ? `${result.reasoning}\n\n——\n\n${result.reply}`
+        : result.reply;
+    }
+    if (result.error) {
+      probeStatusEl.textContent = `上下文已拼装，生成失败：${result.error}`;
+    } else if (result.skipReason) {
+      probeStatusEl.textContent = result.skipReason;
+    } else if (result.completed) {
+      probeStatusEl.textContent = `已发送 ${result.messages.length} 条`;
+    } else {
+      probeStatusEl.textContent = `已拼装 ${result.messages.length} 条`;
+    }
+  } catch (err) {
+    probeStatusEl.textContent = err.message;
+  } finally {
+    setProbeBusy(false);
+  }
+}
+
+document.getElementById("probe-close")?.addEventListener("click", () => {
+  probeDialog.close();
+});
+
+probeSendEl?.addEventListener("click", () => {
+  sendProbe().catch((err) => showToast(err.message, true));
+});
+
+probeMessageEl?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    sendProbe().catch((err) => showToast(err.message, true));
   }
 });
 

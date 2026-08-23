@@ -1,12 +1,15 @@
-import type { ChatMessage, LlmProvider, ParsedToolCall, StreamCallbacks } from "../llm/client.js";
-import { supportsToolStream } from "../llm/stream-complete.js";
+import type { LlmProvider, ParsedToolCall } from "../llm/client.js";
 import { toolCallToDecision, validateLoopToolCall } from "../runtime/tool-registry.js";
+import {
+  createLocalLlmDriver,
+  type AgentDriver,
+  type DriverToolCall,
+} from "../runtime/driver.js";
 import type { MainAgentDecision } from "../types/runtime.js";
 import { isMainAgentTerminalTool } from "../types/tools.js";
 import { MAIN_AGENT_TOOL_DEFINITIONS } from "./tools.js";
 import { buildMainAgentUserPrompt, parseMainAgentDecision } from "./main-agent.js";
 import type { MainAgentContext } from "./main-agent.js";
-import { debugLog } from "../log.js";
 
 export type ToolLoopHandlers = {
   readBlackboard: (tags: string[]) => Record<string, string>;
@@ -31,8 +34,6 @@ export type ToolLoopResult = {
   toolTrace: string[];
 };
 
-const MAX_TOOL_LOOP_ITERATIONS = 12;
-
 function buildToolLoopSystemPrompt(
   workers: Array<{ id: string; description: string }>,
 ): string {
@@ -54,35 +55,15 @@ ${workerLines}
 选定节点后立即调用 run_worker。`;
 }
 
-async function completeToolsPreferStream(
-  llm: LlmProvider,
-  messages: ChatMessage[],
-  callbacks: StreamCallbacks,
-): Promise<Awaited<ReturnType<LlmProvider["completeWithTools"]>>> {
-  if (supportsToolStream(llm)) {
-    return llm.completeWithToolsStream!(messages, {
-      tools: MAIN_AGENT_TOOL_DEFINITIONS,
-      caller: "main_agent",
-    }, callbacks);
-  }
-  const result = await llm.completeWithTools(messages, {
-    tools: MAIN_AGENT_TOOL_DEFINITIONS,
-    caller: "main_agent",
-  });
-  if (result.reasoning) {
-    callbacks.onReasoningDelta?.(result.reasoning);
-  }
-  if (result.content) {
-    callbacks.onContentDelta?.(result.content);
-  }
-  return result;
-}
-
 function executeLoopTool(
-  call: ParsedToolCall,
+  call: DriverToolCall | ParsedToolCall,
   handlers: ToolLoopHandlers,
 ): string {
-  const name = validateLoopToolCall(call);
+  const name = validateLoopToolCall({
+    id: call.id,
+    name: call.name,
+    arguments: call.arguments,
+  });
   const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
 
   switch (name) {
@@ -104,102 +85,66 @@ function executeLoopTool(
   }
 }
 
-function assistantMessageFromToolCalls(
-  content: string | null,
-  toolCalls: ParsedToolCall[],
-): ChatMessage {
-  return {
-    role: "assistant",
-    content,
-    tool_calls: toolCalls.map((tc) => ({
-      id: tc.id,
-      type: "function" as const,
-      function: { name: tc.name, arguments: tc.arguments },
-    })),
-  };
-}
-
-function emitThinkingDone(handlers: ToolLoopHandlers, reasoning?: string): void {
-  const text = reasoning?.trim() ?? "";
-  if (text) handlers.onThinkingDone?.(text);
-}
-
 /**
  * 总管 tool loop：在 running 相位内可多轮调用 read_blackboard 等，
  * 直到调用终止 tool 并返回 MainAgentDecision。
+ *
+ * 循环本身交给 {@link AgentDriver}；本函数只解释总管 tool 语义。
  */
 export async function runMainAgentToolLoop(
   llm: LlmProvider,
   context: MainAgentContext,
   handlers: ToolLoopHandlers,
+  driver: AgentDriver = createLocalLlmDriver(llm),
 ): Promise<ToolLoopResult> {
-  const messages: ChatMessage[] = [
-    {
-      role: "system",
-      content: buildToolLoopSystemPrompt(context.availableWorkers),
-    },
-    { role: "user", content: buildMainAgentUserPrompt(context) },
-  ];
-
   const toolTrace: string[] = [];
-  const streamCallbacks: StreamCallbacks = {
-    onReasoningDelta: (delta) => handlers.onThinkingDelta?.(delta),
-  };
 
-  for (let iteration = 1; iteration <= MAX_TOOL_LOOP_ITERATIONS; iteration++) {
-    debugLog("llm", `总管循环 第${iteration}轮`);
-    const result = await completeToolsPreferStream(llm, messages, streamCallbacks);
-    emitThinkingDone(handlers, result.reasoning);
+  const run = await driver.run({
+    system: buildToolLoopSystemPrompt(context.availableWorkers),
+    messages: [{ role: "user", content: buildMainAgentUserPrompt(context) }],
+    tools: MAIN_AGENT_TOOL_DEFINITIONS,
+    caller: "main_agent",
+    label: "总管循环",
+    onThinkingDelta: (delta) => handlers.onThinkingDelta?.(delta),
+    onThinkingDone: (text) => handlers.onThinkingDone?.(text),
+    handleStep: (calls) => {
+      const terminalCalls = calls.filter((tc) => isMainAgentTerminalTool(tc.name));
+      const loopCalls = calls.filter((tc) => !isMainAgentTerminalTool(tc.name));
 
-    if (result.toolCalls.length === 0) {
-      if (result.content?.trim()) {
-        const decision = parseMainAgentDecision(result.content);
-        return { decision, iterations: iteration, toolTrace };
+      if (terminalCalls.length > 1) {
+        throw new Error(
+          `Main Agent returned multiple terminal tools: ${terminalCalls.map((t) => t.name).join(", ")}`,
+        );
       }
-      throw new Error("Main Agent returned no tool calls and no content");
-    }
 
-    const terminalCalls = result.toolCalls.filter((tc) =>
-      isMainAgentTerminalTool(tc.name),
-    );
-    const loopCalls = result.toolCalls.filter(
-      (tc) => !isMainAgentTerminalTool(tc.name),
-    );
+      if (terminalCalls.length === 1) {
+        const terminal = terminalCalls[0];
+        handlers.onToolCall?.(terminal.name, terminal.arguments);
+        toolTrace.push(`${terminal.name} (terminal)`);
+        return { kind: "conclude" as const, call: terminal };
+      }
 
-    if (terminalCalls.length > 1) {
-      throw new Error(
-        `Main Agent returned multiple terminal tools: ${terminalCalls.map((t) => t.name).join(", ")}`,
-      );
-    }
-
-    messages.push(
-      assistantMessageFromToolCalls(result.content, result.toolCalls),
-    );
-
-    if (terminalCalls.length === 1) {
-      const terminal = terminalCalls[0];
-      handlers.onToolCall?.(terminal.name, terminal.arguments);
-      toolTrace.push(`${terminal.name} (terminal)`);
-      return {
-        decision: toolCallToDecision(terminal),
-        iterations: iteration,
-        toolTrace,
-      };
-    }
-
-    for (const call of loopCalls) {
-      const output = executeLoopTool(call, handlers);
-      handlers.onToolCall?.(call.name, output.slice(0, 200));
-      toolTrace.push(call.name);
-      messages.push({
-        role: "tool",
-        content: output,
-        tool_call_id: call.id,
+      const results = loopCalls.map((call) => {
+        const output = executeLoopTool(call, handlers);
+        handlers.onToolCall?.(call.name, output.slice(0, 200));
+        toolTrace.push(call.name);
+        return { callId: call.id, content: output };
       });
-    }
+      return { kind: "continue" as const, results };
+    },
+  });
+
+  if (run.stop.kind === "text") {
+    return {
+      decision: parseMainAgentDecision(run.stop.content),
+      iterations: run.iterations,
+      toolTrace,
+    };
   }
 
-  throw new Error(
-    `Main Agent tool loop exceeded ${MAX_TOOL_LOOP_ITERATIONS} iterations`,
-  );
+  return {
+    decision: toolCallToDecision(run.stop.call),
+    iterations: run.iterations,
+    toolTrace,
+  };
 }

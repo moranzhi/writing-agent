@@ -7,6 +7,7 @@ import type {
   PresetPromptOrderItem,
   UnsupportedPresetSection,
 } from "../types/preset.js";
+import { applyExtendedMarkers } from "./markers.js";
 
 type StPrompt = {
   identifier?: string;
@@ -186,17 +187,6 @@ export function importSillyTavernPreset(
     });
   });
 
-  const referenced = new Set(promptOrder.map((o) => o.promptId));
-  const unreferencedCount = prompts.filter(
-    (p) => !referenced.has(p.id),
-  ).length;
-
-  const enabledCount = promptOrder.filter((o) => {
-    if (!o.enabled) return false;
-    const entry = prompts.find((p) => p.id === o.promptId);
-    return entry?.enabled !== false;
-  }).length;
-
   const generation = readGeneration(raw);
   const generationFields = Object.entries(generation)
     .filter(([, v]) => v !== undefined)
@@ -211,7 +201,7 @@ export function importSillyTavernPreset(
       ? (rawInput as { name: string }).name
       : "导入的预设");
 
-  const preset: PresetPackage = {
+  const preset: PresetPackage = applyExtendedMarkers({
     id: options.id ?? `${slugify(presetName) || "preset"}-${randomUUID().slice(0, 8)}`,
     name: presetName,
     source: "sillytavern",
@@ -221,13 +211,23 @@ export function importSillyTavernPreset(
     unsupported: collectUnsupported(raw),
     importedAt: new Date().toISOString(),
     raw: rawInput,
-  };
+  });
+
+  const framedReferenced = new Set(preset.promptOrder.map((o) => o.promptId));
+  const framedUnreferenced = preset.prompts.filter(
+    (p) => !framedReferenced.has(p.id),
+  ).length;
+  const framedEnabled = preset.promptOrder.filter((o) => {
+    if (!o.enabled) return false;
+    const entry = preset.prompts.find((p) => p.id === o.promptId);
+    return entry?.enabled !== false;
+  }).length;
 
   return {
     preset,
-    promptCount: prompts.length,
-    enabledCount,
-    unreferencedCount,
+    promptCount: preset.prompts.length,
+    enabledCount: framedEnabled,
+    unreferencedCount: framedUnreferenced,
     missingIdentifiers,
     generationFields,
     warnings,

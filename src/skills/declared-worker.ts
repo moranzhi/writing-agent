@@ -31,6 +31,7 @@ import {
   slotOrderForRef,
 } from "./context-order.js";
 import type { ContextSegmentDef } from "./context-segments.js";
+import { PLAY_VISIBLE_BODY_INSTRUCTION } from "./present-packet.js";
 
 type WorkerTemplateDoc = {
   id?: string;
@@ -44,8 +45,9 @@ type WorkerTemplateDoc = {
 /**
  * 解析本次 worker 的验收模式（创作 / run 共用入口）。
  * - design-* / opening-generator 磁盘创作 worker → 始终 user_confirmed
+ * - 游玩回合：一律 no_confirmation（一句输入连跑，不穿插验收）
  * - Worker 集 acceptance: review → user_confirmed；continue → no_confirmation
- * - 未声明 acceptance：design 生命周期默认确认；play 缺省按 review（稳妥）
+ * - 未声明 acceptance：创作默认确认
  */
 export function resolveAcceptanceModeForWorker(params: {
   session: RuntimeSession;
@@ -55,6 +57,9 @@ export function resolveAcceptanceModeForWorker(params: {
   const workerId = params.workerId.trim();
   if (isDesignDiskWorker(workerId) || workerId === "opening-generator") {
     return "user_confirmed";
+  }
+  if (inferLifecycleStage(params.session) === "play") {
+    return "no_confirmation";
   }
 
   const decl = buildInstanceWorkerDeclaration(
@@ -66,7 +71,6 @@ export function resolveAcceptanceModeForWorker(params: {
   if (entry?.acceptance === "continue") return "no_confirmation";
   if (entry?.acceptance === "review") return "user_confirmed";
 
-  // 未写明：创作阶段默认验收；游玩缺省也验收（避免静默连跑）
   return "user_confirmed";
 }
 
@@ -210,6 +214,11 @@ export function buildDeclaredWorkerSkill(params: {
     params.template?.duty?.trim() ||
     `执行 ${id}`;
   const excerpt = params.template?.prompt_excerpt?.trim() || "";
+  const visibleBodyRule =
+    id === "narrator" || id === "round-present"
+      ? PLAY_VISIBLE_BODY_INSTRUCTION
+      : "";
+  const excerptWithRule = [excerpt, visibleBodyRule].filter(Boolean).join("\n\n");
   const presentation = params.entry.presentation
     ? JSON.stringify(params.entry.presentation, null, 2)
     : "";
@@ -217,7 +226,7 @@ export function buildDeclaredWorkerSkill(params: {
   const premises = (params.workerSet?.core_premises ?? []).filter(Boolean);
   const residentSection = formatResidentPromptSection(resident, id);
 
-  const personaText = [duty, excerpt].filter(Boolean).join("\n\n");
+  const personaText = [duty, excerptWithRule].filter(Boolean).join("\n\n");
   const orderDoc = parseContextOrder(params.workerSet?.context_order);
   const orderSlot = slotOrderForRef(orderDoc, id);
   let contextSegments: ContextSegmentDef[] | undefined;
@@ -277,7 +286,7 @@ export function buildDeclaredWorkerSkill(params: {
     "",
     duty,
     "",
-    excerpt ? `## 写法要点\n\n${excerpt}` : "",
+    excerptWithRule ? `## 写法要点\n\n${excerptWithRule}` : "",
     presentation ? `## presentation（实例）\n\n\`\`\`json\n${presentation}\n\`\`\`` : "",
     narrative ? `## 叙事指南\n\n${narrative}` : "",
     premises.length

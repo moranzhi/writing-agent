@@ -146,10 +146,13 @@ export type ReviewComposerCopy = {
  */
 export function reviewComposerCopy(
   workerId: string | undefined | null,
-  opts?: { hasQuestions?: boolean },
+  opts?: { hasQuestions?: boolean; outputTags?: readonly string[] },
 ): ReviewComposerCopy {
   const hasQuestions = Boolean(opts?.hasQuestions);
   const id = (workerId ?? "").trim();
+  const openingReview =
+    id === "opening-generator" ||
+    (opts?.outputTags ?? []).includes("设计.开场白与开场变量");
 
   if (id === "design-flow") {
     return {
@@ -169,7 +172,7 @@ export function reviewComposerCopy(
     };
   }
 
-  if (id === "opening-generator") {
+  if (id === "opening-generator" || openingReview) {
     return {
       chip: "开场",
       kicker: "待选定",

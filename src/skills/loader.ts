@@ -516,7 +516,9 @@ export async function loadWorkerSkillWithContext(
       resolveDesignStepBinding,
       CREATION_CURRENT_STEP_TAG,
       CREATION_MODULE_OPENING_TAG,
+      formatPriorArtifactContext,
       formatStepParamsForPrompt,
+      isPriorArtifactModule,
     } = await import("./creation-flow.js");
     const binding = await resolveDesignStepBinding({
       skillPackRoot: skill.skillPackRoot,
@@ -526,11 +528,27 @@ export async function loadWorkerSkillWithContext(
       skillsRoot,
     });
     if (binding) {
+      const inheritTag = binding.inheritTag?.trim() || "";
+      const inheritNote = inheritTag
+        ? `\n\n【回头修改】本步继承既有产物继续改，不是从零再生成。程序已注入【既有产物 · 继承修改】。保留未点名要改的部分，写回同一产物。禁止推倒重写，禁止再走一遍开场询问。`
+        : "";
       const openingNote = binding.opening
         ? `\n\n【程序开场】若黑板有「${CREATION_MODULE_OPENING_TAG}」，该默认问题已由程序发给用户（不经 LLM）；用户首答在「用户.worker答复」。勿重复同一开场白，在其答复与提示词基础上继续追问或产出。`
         : "";
-      const paramsBlock = `## 【本步参数】（编排期已钉；直接按此执行，勿再问「生成什么 / 调用哪个规则」）\n\n${formatStepParamsForPrompt(binding.step.params)}`;
-      modulePromptBlock = `${paramsBlock}\n\n## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}`;
+      const paramsBlock = isPriorArtifactModule(binding.module)
+        ? formatPriorArtifactContext(binding.step.params)
+        : `## 【本步参数】（编排期已钉；直接按此执行，勿再问「生成什么 / 调用哪个规则」）\n\n${formatStepParamsForPrompt(binding.step.params)}`;
+      let rosterBlock = "";
+      const depProjection =
+        binding.module.id === "context-order" ? "index" : undefined;
+      if (binding.module.id === "context-order") {
+        const { formatPlayAgentRosterForPrompt } = await import("./play-slots.js");
+        rosterBlock = `${formatPlayAgentRosterForPrompt()}\n\n`;
+      }
+      modulePromptBlock = `${rosterBlock}${paramsBlock}\n\n## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}${inheritNote}`;
+      const depTags = inheritTag
+        ? binding.depTags.filter((tag) => tag !== inheritTag)
+        : binding.depTags;
       const baseInputs = [
         "用户.需求",
         "book.brief",
@@ -540,16 +558,29 @@ export async function loadWorkerSkillWithContext(
         "设计.创作流程",
         CREATION_CURRENT_STEP_TAG,
         CREATION_MODULE_OPENING_TAG,
-        ...binding.depTags,
+        ...depTags,
+        ...(inheritTag ? [inheritTag] : []),
       ];
       const inputTags = [...new Set(baseInputs)];
       const outputTags = [binding.module.artifact];
-      const depSegments = binding.depTags.map((tag, i) => ({
+      const depSegments = depTags.map((tag, i) => ({
         id: `dep-${i}`,
         tier: "static" as const,
         tags: [tag],
-        label: `## 【依赖产物 · ${tag}】只读`,
+        label: `## 【依赖产物 · ${tag}】只读${depProjection === "index" ? "（仅 brief / 挂载 / 稳变）" : ""}`,
+        ...(depProjection ? { projection: depProjection } : {}),
       }));
+      const inheritSegment = inheritTag
+        ? [
+            {
+              id: "inherit-existing",
+              tier: "static" as const,
+              tags: [inheritTag],
+              label:
+                "## 【既有产物 · 继承修改】在下列正文上继续改，写回同一产物；禁止从零另起一份",
+            },
+          ]
+        : [];
       const openingSegment = binding.opening
         ? [
             {
@@ -562,13 +593,16 @@ export async function loadWorkerSkillWithContext(
         : [];
       patchedWorker = {
         ...worker,
-        name: `创作 · ${binding.module.name}`,
+        name: inheritTag
+          ? `创作 · 回头修改 · ${binding.module.name}`
+          : `创作 · ${binding.module.name}`,
         description: binding.module.declaration,
         inputTags,
         outputTags,
         contextSegments: [
           ...(worker.contextSegments ?? []),
           ...openingSegment,
+          ...inheritSegment,
           ...depSegments,
         ],
       };

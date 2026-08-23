@@ -101,6 +101,10 @@ export function formatWorkerDisplayTitle(workerId, action = null) {
 export function reviewComposerCopy(workerId, opts = {}) {
   const hasQuestions = Boolean(opts.hasQuestions);
   const id = String(workerId ?? "").trim();
+  const openingReview =
+    id === "opening-generator" ||
+    (Array.isArray(opts.outputTags) &&
+      opts.outputTags.includes("设计.开场白与开场变量"));
 
   if (id === "design-flow") {
     return {
@@ -120,7 +124,7 @@ export function reviewComposerCopy(workerId, opts = {}) {
     };
   }
 
-  if (id === "opening-generator") {
+  if (id === "opening-generator" || openingReview) {
     return {
       chip: "开场",
       kicker: "待选定",

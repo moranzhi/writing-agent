@@ -6,9 +6,14 @@
 import type { ContextSegmentDef } from "./context-segments.js";
 import { extractJsonObjectText } from "./worker-set-parse.js";
 import {
+  DEFAULT_ON_DEMAND_REFS,
+  DEFAULT_PLAY_SLOT_REFS,
+  defaultPlaySlots,
   parsePlaySlots,
   playSlotIdForRef,
+  PLAY_SLOT_META,
   PLAY_SLOTS_WITHOUT_DIALOGUE_HISTORY,
+  resolvePlayAgentId,
   type PlaySlotsConfig,
 } from "./play-slots.js";
 import {
@@ -87,18 +92,51 @@ function parseInsert(raw: unknown): ContextOrderInsert | undefined {
 function parseSlot(raw: unknown): ContextOrderSlot | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const row = raw as Record<string, unknown>;
-  const ref = asString(row.ref) ?? asString(row.id);
-  if (!ref) return undefined;
+  const rawRef = asString(row.ref) ?? asString(row.id);
+  if (!rawRef) return undefined;
+  const slotId = resolvePlayAgentId(rawRef);
+  const ref = slotId
+    ? slotId === "chance"
+      ? DEFAULT_ON_DEMAND_REFS.chance
+      : DEFAULT_PLAY_SLOT_REFS[slotId]
+    : rawRef;
   const insertsRaw = Array.isArray(row.inserts) ? row.inserts : [];
   const inserts = insertsRaw
     .map(parseInsert)
     .filter((x): x is ContextOrderInsert => Boolean(x))
     .sort((a, b) => a.order - b.order);
+  const label =
+    asString(row.label) ??
+    asString(row.name) ??
+    (slotId && slotId !== "chance" ? PLAY_SLOT_META[slotId].label : undefined);
   return {
     ref,
-    label: asString(row.label) ?? asString(row.name),
+    label,
     inserts,
   };
+}
+
+function agentEnabledFlag(row: Record<string, unknown>): boolean {
+  if (typeof row.enabled === "boolean") return row.enabled;
+  if (row.enabled === "false" || row.enabled === 0) return false;
+  return true;
+}
+
+function playSlotsFromAgents(
+  rows: Record<string, unknown>[],
+): PlaySlotsConfig {
+  const base = defaultPlaySlots();
+  for (const row of rows) {
+    const rawId = asString(row.id) ?? asString(row.ref) ?? asString(row.label);
+    if (!rawId) continue;
+    const slotId = resolvePlayAgentId(rawId);
+    if (!slotId) continue;
+    const on = agentEnabledFlag(row);
+    if (slotId === "chance") base.chance = on;
+    else if (slotId === "auditor") base.auditor = on;
+    else base[slotId] = on;
+  }
+  return base;
 }
 
 export function parseContextOrder(raw: unknown): ContextOrderDoc | undefined {
@@ -118,16 +156,32 @@ export function parseContextOrder(raw: unknown): ContextOrderDoc | undefined {
   }
   if (!row) return undefined;
 
-  const slotsRaw = Array.isArray(row.slots) ? row.slots : [];
-  const slots = slotsRaw
+  const agentsRaw = Array.isArray(row.agents) ? row.agents : [];
+  const agentRows = agentsRaw.filter(
+    (a): a is Record<string, unknown> =>
+      Boolean(a) && typeof a === "object" && !Array.isArray(a),
+  );
+  const fromAgents = agentRows
+    .filter(agentEnabledFlag)
     .map(parseSlot)
     .filter((x): x is ContextOrderSlot => Boolean(x));
+
+  const slotsRaw = Array.isArray(row.slots) ? row.slots : [];
+  const fromSlots = slotsRaw
+    .map(parseSlot)
+    .filter((x): x is ContextOrderSlot => Boolean(x));
+
+  const slots = fromAgents.length ? fromAgents : fromSlots;
   if (!slots.length && row.schema !== CONTEXT_ORDER_SCHEMA) return undefined;
+
+  const play_slots = fromAgents.length
+    ? playSlotsFromAgents(agentRows)
+    : parsePlaySlots(row.play_slots ?? row.playSlots);
 
   return {
     schema: CONTEXT_ORDER_SCHEMA,
     brief: asString(row.brief),
-    play_slots: parsePlaySlots(row.play_slots ?? row.playSlots),
+    play_slots,
     slots,
   };
 }

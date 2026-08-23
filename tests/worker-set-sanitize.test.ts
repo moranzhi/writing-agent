@@ -191,7 +191,7 @@ describe("sanitizeWorkerSetOutputs", () => {
     expect(result.outputs["设计.美学纲领与交互范式"]).toContain("特权与惊惶");
   });
 
-  it("does not accept a fragment without 正文; keeps 追问 for the LLM loop", () => {
+  it("keeps incomplete fragment (no 正文) for review; 追问 hangs as sidecar", () => {
     const result = parseWorkerResponseForTest(
       JSON.stringify({
         outputs: {
@@ -210,12 +210,12 @@ describe("sanitizeWorkerSetOutputs", () => {
       }),
       ["设计.美学纲领与交互范式"],
     );
-    expect(result.outputs["设计.美学纲领与交互范式"]).toBeUndefined();
+    expect(result.outputs["设计.美学纲领与交互范式"]).toContain("还差站位");
     expect(result.askUser?.length).toBeGreaterThan(0);
     expect(result.askUser?.[0]?.prompt).toContain("你代入吗");
   });
 
-  it("asks to continue the loop when fragment JSON is unusable", () => {
+  it("keeps truncated fragment JSON as a reviewable draft", () => {
     const result = parseWorkerResponseForTest(
       JSON.stringify({
         outputs: {
@@ -226,7 +226,54 @@ describe("sanitizeWorkerSetOutputs", () => {
       }),
       ["设计.美学纲领与交互范式"],
     );
-    expect(result.outputs["设计.美学纲领与交互范式"]).toBeUndefined();
-    expect(result.askUser?.[0]?.prompt).toContain("还没写出可验收的产物");
+    expect(result.outputs["设计.美学纲领与交互范式"]).toContain("孤立免疫");
+    expect(result.askUser).toBeUndefined();
+  });
+
+  it("canonicalizes context-order agents[] into slots on the artifact tag", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: {
+          "设计.上下文投影排序": {
+            schema: "context-order.v1",
+            brief: "主世界层",
+            agents: [
+              {
+                id: "gm",
+                enabled: true,
+                inserts: [
+                  { order: 0, ref: "worker.persona", projection: "fixed" },
+                ],
+              },
+            ],
+          },
+        },
+        summary: "ok",
+      }),
+      ["设计.上下文投影排序"],
+    );
+    const doc = JSON.parse(result.outputs["设计.上下文投影排序"]!);
+    expect(doc.slots[0].ref).toBe("world-simulator");
+    expect(doc.play_slots.gm).toBe(true);
+  });
+
+  it("keeps a whole-response truncated JSON as the artifact draft", () => {
+    const raw =
+      '{"outputs":{"设计.上下文投影排序":{"schema":"context-order.v1","brief":"旁观+转述","agents":[';
+    const result = parseWorkerResponseForTest(raw, ["设计.上下文投影排序"]);
+    expect(result.outputs["设计.上下文投影排序"]).toContain("context-order.v1");
+    expect(result.askUser).toBeUndefined();
+  });
+
+  it("puts full 输出.用户展示 into preview without tag fence or 4000 cap", () => {
+    const body = "场面".repeat(2100);
+    const result = sanitizeWorkerSetOutputs({
+      outputs: { "输出.用户展示": body },
+      summary: "ok",
+      preview: "旧",
+    });
+    expect(result.preview).toBe(body);
+    expect(result.preview).not.toContain("### ");
+    expect(result.preview.length).toBeGreaterThan(4000);
   });
 });

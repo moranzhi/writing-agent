@@ -36,9 +36,11 @@ Book                跨 Session：过程、资产、游玩
 新建作品 → UI 选配方 → 用户首句
   → design-flow：排出近期 设计.创作流程（工作流计划 / 增量 DAG，status=open|closed）
   → 反复 design-step：注入当前技能 modules/{id}/prompt.md + 依赖产物
-  → 不够则再 design-flow（可追加 / 反复调用 repeatable 技能）→ closed
+  → 不够则再 design-flow（可追加 / 反复调用 repeatable 技能作**新建**；已完成节点用回头修改继承旧稿）→ closed
   → 收成 设计.worker集（运行规格）→ 验收后才可进 play
-  → （可选）opening-generator → 用户手动进游玩
+  → 开场白与开场变量（若编排）：1～多条开场 → 选定 → 程序落库、关 DAG、保存 instance
+  → （无开场白节点时可选）opening-generator 兜底落库
+  → 用户手动进游玩
   → run：执行单元按契约从黑板重装；acceptance=review 处停、压缩过程 tag
 ```
 

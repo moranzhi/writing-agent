@@ -444,9 +444,11 @@ const server = createServer(async (req, res) => {
         const body = JSON.parse(await readBody(req)) as {
           action?: string;
           stepParams?: Record<string, unknown>;
+          openingIndex?: number;
         };
         let view;
-        switch (body.action) {
+        try {
+          switch (body.action) {
           case "approve":
             view = await sessionManager.approve(
               sessionId,
@@ -459,7 +461,12 @@ const server = createServer(async (req, res) => {
             view = await sessionManager.confirmIntake(sessionId);
             break;
           case "accept":
-            view = await sessionManager.accept(sessionId);
+            view = await sessionManager.accept(
+              sessionId,
+              typeof body.openingIndex === "number"
+                ? { openingIndex: body.openingIndex }
+                : undefined,
+            );
             break;
           case "skip_questions":
             view = await sessionManager.skipQuestions(sessionId);
@@ -473,9 +480,18 @@ const server = createServer(async (req, res) => {
           case "finish":
             view = await sessionManager.finish(sessionId);
             break;
+          case "retry_run":
+            view = await sessionManager.abortAndRetry(sessionId);
+            break;
           default:
             json(res, 400, { error: "未知 action" });
             return;
+        }
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "操作失败",
+          });
+          return;
         }
         json(res, 200, view);
         return;

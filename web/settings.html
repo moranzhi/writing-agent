@@ -78,6 +78,57 @@
       </main>
     </div>
 
+    <dialog id="preset-probe-dialog" class="probe-dialog">
+      <header class="probe-head">
+        <div>
+          <h3>试跑预设</h3>
+          <p class="probe-sub" id="probe-preset-name"></p>
+        </div>
+        <button type="button" class="btn-secondary" id="probe-close">关闭</button>
+      </header>
+      <div class="probe-body">
+        <section class="probe-composer">
+          <label>
+            本轮输入
+            <textarea id="probe-message" rows="4" placeholder="发给模型的这一轮"></textarea>
+          </label>
+          <details class="probe-extras">
+            <summary>试跑用设定 / 历史</summary>
+            <label>
+              历史前（设定）
+              <textarea id="probe-lore-before" rows="3"></textarea>
+            </label>
+            <label>
+              对话历史
+              <textarea id="probe-history" rows="4"></textarea>
+            </label>
+            <label>
+              历史后（状态）
+              <textarea id="probe-lore-after" rows="3"></textarea>
+            </label>
+            <label>
+              本轮后（可选）
+              <textarea id="probe-post-turn" rows="2"></textarea>
+            </label>
+          </details>
+          <div class="probe-composer-actions">
+            <button type="button" class="btn-primary" id="probe-send">发送一轮</button>
+            <p class="probe-status" id="probe-status" hidden></p>
+          </div>
+        </section>
+        <section class="probe-inspect" aria-live="polite">
+          <h4>发出的上下文</h4>
+          <div id="probe-messages" class="probe-messages">
+            <p class="probe-empty">发送后显示实际拼进请求的消息。</p>
+          </div>
+          <div id="probe-reply-wrap" class="probe-reply" hidden>
+            <h4>模型回复</h4>
+            <pre id="probe-reply"></pre>
+          </div>
+        </section>
+      </div>
+    </dialog>
+
     <dialog id="profile-dialog" class="profile-dialog">
       <form id="profile-form" method="dialog">
         <h3 id="profile-dialog-title">新增 API</h3>

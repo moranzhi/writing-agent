@@ -12,12 +12,12 @@
 | 叙事指南与故事推进 | **专用 mosaic**（风格与写法 \| 推进与决策） | `renderNarrativeBodyHtml` |
 | 变量设计 | **结构化卡**（真值 / side_effects） | `renderVariableDesignHtml` |
 | 变量控制上下文 | 通用 fragment | context-fragment |
-| 正文组成 | 通用 fragment + 游玩期 **present 壳** | fragment；游玩 `present-shells.js` |
+| 正文组成 | **专用卡**：present 壳渲染 `正文.示例.灌数`（看美化）+ 契约折叠 | `renderReplyFormatBodyHtml` |
 | 设计监控栏 | 通用 fragment | context-fragment |
 | 游玩拓扑 | **槽位芯片卡** | `renderPlaySlotsHtml` |
 | 上下文投影排序 | **排序卡** | `renderContextOrderHtml` |
 | 裁决包 settlement.v1 | **分节卡** | `renderSettlementSectionsHtml` |
-| 开场白与开场变量 | 通用 fragment | context-fragment |
+| 开场白与开场变量 | 专用：候选 swipe + 呈现壳 | `renderOpeningSetupBodyHtml` |
 | 拓扑图谱 | （骨架未写） | — |
 
 **说明：** 「通用 fragment」= 公共头（brief/mount/自评）+ 正文结构化树，已比生 JSON 友好；「专用」= 按技能排版的 mosaic/卡片。  

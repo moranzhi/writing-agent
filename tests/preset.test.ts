@@ -52,15 +52,72 @@ const samplePreset = {
 describe("importSillyTavernPreset", () => {
   it("picks prompt_order with most enabled content", () => {
     const report = importSillyTavernPreset(samplePreset, { name: "test" });
-    expect(report.enabledCount).toBe(3);
     expect(report.preset.promptOrder.map((o) => o.promptId)).toEqual([
       "custom-a",
       "custom-b",
       "main",
+      "worldBookBefore",
+      "chatHistory",
+      "worldBookAfter",
+      "currentTurn",
+      "postTurn",
     ]);
+    expect(report.enabledCount).toBe(8);
     expect(report.preset.generation.temperature).toBe(1);
     expect(report.preset.generation.maxOutputTokens).toBe(60000);
     expect(report.warnings.some((w) => w.includes("prompt_order"))).toBe(true);
+  });
+
+  it("inserts app markers around chatHistory and leaves ST card/WI empty", () => {
+    const report = importSillyTavernPreset({
+      prompts: [
+        { identifier: "main", name: "Main", role: "system", content: "MAIN" },
+        {
+          identifier: "charDescription",
+          name: "Char Description",
+          role: "system",
+          marker: true,
+        },
+        {
+          identifier: "chatHistory",
+          name: "Chat History",
+          role: "system",
+          marker: true,
+        },
+        {
+          identifier: "jailbreak",
+          name: "Post-History",
+          role: "system",
+          content: "PHI",
+        },
+      ],
+      prompt_order: [
+        {
+          character_id: 1,
+          order: [
+            { identifier: "main", enabled: true },
+            { identifier: "charDescription", enabled: true },
+            { identifier: "chatHistory", enabled: true },
+            { identifier: "jailbreak", enabled: true },
+          ],
+        },
+      ],
+    });
+    expect(report.preset.promptOrder.map((o) => o.promptId)).toEqual([
+      "main",
+      "charDescription",
+      "worldBookBefore",
+      "chatHistory",
+      "worldBookAfter",
+      "currentTurn",
+      "jailbreak",
+      "postTurn",
+    ]);
+    const messages = assemblePresetMessages(report.preset);
+    expect(messages).toEqual([
+      { role: "system", content: "MAIN" },
+      { role: "system", content: "PHI" },
+    ]);
   });
 });
 
@@ -79,7 +136,7 @@ describe("listEnabledPresetEntries", () => {
   it("lists enabled order with inject flags", () => {
     const report = importSillyTavernPreset(samplePreset);
     const entries = listEnabledPresetEntries(report.preset);
-    expect(entries.length).toBe(3);
+    expect(entries.length).toBe(8);
     expect(countInjectingEntries(entries)).toBe(2);
     expect(entries.filter((e) => e.willInject).map((e) => e.content)).toEqual([
       "instruction A",

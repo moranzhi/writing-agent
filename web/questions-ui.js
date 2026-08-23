@@ -4,6 +4,7 @@
  * 点发送即答复 → 收起本轮卡（卡上无独立发送钮）。
  * 产物验收挂载题：选项 + 底栏意见一并随「按意见修改」写回产物；空内容点该钮不等于接受。
  * 分页 / 跳过为悬浮控件，不占独立 header/footer 行。
+ * 点顶栏横条折叠成一行，再点展开。
  *
  * 能力「默认问题」(id=module-opening) 不是追问：对齐美学纲领开局，走说话面 + openingGuide。
  */
@@ -259,7 +260,7 @@ export function clearQuestionCardState(host, view) {
   host._qState = null;
   host.hidden = true;
   host.innerHTML = "";
-  host.classList.remove("is-open", "is-expanded", "has-pager", "has-skip");
+  host.classList.remove("is-open", "is-expanded", "is-collapsed", "has-pager", "has-skip");
   host.removeAttribute("role");
   host.removeAttribute("aria-label");
 }
@@ -275,7 +276,7 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
   if (!active?.questions?.length) {
     host.hidden = true;
     host.innerHTML = "";
-    host.classList.remove("is-open", "is-expanded", "has-pager", "has-skip");
+    host.classList.remove("is-open", "is-expanded", "is-collapsed", "has-pager", "has-skip");
     host.removeAttribute("role");
     host.removeAttribute("aria-label");
     host._qDismissed = null;
@@ -290,7 +291,7 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
   ) {
     host.hidden = true;
     host.innerHTML = "";
-    host.classList.remove("is-open", "is-expanded", "has-pager", "has-skip");
+    host.classList.remove("is-open", "is-expanded", "is-collapsed", "has-pager", "has-skip");
     host.removeAttribute("role");
     host.removeAttribute("aria-label");
     return false;
@@ -305,14 +306,14 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
         sessionId: view.id,
         key: qKey,
         page: 0,
-        expanded: false,
+        collapsed: false,
         // questionId -> { optionId?, text, otherText? }
         answers: {},
         drafts: {}, // option key -> edited label
       };
-  if (typeof state.expanded !== "boolean") state.expanded = false;
+  if (typeof state.collapsed !== "boolean") state.collapsed = false;
   host._qState = state;
-  host.classList.toggle("is-expanded", state.expanded);
+  host.classList.toggle("is-collapsed", state.collapsed);
 
   const { questions, pageSize, assessment, optional, skipLabel, dismissOnAccept } =
     active;
@@ -362,8 +363,13 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
         ${pagerHtml}
         ${skipHtml}
       </div>
-      <button type="button" class="qcard-top" data-qtop title="${state.expanded ? "点击收起" : "点击展开"}" aria-label="${state.expanded ? "收起询问卡" : "展开询问卡"}">
+      <button type="button" class="qcard-top" data-qtop title="${state.collapsed ? "展开追问" : "折叠追问"}" aria-expanded="${state.collapsed ? "false" : "true"}" aria-label="${state.collapsed ? "展开追问" : "折叠追问"}">
         <span class="qcard-top-grip" aria-hidden="true"></span>
+        <span class="qcard-collapsed-meta">${esc(
+          pageCount > 1
+            ? `追问 ${state.page + 1}/${pageCount} · ${pageQs[0]?.prompt ?? "询问"}`
+            : `追问 · ${pageQs[0]?.prompt ?? "询问"}`,
+        )}</span>
       </button>
       <div class="qcard-body">
         ${dismissNote}
@@ -414,40 +420,21 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
           .join("")}
       </div>`;
 
-  const setExpanded = (next) => {
-    state.expanded = next;
-    host.classList.toggle("is-expanded", next);
+  const setCollapsed = (next) => {
+    state.collapsed = next;
+    host.classList.toggle("is-collapsed", next);
     const top = host.querySelector("[data-qtop]");
     if (top) {
-      top.title = next ? "点击收起" : "点击展开";
-      top.setAttribute("aria-label", next ? "收起询问卡" : "展开询问卡");
+      top.title = next ? "展开追问" : "折叠追问";
+      top.setAttribute("aria-expanded", next ? "false" : "true");
+      top.setAttribute("aria-label", next ? "展开追问" : "折叠追问");
     }
   };
 
   host.querySelector("[data-qtop]")?.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setExpanded(!state.expanded);
-  });
-
-  host.querySelector(".qcard-body")?.addEventListener("click", (e) => {
-    const t = e.target;
-    if (!(t instanceof Element)) return;
-    if (
-      t.closest(
-        ".qcard-letter, .qcard-other-input, [contenteditable=true], .qcard-nav, .qcard-skip, .qcard-pager",
-      )
-    ) {
-      return;
-    }
-    // 展开后点题干 / 评估区收起；收起时点内容区展开
-    if (state.expanded) {
-      if (t.closest(".qcard-prompt, .qcard-assessment, .qcard-optional-note")) {
-        setExpanded(false);
-      }
-      return;
-    }
-    setExpanded(true);
+    setCollapsed(!state.collapsed);
   });
 
   host.querySelector("[data-qskip]")?.addEventListener("click", () => {
@@ -488,7 +475,6 @@ export function renderQuestionsCard(host, view, _handlers = {}) {
       section.querySelectorAll(".qcard-opt").forEach((li) => {
         li.classList.toggle("is-selected", li.getAttribute("data-oid") === oid);
       });
-      if (!state.expanded) setExpanded(true);
       _handlers.onAnswersChange?.();
     });
   });

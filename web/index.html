@@ -35,7 +35,6 @@
 
         <div class="rail-panels">
           <div class="rail-tab-panel active" id="rail-panel-books" role="tabpanel" data-rail-panel="books">
-            <nav class="path-bar" id="book-path-bar" aria-label="面包屑" hidden></nav>
             <div class="book-list" id="book-list"></div>
             <div id="book-box-overlay" class="book-box-overlay" hidden aria-hidden="true"></div>
           </div>
@@ -48,39 +47,11 @@
       </aside>
 
       <main class="panel panel-main">
-        <header class="main-head" id="main-head">
-          <div class="main-head-left">
-            <h1 class="work-title" id="work-title">未打开作品</h1>
-            <span class="work-meta" id="work-meta"></span>
-          </div>
-          <div class="main-head-center">
-            <div class="lifecycle-toggle" id="lifecycle-toggle" role="group" aria-label="创作 / 游玩">
-              <button type="button" class="lifecycle-btn active" data-stage="design">创作</button>
-              <button type="button" class="lifecycle-btn" data-stage="play" disabled>游玩</button>
-            </div>
-          </div>
-          <div class="main-head-right">
-            <button type="button" class="btn-sm" id="btn-save-instance" hidden>保存定稿</button>
-            <button type="button" class="btn-sm" id="btn-save-play" hidden>保存游玩</button>
-            <button type="button" class="btn-sm" id="btn-export" disabled>导出</button>
-            <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
-            <details class="more-menu">
-              <summary class="btn-sm more-menu-sum" title="更多页面">更多</summary>
-              <div class="more-menu-panel" role="menu">
-                <a class="more-menu-item" href="/modules.html" role="menuitem">技能</a>
-                <a class="more-menu-item" href="/shells.html" role="menuitem">呈现壳</a>
-                <a class="more-menu-item" href="/stats.html" role="menuitem">Token</a>
-                <a class="more-menu-item" href="/settings.html" role="menuitem">设置</a>
-              </div>
-            </details>
-          </div>
-        </header>
-
         <div class="main-body">
           <section class="panel-feed" id="panel-feed">
             <div id="skill-picker" class="skill-picker" hidden></div>
             <div id="message-feed" class="message-feed">
-              <p class="empty">点击左侧 + 新建作品</p>
+              <p class="empty">正在打开作品…</p>
             </div>
             <div id="workspace-stage" class="workspace-stage" hidden aria-label="验收工作面"></div>
             <div id="questions-card-host" class="questions-card-host" hidden></div>
@@ -106,7 +77,22 @@
           </aside>
         </div>
 
-        <footer class="composer" id="composer"></footer>
+        <footer class="composer" id="composer">
+          <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
+          <div id="composer-main"></div>
+          <details class="more-menu">
+            <summary class="btn-sm more-menu-sum" title="更多">更多</summary>
+            <div class="more-menu-panel" role="menu">
+              <button type="button" class="more-menu-item" id="btn-save-instance" hidden role="menuitem">保存定稿</button>
+              <button type="button" class="more-menu-item" id="btn-save-play" hidden role="menuitem">保存游玩</button>
+              <button type="button" class="more-menu-item" id="btn-export" disabled role="menuitem">导出</button>
+              <a class="more-menu-item" href="/modules.html" role="menuitem">技能</a>
+              <a class="more-menu-item" href="/shells.html" role="menuitem">呈现壳</a>
+              <a class="more-menu-item" href="/stats.html" role="menuitem">Token</a>
+              <a class="more-menu-item" href="/settings.html" role="menuitem">设置</a>
+            </div>
+          </details>
+        </footer>
       </main>
     </div>
 
@@ -133,7 +119,11 @@
     </dialog>
 
     <menu id="book-action-menu" class="context-menu" hidden>
-      <button type="button" class="context-menu-item" id="book-menu-open" data-action="open">打开</button>
+      <button type="button" class="context-menu-item" id="book-menu-open" data-action="open">打开创作</button>
+      <button type="button" class="context-menu-item" id="book-menu-play" data-action="play">进入游玩</button>
+      <button type="button" class="context-menu-item" id="book-menu-save-instance" data-action="save-instance">保存定稿</button>
+      <button type="button" class="context-menu-item" id="book-menu-save-play" data-action="save-play">保存游玩</button>
+      <button type="button" class="context-menu-item" id="book-menu-export" data-action="export">导出</button>
       <button type="button" class="context-menu-item" id="book-menu-rename" data-action="rename">重命名</button>
       <button type="button" class="context-menu-item" id="book-menu-duplicate" data-action="duplicate">复制备份</button>
       <button type="button" class="context-menu-item" id="book-menu-select" data-action="select-mode">多选</button>

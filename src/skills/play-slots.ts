@@ -319,3 +319,54 @@ export function inferPlaySlotsFromWorkers(
     chance: hasChance,
   };
 }
+
+const AGENT_ID_ALIASES: Record<string, PlaySlotId | OnDemandSlotId> = {
+  auditor: "auditor",
+  旁观维护: "auditor",
+  表格管理: "auditor",
+  gm: "gm",
+  "world-simulator": "gm",
+  主世界层: "gm",
+  narrator: "narrator",
+  叙事转述: "narrator",
+  转述: "narrator",
+  perspective: "perspective",
+  "role-decide": "perspective",
+  角色视角: "perspective",
+  chance: "chance",
+  机遇裁定: "chance",
+};
+
+/** 把模型写的 id / 中文名 / worker ref 收成槽键 */
+export function resolvePlayAgentId(
+  raw: string,
+): PlaySlotId | OnDemandSlotId | undefined {
+  const t = raw.trim();
+  return AGENT_ID_ALIASES[t] ?? AGENT_ID_ALIASES[t.toLowerCase()];
+}
+
+/** 注入投影排序等晚段步骤：名册由程序钉死，模型只抄不发明。 */
+export function formatPlayAgentRosterForPrompt(): string {
+  const lines = [
+    "## 【本局固定执行单元 · 程序钉死】",
+    "",
+    "禁止增删改名，禁止发明未入白名单的槽（如画图）。先抄名册，再给每个已启用者分配上下文 inserts。",
+    "",
+    "每轮管线（顺序固定）：",
+  ];
+  for (const id of PLAY_SLOT_ORDER) {
+    const meta = PLAY_SLOT_META[id];
+    const def = id === "perspective" ? "默认关" : "默认开";
+    lines.push(
+      `- \`${id}\` → ref=\`${DEFAULT_PLAY_SLOT_REFS[id]}\` **${meta.label}**（${def}）：${meta.purpose}`,
+    );
+  }
+  lines.push("", "按需（不进每轮；enabled 时可空 inserts）：");
+  for (const id of Object.keys(DEFAULT_ON_DEMAND_REFS) as OnDemandSlotId[]) {
+    const meta = ON_DEMAND_SLOT_META[id];
+    lines.push(
+      `- \`${id}\` → ref=\`${DEFAULT_ON_DEMAND_REFS[id]}\` **${meta.label}**（默认关）：${meta.purpose}`,
+    );
+  }
+  return lines.join("\n");
+}

@@ -216,39 +216,72 @@ type UnsupportedPresetSection = {
 
 ## 4. 上下文装配规则
 
-一次请求的上下文装配按以下顺序执行：
+运行时只走一份 `promptOrder`：遇到普通条目原样插入，遇到 marker 就填洞。空的酒馆角色卡 / 世界书 marker **不填我们的正文**（跳过）。
+
+### 4.1 Marker 词汇表
+
+酒馆原有（导入后保留位置，空洞跳过）：
 
 ```text
-1. 读取 PresetPackage.promptOrder。
+worldInfoBefore  personaDescription  charDescription  charPersonality
+scenario  worldInfoAfter  dialogueExamples  chatHistory
+```
+
+我们新增（由 context-order 填值；生成内容按 **世界书条目** 看待，不是角色卡字段）：
+
+| identifier | 填什么 |
+|---|---|
+| `worldBookBefore` | `对话.历史` 之前的 inserts，每条为标题+正文 |
+| `chatHistory` | 共用酒馆 id；填 `对话.历史` |
+| `worldBookAfter` | 历史之后、本轮之前（变量、工单等）。**不是** `worldInfoAfter` |
+| `currentTurn` | `用户.最新输入`，role=user |
+| `postTurn` | 本轮输入之后的 inserts（可空） |
+
+`worldInfoBefore` / `worldInfoAfter` 都在酒馆历史 **前**，不能承接「我们写的、历史后」，因此不要复用那两个 id。
+
+### 4.2 导入时插入四个洞
+
+导入 SillyTavern `prompt_order` 时，以 `chatHistory` 为锚点切开并插入：
+
+```text
+[...ST 历史前条目...]
+worldBookBefore
+chatHistory
+worldBookAfter
+currentTurn
+[...ST 历史后条目...]
+postTurn
+```
+
+若原文没有 `chatHistory`，把它补在历史前条目之后，再接后四个洞。原生预设也可以直接按这份扩展 order 来写。无选用预设时，play worker 仍按现有 `assembleWorkerContext` 拼装（不走 prompt_order）。
+
+社区预设里包着 WI 洞的装饰分隔会留在历史前段，中间可能是空的。第一版接受。
+
+### 4.3 六段夹心（扫 order 后的效果）
+
+```text
+1. 酒馆内、历史前（ST 普通条目）
+2. 我们写的、历史前（worldBookBefore）
+3. 对话历史（chatHistory）
+4. 我们写的、历史后本轮前（worldBookAfter）
+5. 本轮对话（currentTurn）
+6. 本轮对话后（ST 历史后条目 + postTurn）
+```
+
+### 4.4 装配步骤
+
+```text
+1. 读取（已扩展过的）PresetPackage.promptOrder。
 2. 过滤 enabled=false 的顺序项。
 3. 找到对应 PresetPromptEntry。
 4. 再过滤 entry.enabled=false 的条目。
-5. 对 marker 条目进行运行时替换。
-6. 对普通 content 条目进行变量替换。
-7. 按 role 合并成 LLM messages。
+5. 对 marker：用 WorldInfoPack 解析我们的四个洞 + chatHistory；酒馆角色卡/WI 恒为空。
+6. 普通 content 条目原样插入。
+7. 按条目 role 合成 LLM messages。
 8. 应用 generation 参数。
 ```
 
-其中 marker 条目用于挂载运行时上下文：
-
-```text
-charDescription
-  可以映射为当前创作项目的设定说明。
-
-charPersonality
-  可以映射为文风、叙事人称、角色行为约束。
-
-worldInfoBefore / worldInfoAfter
-  可以映射为长期设定、世界观、知识库片段。
-
-scenario
-  可以映射为当前创作目标或当前阶段说明。
-
-chatHistory
-  可以映射为历史会话、已有正文、用户反馈摘要。
-```
-
-这些映射不是 SillyTavern 原义的完整复刻，而是为了兼容预设资产，让它们能服务我们的写作 agent。
+不实现：世界书关键词、概率、sticky、Depth 插进历史中间、outlet、正则、插件脚本。
 
 ## 5. 与创作流程的关系
 
@@ -269,6 +302,8 @@ Runtime Session
 ```
 
 因此，同一个 preset 可以用于多个创作流程；同一个创作流程也可以切换不同 preset。二者是正交关系。
+
+生成参数可全局合并进 LLM 请求。**prompt 条目 + marker 填洞只在 play worker 上用**：创作步 / 总管 tool loop 不得把角色卡骨架套到 design-step 上，也不得在填洞后再叠一份相同的 user 上下文。
 
 ## 6. 第一版导入策略
 

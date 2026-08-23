@@ -11,9 +11,16 @@ import type { ParsedWorkerSkill } from "../skills/types.js";
 import {
   extractJsonObjectText,
   isUsableWorkerSet,
+  looksLikeProseNotSpec,
   parseWorkerSetYaml,
 } from "../skills/worker-set-parse.js";
 import { assembleWorkerContext } from "../skills/context-segments.js";
+import { isPlayLayerActive } from "../skills/play-turn.js";
+import { loadAppSettings } from "../config/settings.js";
+import { resolveActivePreset } from "../preset/store.js";
+import { assemblePlayWorkerMessages } from "../preset/play-frame.js";
+import { worldInfoPackFromSegments } from "../preset/world-info-pack.js";
+import { PRESENT_TAG } from "../skills/present-packet.js";
 import {
   mergeQuestionsPreferFragment,
   normalizeQuestions,
@@ -21,11 +28,15 @@ import {
 } from "../skills/question-protocol.js";
 import {
   extractFragmentAskSidecar,
-  expectsContextFragmentTag,
   isUsableContextFragment,
   looksLikeFragmentDoc,
 } from "../skills/context-fragment.js";
 import { isProgressPointerTag } from "../skills/creation-flow.js";
+import {
+  CONTEXT_ORDER_TAG,
+  parseContextOrder,
+  serializeContextOrder,
+} from "../skills/context-order.js";
 
 export type WorkerRunParams = {
   skillName: string;
@@ -53,6 +64,25 @@ export type WorkerRunResult = {
 };
 
 const WORKER_SET_OUTPUT_TAGS = new Set(["设计.worker集", "设计.worker集.草稿"]);
+const PLAY_FEED_OUTPUT_TAGS = new Set([PRESENT_TAG, "输出.开场白"]);
+
+function formatWorkerPreview(
+  outputs: Record<string, string>,
+  summary: string,
+): string {
+  const visible = Object.entries(outputs).filter(([tag]) =>
+    PLAY_FEED_OUTPUT_TAGS.has(tag),
+  );
+  if (visible.length) {
+    return visible.map(([, v]) => v).join("\n\n");
+  }
+  return (
+    Object.entries(outputs)
+      .map(([tag, v]) => `### ${tag}\n\n${v}`)
+      .join("\n\n")
+      .slice(0, 4000) || summary
+  );
+}
 
 const WORKER_OUTPUT_INSTRUCTION = `
 
@@ -74,7 +104,9 @@ askUser 每项可为：
 - outputs 的 key 必须是要求的 outputTags
 - **设计.worker集 / 设计.worker集.草稿**：value 必须是 JSON 对象文本（以 { 开头），禁止中文说明、元叙述、提问长文；禁止 YAML
 - **context-fragment.v1**：必须放在 outputs["<本步 artifact tag>"]，禁止把片段当根对象。题目只写在产物「追问」（建议选项 + 示例）；顶层 askUser 必须为 **null**。程序会把「追问」挂到询问卡。禁止同一问再抄一份 askUser。禁止写入「创作.当前步骤」等进度指针
-- **其它产物**：优先同时给 outputs + askUser；有产物时追问挂在产物下（用户可直接接受而不作答）。仅当完全无法产出时才留空 outputs、只填 askUser
+- **其它产物**：优先同时给 outputs + askUser；有产物时追问挂在产物下（用户可直接接受而不作答）
+- **残稿也要交**：JSON 不完美、字段不全、截断，只要有可展示正文就必须写入 outputs，交给用户验收（可打回重生成，也可接着改）。不要因为渲染不出就把稿扔掉改成提问
+- 仅当完全没有可展示正文、只有提问时，才留空 outputs、只填 askUser
 - 能推断选项时 **必须**给 options（完整句、可改写）；不要只丢裸问题逼用户写长段
 - 若 inputs 中 \`用户.需求\` / \`用户.博弈需求\`（或 book.brief）已有实质内容，禁止 askUser 要求用户重复提供其中已写明的情境、角色、规则等；仅对 genuinely 缺失且无法推断的要点提问
 - summary 用于界面展示`;
@@ -193,31 +225,46 @@ function recoverFragmentOutputs(
   }
 }
 
-function dropUnusableFragmentOutputs(outputs: Record<string, string>): void {
+/** 进度指针不得当产物；半残 JSON / 缺字段仍保留，交给验收卡。 */
+function dropProgressPointerOutputs(outputs: Record<string, string>): void {
   for (const tag of Object.keys(outputs)) {
-    if (isProgressPointerTag(tag)) {
-      delete outputs[tag];
-      continue;
-    }
-    const content = outputs[tag]!;
-    const requireFragment = expectsContextFragmentTag(tag);
-    const looksFragment =
-      isUsableContextFragment(content) ||
-      looksLikeFragmentDoc(tryParseObject(content)) ||
-      /"schema"\s*:\s*"context-fragment\.v1"/.test(content) ||
-      /"技能"\s*:/.test(content);
-    if ((requireFragment || looksFragment) && !isUsableContextFragment(content)) {
+    if (isProgressPointerTag(tag) || !outputs[tag]?.trim()) {
       delete outputs[tag];
     }
   }
 }
 
-function tryParseObject(text: string): unknown {
-  const extracted = extractJsonObjectText(text) ?? text.trim();
-  try {
-    return JSON.parse(extracted);
-  } catch {
-    return undefined;
+/** 像结构化残稿（含截断 JSON），应进验收而不是改成提问。 */
+function looksLikeStructuredDraft(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.startsWith("{") || t.startsWith("[")) return true;
+  if (/```(?:json)?/i.test(t) && t.includes("{")) return true;
+  if (/"schema"\s*:/.test(t)) return true;
+  if (/"技能"\s*:/.test(t) || /"正文"\s*:/.test(t)) return true;
+  if (/"inserts"\s*:/.test(t) || /"agents"\s*:/.test(t) || /"play_slots"\s*:/.test(t)) {
+    return true;
+  }
+  if (/"workers"\s*:/.test(t) && t.includes("{")) return true;
+  return Boolean(extractJsonObjectText(t));
+}
+
+/** 几乎只有提问、没有稿。 */
+function isQuestionOnlyText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (looksLikeStructuredDraft(t)) return false;
+  const qs = extractQuestionsFromText(t);
+  if (!qs.length) return false;
+  return looksLikeProseNotSpec(t) || /你的选择|请(?:描述|选择|确认|补充)/.test(t);
+}
+
+function canonicalizeKnownOutputs(outputs: Record<string, string>): void {
+  const raw = outputs[CONTEXT_ORDER_TAG];
+  if (!raw?.trim()) return;
+  const doc = parseContextOrder(raw);
+  if (doc?.slots.length) {
+    outputs[CONTEXT_ORDER_TAG] = serializeContextOrder(doc);
   }
 }
 
@@ -239,24 +286,25 @@ function parseWorkerResponse(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    if (outputTags.some((t) => WORKER_SET_OUTPUT_TAGS.has(t))) {
-      const questions = normalizeQuestions(extractQuestionsFromText(raw));
-      return {
-        outputs: {},
-        summary: "未产出合法协议 JSON",
-        preview: raw.slice(0, 600),
-        askUser: questions.length
-          ? questions.slice(0, 2)
-          : normalizeQuestions([
-              "请补充设计所需的关键信息（上一次未产出合法 JSON 规格）。",
-            ]),
-      };
-    }
     const target = productOutputTags(outputTags)[0] ?? outputTags[0];
+    if (target && looksLikeStructuredDraft(raw)) {
+      return finalizeParsedOutputs(
+        { [target]: raw },
+        { summary: "格式不完整，已交出残稿" },
+        outputTags,
+      );
+    }
     if (target && isUsableContextFragment(raw)) {
       return finalizeParsedOutputs(
         { [target]: raw },
         { summary: raw.slice(0, 80) },
+        outputTags,
+      );
+    }
+    if (target && raw.trim() && !isQuestionOnlyText(raw)) {
+      return finalizeParsedOutputs(
+        { [target]: raw },
+        { summary: "未按协议包一层，已交出原文" },
         outputTags,
       );
     }
@@ -323,7 +371,7 @@ function finalizeParsedOutputs(
     }
   }
 
-  // 先抽追问，再丢掉半残片段——无正文时仍要把题留给 LLM loop
+  // 先抽追问；半残稿仍留在 outputs，追问挂验收卡（不因缺字段丢掉正文）
   let askAssessment: string | undefined;
   const fragQuestions: QuestionItem[] = [];
   for (const content of Object.values(outputs)) {
@@ -339,7 +387,8 @@ function finalizeParsedOutputs(
     askUser = mergeQuestionsPreferFragment(askUser, fragQuestions);
   }
 
-  dropUnusableFragmentOutputs(outputs);
+  dropProgressPointerOutputs(outputs);
+  canonicalizeKnownOutputs(outputs);
 
   if (Object.keys(outputs).length === 0 && (!askUser || askUser.length === 0)) {
     askUser = normalizeQuestions(INCOMPLETE_FRAGMENT_ASK);
@@ -351,11 +400,7 @@ function finalizeParsedOutputs(
       : Object.values(outputs)[0]?.slice(0, 80) ??
         (askUser?.length ? `待补充：${askUser[0]!.prompt.slice(0, 40)}` : "Worker 已完成");
 
-  const preview =
-    Object.entries(outputs)
-      .map(([tag, v]) => `### ${tag}\n\n${v}`)
-      .join("\n\n")
-      .slice(0, 4000) || summary;
+  const preview = formatWorkerPreview(outputs, summary);
 
   return sanitizeWorkerSetOutputs({
     outputs,
@@ -366,12 +411,11 @@ function finalizeParsedOutputs(
   });
 }
 
-/** 规格 tag 必须是可用 JSON；非法散文改为 askUser，避免污染黑板 */
+/** 规格 tag：能解析则收成 JSON；半残 JSON 保留进验收；纯提问才改成 askUser。 */
 export function sanitizeWorkerSetOutputs(result: WorkerRunResult): WorkerRunResult {
   const outputs = { ...result.outputs };
   const askUser = [...(result.askUser ?? [])];
   const askAssessment = result.askAssessment;
-  let droppedProse = false;
 
   for (const tag of [...Object.keys(outputs)]) {
     if (!WORKER_SET_OUTPUT_TAGS.has(tag)) continue;
@@ -388,27 +432,16 @@ export function sanitizeWorkerSetOutputs(result: WorkerRunResult): WorkerRunResu
         : (extractJsonObjectText(extracted) ?? extracted);
       continue;
     }
-    droppedProse = true;
-    delete outputs[tag];
-    if (askUser.length === 0) {
-      const qs = normalizeQuestions(extractQuestionsFromText(content));
-      if (qs.length) askUser.push(...qs.slice(0, 2));
+    if (looksLikeStructuredDraft(content)) {
+      outputs[tag] = content.trim();
+      continue;
     }
-  }
-
-  if (droppedProse && askUser.length === 0) {
-    askUser.push(
-      ...normalizeQuestions([
-        "请补充或确认开局关键前提（上一次把说明文字写进了规格字段，未产出合法 JSON）。",
-      ]),
-    );
-  }
-
-  // 提问时不要夹带半残规格
-  if (askUser.length > 0) {
-    for (const tag of WORKER_SET_OUTPUT_TAGS) {
-      // 保留仍合法的草稿；已在上面删掉非法的
-      void tag;
+    if (isQuestionOnlyText(content)) {
+      delete outputs[tag];
+      if (askUser.length === 0) {
+        const qs = normalizeQuestions(extractQuestionsFromText(content));
+        if (qs.length) askUser.push(...qs.slice(0, 2));
+      }
     }
   }
 
@@ -420,10 +453,7 @@ export function sanitizeWorkerSetOutputs(result: WorkerRunResult): WorkerRunResu
   const preview =
     askUser.length && Object.keys(outputs).length === 0
       ? askUser.map((q) => `- ${q.prompt}`).join("\n")
-      : Object.entries(outputs)
-          .map(([tag, v]) => `### ${tag}\n\n${v}`)
-          .join("\n\n")
-          .slice(0, 4000) || summary;
+      : formatWorkerPreview(outputs, summary);
 
   return {
     outputs,
@@ -527,22 +557,41 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     inputs[CONTEXT_BRIEF_TAG] = priorBrief;
   }
 
-  const userPayload = assembleWorkerContext({
-    inputs,
-    segments: worker.contextSegments,
-    blackboard: params.blackboard,
-    inputMerge,
-    workerId: worker.id,
-    workerName: worker.name,
-    outputTags: worker.outputTags,
-  });
+  const systemContent = promptBody + WORKER_OUTPUT_INSTRUCTION;
+  const playPreset = isPlayLayerActive(params.slots)
+    ? resolveActivePreset(loadAppSettings().activePresetId)
+    : null;
+
+  const messages = playPreset
+    ? assemblePlayWorkerMessages({
+        systemPrompt: systemContent,
+        preset: playPreset,
+        pack: worldInfoPackFromSegments({
+          segments: worker.contextSegments ?? [],
+          inputs,
+          blackboard: params.blackboard,
+          inputMerge,
+        }),
+      })
+    : [
+        { role: "system" as const, content: systemContent },
+        {
+          role: "user" as const,
+          content: assembleWorkerContext({
+            inputs,
+            segments: worker.contextSegments,
+            blackboard: params.blackboard,
+            inputMerge,
+            workerId: worker.id,
+            workerName: worker.name,
+            outputTags: worker.outputTags,
+          }),
+        },
+      ];
 
   const result = await completeWorkerPreferStream(
     params.llm,
-    [
-      { role: "system", content: promptBody + WORKER_OUTPUT_INSTRUCTION },
-      { role: "user", content: userPayload },
-    ],
+    messages,
     {
       responseFormat: "json_object",
       caller: `worker:${worker.id}`,

@@ -53,8 +53,40 @@ const DEFAULT_SKILLS_ROOT = path.resolve(
   "../../skills",
 );
 
-/** 步骤调用参数（编排期钉死；执行期只读） */
+/** 步骤调用参数。普通节点：编排期钉死、执行只读。〔先验产物〕：编排器规划的产物内容（可空），执行时注入为【规划产物】。 */
 export type CreationFlowStepParams = Record<string, unknown>;
+
+/**
+ * 节点特性。缺省 = 普通执行步。后续会加更多 kind。
+ * prior-artifact = 先验产物：须先定「写什么」（生成规则、具体实例）；编排器可提前规划，步内再钉/修订。
+ */
+export const MODULE_NODE_KINDS = ["prior-artifact"] as const;
+export type ModuleNodeKind = (typeof MODULE_NODE_KINDS)[number];
+
+export const MODULE_NODE_KIND_FLAGS: Record<ModuleNodeKind, string> = {
+  "prior-artifact": "〔先验产物〕",
+};
+
+export function parseModuleNodeKind(raw: unknown): ModuleNodeKind | undefined {
+  if (typeof raw !== "string") return undefined;
+  const key = raw.trim();
+  return (MODULE_NODE_KINDS as readonly string[]).includes(key)
+    ? (key as ModuleNodeKind)
+    : undefined;
+}
+
+export function isPriorArtifactModule(
+  module: { kind?: ModuleNodeKind } | null | undefined,
+): boolean {
+  return module?.kind === "prior-artifact";
+}
+
+/**
+ * 本步怎么跑：
+ * - fresh（缺省）= 从零产出。〔可反复〕再编入新 id 必须用这个——彻底新建，不改旧条。
+ * - revise = 回头修改：继承 `revises` 所指那步的既有产物继续改。
+ */
+export type CreationFlowStepMode = "fresh" | "revise";
 
 export type CreationFlowStep = {
   /**
@@ -67,10 +99,15 @@ export type CreationFlowStep = {
   /** 依赖的其它步骤 id（旧稿若 name 唯一也可写 name） */
   depends_on: string[];
   /**
-   * 本步调用参数。有「编排参数」声明的能力必须在进 design-step 前钉齐必填项。
-   * 例：生成规则 → target；具体实例 → rule_id。
+   * 本步调用参数。
+   * 普通节点：有必填声明时须在进执行前钉齐。
+   * 〔先验产物〕：编排器规划的产物内容（可空）；执行注入【规划产物】，步内可修订。
    */
   params?: CreationFlowStepParams;
+  /** 缺省 fresh。revise = 继承旧产物修改，不是再生成一条。 */
+  mode?: CreationFlowStepMode;
+  /** mode=revise 时：被改的既有步骤 id（须更前、同 name） */
+  revises?: string;
 };
 
 export type CreationFlowStatus = "open" | "closed";
@@ -112,13 +149,28 @@ export type ModuleCatalogEntry = {
    */
   repeatable?: boolean;
   /**
+   * 可选：创作终节点。选定后程序收口并保存，其后不要再追加步骤。
+   */
+  closer?: boolean;
+  /**
+   * 可选：程序步。不抛默认问题、不经「同意并开始」，提案后直接执行；
+   * 产物仍走验收。适合投影排序这类只排序、几乎不问用户的收成步。
+   */
+  auto?: boolean;
+  /**
+   * 可选：节点特性。缺省为普通执行步。
+   * prior-artifact = 先验产物，须先定写什么；params 是规划产物而非拦执行的必填项。
+   */
+  kind?: ModuleNodeKind;
+  /**
    * 可选：默认问题（开场白）。优先用 prompt.md 的 ```opening 块；
    * catalog 写了则作覆盖。程序发出，不经 LLM。
    */
   opening?: string;
   /**
-   * 可选：编排期步骤参数声明。
-   * 有 required 项时，steps[].params 必须在进执行前钉齐；勿把选型推迟到 design-step。
+   * 可选：步骤参数声明。
+   * 普通节点：required 须在进执行前钉齐。
+   * 〔先验产物〕：规划产物字段；可提前写入 params，空则步内钉，不拦确认开干。
    */
   params?: ModuleParamSpec[];
   /** 来自 prompt.md ```meta：何时该选用（编排选型） */
@@ -191,15 +243,21 @@ export type CreationFlowUserView = {
     id: string;
     name: string;
     depends_on: string[];
-    /** 同能力第几次（>1 时 UI 可标「再来」） */
+    /** 同能力第几次（>1 时 UI 可标「再来」；回头修改不计入「第 N 次新建」） */
     occurrence?: number;
+    /** fresh=从零新建；revise=回头修改 */
+    mode?: CreationFlowStepMode;
+    /** 回头修改时：被改的既有步骤 id */
+    revises?: string;
     /** 目录里的短声明（有则展示） */
     declaration?: string;
     repeatable?: boolean;
-    /** 本步调用参数（编排期钉死） */
+    /** 本步调用参数（普通节点编排钉死；先验产物=规划内容） */
     params?: CreationFlowStepParams;
-    /** 参数缺必填项时的提示（给人看） */
+    /** 参数缺必填项时的提示（给人看）；先验产物不拦执行，不出现此项 */
     paramsMissing?: string[];
+    /** 节点特性（如先验产物） */
+    kind?: ModuleNodeKind;
     /** 已执行 / 将要执行 / 未执行 */
     runState: FlowStepRunState;
   }>;
@@ -241,11 +299,12 @@ export function normalizeStepParams(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** 目录声明的必填参数中，本步仍缺失的 key（按声明顺序） */
+/** 目录声明的必填参数中，本步仍缺失的 key（按声明顺序）。〔先验产物〕不拦执行，恒为 []。 */
 export function missingRequiredStepParams(
   step: Pick<CreationFlowStep, "params">,
   module: ModuleCatalogEntry | null | undefined,
 ): string[] {
+  if (isPriorArtifactModule(module)) return [];
   const specs = module?.params ?? [];
   if (specs.length === 0) return [];
   const params = step.params ?? {};
@@ -278,14 +337,120 @@ export function formatStepParamsForPrompt(
     .join("\n");
 }
 
-/** 为缺 id 的步骤补齐唯一 id；同 name 多次 → name#2、name#3… */
+const PRIOR_ARTIFACT_CONTEXT_TITLE =
+  "## 【规划产物】编排器预先为本步规划的产物内容（先验；缺则步内钉；步内可修订）";
+
+/** 〔先验产物〕注入块：规划可空，身份写在片段自身。 */
+export function formatPriorArtifactContext(
+  params: CreationFlowStepParams | null | undefined,
+): string {
+  const body = formatStepParamsForPrompt(params);
+  const note =
+    !params || Object.keys(params).length === 0
+      ? "编排器尚未规划本步具体写什么。先在本步与用户钉「写什么」，再填产物。"
+      : "以上为先验规划，不是锁死合同。用户改对象或范围时，以本步最新认定为准，并重钉对应英文 id。";
+  return `${PRIOR_ARTIFACT_CONTEXT_TITLE}\n\n${body}\n\n${note}`;
+}
+
+const REVISE_MODE_ALIASES = new Set([
+  "revise",
+  "amend",
+  "edit",
+  "修改",
+  "回头修改",
+  "继承修改",
+]);
+const FRESH_MODE_ALIASES = new Set([
+  "fresh",
+  "new",
+  "create",
+  "新建",
+  "再来",
+  "再来一次",
+]);
+
+/** 解析 DAG 步骤的 mode；无法识别则视为缺省（fresh） */
+export function parseCreationFlowStepMode(raw: unknown): CreationFlowStepMode | undefined {
+  if (typeof raw !== "string") return undefined;
+  const key = raw.trim().toLowerCase();
+  if (!key) return undefined;
+  if (REVISE_MODE_ALIASES.has(key) || REVISE_MODE_ALIASES.has(raw.trim())) {
+    return "revise";
+  }
+  if (FRESH_MODE_ALIASES.has(key) || FRESH_MODE_ALIASES.has(raw.trim())) {
+    return "fresh";
+  }
+  return undefined;
+}
+
+export function isReviseStep(
+  step: Pick<CreationFlowStep, "mode"> | null | undefined,
+): boolean {
+  return step?.mode === "revise";
+}
+
+function parseStepRevisesRef(raw: Record<string, unknown>): string | undefined {
+  for (const key of ["revises", "revise_of", "revises_id"] as const) {
+    const v = raw[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+type DraftCreationFlowStep = {
+  id?: string;
+  name: string;
+  depends_on: string[];
+  params?: CreationFlowStepParams;
+  mode?: CreationFlowStepMode;
+  revises?: string;
+};
+
+function withStepModeFields(
+  step: DraftCreationFlowStep,
+): Pick<CreationFlowStep, "mode" | "revises"> {
+  return {
+    ...(step.mode === "revise" ? { mode: "revise" as const } : {}),
+    ...(step.revises ? { revises: step.revises } : {}),
+  };
+}
+
+/**
+ * 回头修改步：补 revises（最近一条同名更前步），并继承其 params（本步已写的优先）。
+ */
+export function normalizeReviseSteps(
+  steps: CreationFlowStep[],
+): CreationFlowStep[] {
+  return steps.map((step, i) => {
+    if (step.mode !== "revise") return step;
+    let revises = step.revises?.trim() || "";
+    if (!revises) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (steps[j]?.name === step.name) {
+          revises = steps[j]!.id;
+          break;
+        }
+      }
+    }
+    const origin = revises
+      ? steps.find((s) => s.id === revises || s.name === revises)
+      : undefined;
+    const inherited = origin?.params;
+    const params =
+      inherited && Object.keys(inherited).length
+        ? { ...inherited, ...(step.params ?? {}) }
+        : step.params;
+    return {
+      ...step,
+      ...(revises ? { revises } : {}),
+      ...(params && Object.keys(params).length ? { params } : {}),
+    };
+  });
+}
+
+/** 为缺 id 的步骤补齐唯一 id；同 name 多次 → name#n；回头修改 → name·改 */
 export function ensureCreationFlowStepIds(
-  steps: Array<{
-    id?: string;
-    name: string;
-    depends_on: string[];
-    params?: CreationFlowStepParams;
-  }>,
+  steps: Array<DraftCreationFlowStep>,
 ): CreationFlowStep[] {
   const used = new Set<string>();
   const nameCount = new Map<string, number>();
@@ -295,10 +460,20 @@ export function ensureCreationFlowStepIds(
     const name = raw.name.trim();
     const n = (nameCount.get(name) ?? 0) + 1;
     nameCount.set(name, n);
+    const revise = raw.mode === "revise";
 
     let id = typeof raw.id === "string" ? raw.id.trim() : "";
     if (!id) {
-      id = n === 1 ? name : `${name}#${n}`;
+      if (revise) {
+        id = n === 1 ? `${name}·改` : `${name}·改`;
+        if (used.has(id)) {
+          let i = 2;
+          while (used.has(`${name}·改#${i}`)) i++;
+          id = `${name}·改#${i}`;
+        }
+      } else {
+        id = n === 1 ? name : `${name}#${n}`;
+      }
     }
     if (used.has(id)) {
       let i = 2;
@@ -311,9 +486,10 @@ export function ensureCreationFlowStepIds(
       name,
       depends_on: raw.depends_on.map((d) => d.trim()).filter(Boolean),
       ...(raw.params ? { params: raw.params } : {}),
+      ...withStepModeFields(raw),
     });
   }
-  return out;
+  return normalizeReviseSteps(out);
 }
 
 /** 按 id 或（唯一）name 解析步骤引用 */
@@ -378,12 +554,7 @@ export function parseCreationFlow(raw: string | undefined | null): CreationFlow 
   const stepsRaw = row.steps;
   if (!Array.isArray(stepsRaw) || stepsRaw.length === 0) return null;
 
-  const drafted: Array<{
-    id?: string;
-    name: string;
-    depends_on: string[];
-    params?: CreationFlowStepParams;
-  }> = [];
+  const drafted: DraftCreationFlowStep[] = [];
   for (const item of stepsRaw) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const s = item as Record<string, unknown>;
@@ -395,7 +566,17 @@ export function parseCreationFlow(raw: string | undefined | null): CreationFlow 
       ? depsRaw.map((d) => String(d).trim()).filter(Boolean)
       : [];
     const params = normalizeStepParams(s.params);
-    drafted.push({ id, name, depends_on, ...(params ? { params } : {}) });
+    const mode =
+      parseCreationFlowStepMode(s.mode) ?? parseCreationFlowStepMode(s.intent);
+    const revises = parseStepRevisesRef(s);
+    drafted.push({
+      id,
+      name,
+      depends_on,
+      ...(params ? { params } : {}),
+      ...(mode ? { mode } : {}),
+      ...(revises ? { revises } : {}),
+    });
   }
 
   const steps = ensureCreationFlowStepIds(drafted);
@@ -440,6 +621,9 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
         ? m.opening.trim()
         : undefined;
     const repeatable = m.repeatable === true;
+    const closer = m.closer === true;
+    const auto = m.auto === true;
+    const kind = parseModuleNodeKind(m.kind);
     const params = parseModuleParamSpecs(m.params);
     modules.push({
       id,
@@ -447,6 +631,9 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
       declaration,
       artifact,
       ...(repeatable ? { repeatable: true } : {}),
+      ...(closer ? { closer: true } : {}),
+      ...(auto ? { auto: true } : {}),
+      ...(kind ? { kind } : {}),
       ...(opening ? { opening } : {}),
       ...(params ? { params } : {}),
     });
@@ -702,7 +889,9 @@ export function mergeCreationFlowPreservingAccepted(params: {
     const changed =
       current.name !== frozen.name ||
       JSON.stringify(current.depends_on) !== JSON.stringify(frozen.depends_on) ||
-      JSON.stringify(current.params ?? null) !== JSON.stringify(frozen.params ?? null);
+      JSON.stringify(current.params ?? null) !== JSON.stringify(frozen.params ?? null) ||
+      (current.mode ?? "fresh") !== (frozen.mode ?? "fresh") ||
+      (current.revises ?? "") !== (frozen.revises ?? "");
     if (changed) {
       steps[at] = frozen;
       restored.push(frozen.id);
@@ -795,29 +984,49 @@ export async function loadModuleCatalog(
 /** 注入 design-flow：能力名 + 选型字段（meta）+ 编排参数；非执行全文 */
 export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
   const lines = catalog.modules.map((m) => {
-    const flags = m.repeatable ? "〔可反复〕" : "";
+    const flags = [
+      m.repeatable ? "〔可反复〕" : "",
+      m.closer ? "〔收口〕" : "",
+      m.auto ? "〔程序步〕" : "",
+      m.kind ? MODULE_NODE_KIND_FLAGS[m.kind] : "",
+    ]
+      .filter(Boolean)
+      .join("");
     const parts: string[] = [`- ${m.name}${flags}：${m.declaration}`];
     if (m.when) parts.push(`  何时用：${indentMultiline(m.when, "  ")}`);
     if (m.when_not) parts.push(`  何时不用：${indentMultiline(m.when_not, "  ")}`);
     if (m.boundary) parts.push(`  边界：${indentMultiline(m.boundary, "  ")}`);
     if (m.params && m.params.length > 0) {
-      parts.push(
-        `  编排参数：${m.params
-          .map((p) => {
-            const req = p.required ? "必填" : "可选";
-            const hint = p.hint ? `，${p.hint}` : "";
-            return `${p.key}（${p.label}，${req}${hint}）`;
-          })
-          .join("；")}`,
-      );
+      if (isPriorArtifactModule(m)) {
+        parts.push(
+          `  规划产物字段（可提前写入 params；空则步内钉）：${m.params
+            .map((p) => {
+              const hint = p.hint ? `，${p.hint}` : "";
+              return `${p.key}（${p.label}${hint}）`;
+            })
+            .join("；")}`,
+        );
+      } else {
+        parts.push(
+          `  编排参数：${m.params
+            .map((p) => {
+              const req = p.required ? "必填" : "可选";
+              const hint = p.hint ? `，${p.hint}` : "";
+              return `${p.key}（${p.label}，${req}${hint}）`;
+            })
+            .join("；")}`,
+        );
+      }
     }
     return parts.join("\n");
   });
   return [
     "【能力 · 可选工序】",
-    "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入。",
-    "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）；有「编排参数」的步骤必须在 DAG 里写齐 params，缺参时用 askUser 选项+其它，禁止空壳进执行。",
-    "生成规则：改 target 时必须同步改 rule_id（英文 kebab-case）与步骤 id（生成规则·{对象}）；禁止只改中文对象沿用旧后台 id。",
+    "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入；标〔收口〕的是终节点：选定后结束创作并保存，排在细化终稿之后，其后不要再追加步骤；标〔程序步〕的确认编排后直接执行（不抛默认问题、不经同意并开始），产物仍验收。",
+    "标〔先验产物〕的步骤（如生成规则、具体实例）：须先定「写什么」。编排器可以提前规划多条并写入 params——这是正确的；执行时程序注入【规划产物】。规划可空，「生成什么」在步内钉。禁止为钉对象而 askUser 拦在确认开干前。规划或修订对象时同步改 rule_id（英文 kebab-case）与步骤 id（如 生成规则·{对象}），禁止只改中文沿用旧后台 id。",
+    "其它有「编排参数」的步骤：确认开干前写齐必填 params；缺参时用 askUser 选项+其它。",
+    "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）。",
+    "两种「再来一次」必须分开：〔可反复〕再编入新 id（mode 缺省/fresh）= 彻底新建一条；回头修改已完成节点 = mode=revise + revises=原步 id，继承旧产物继续改。禁止把回头修改写成又一条 fresh。",
     "不要把能力执行全文塞进本步；执行由 design-step 注入。",
     lines.join("\n"),
   ].join("\n");
@@ -1153,8 +1362,8 @@ export function formatFlowProgressForAgent(params: {
     repeatable: boolean,
   ) => {
     const flag = repeatable
-      ? "〔可反复：可再追加不同 id〕"
-      : "〔不可反复：禁止再排一次执行〕";
+      ? "〔可反复：mode=fresh 再追加 = 彻底新建；要改旧条用 mode=revise〕"
+      : "〔不可反复：禁止再排新建；要改已完成节点用 mode=revise 回头修改〕";
     const idBit = id ? `（id: ${id}）` : "";
     doneLines.push(`- ${name}${idBit} · ${why} ${flag}`);
     doneNames.add(name);
@@ -1196,9 +1405,12 @@ export function formatFlowProgressForAgent(params: {
   const draftLines: string[] = [];
   if (flow) {
     for (const step of flow.steps) {
-      if (doneIds.has(step.id) || doneNames.has(step.name)) continue;
+      if (doneIds.has(step.id) || isStepAccepted(step, accepted)) continue;
+      const reviseBit = isReviseStep(step)
+        ? ` · 回头修改${step.revises ? `（revises: ${step.revises}）` : ""}`
+        : "";
       draftLines.push(
-        `- ${step.name}（id: ${step.id}）· 已在草案，保留原 id；不要当作新规划再写一遍`,
+        `- ${step.name}（id: ${step.id}）${reviseBit} · 已在草案，保留原 id；不要当作新规划再写一遍`,
       );
     }
   }
@@ -1210,9 +1422,9 @@ export function formatFlowProgressForAgent(params: {
   const lines = [
     "【流程进度】（程序钉死，必须遵守）",
     "你的任务是追加缺口，不是从头规划。",
-    "已完成的非反复技能：只保留原 id 作 depends_on 锚点，禁止再作为将要执行的一步。",
-    "草案里已有的步骤：原样保留，不要重排一遍开局。",
-    "只有能力目录标了〔可反复〕的（如生成规则、具体实例）才允许再编入新 id。",
+    "已完成的非反复技能：禁止再排一次「新建」（mode=fresh）。用户要改已完成节点 → 追加新 id，mode=revise，revises=原步 id；程序会继承既有产物。",
+    "〔可反复〕再编入新 id 且 mode 缺省/fresh = 彻底新建一条（新对象/新批次），不是改旧的。要改已有那一条 → 同样用 mode=revise。",
+    "草案里已有的步骤：原样保留，不要重排一遍开局。回头修改步插在最近已验收步之后、尚未执行的步之前。",
   ];
   if (doneLines.length) {
     lines.push("", "已完成：", ...doneLines);
@@ -1258,10 +1470,7 @@ export function validateCreationFlow(
   const allowed = catalog
     ? new Set(catalog.modules.map((m) => m.name))
     : null;
-  const nameCount = new Map<string, number>();
-  for (const step of flow.steps) {
-    nameCount.set(step.name, (nameCount.get(step.name) ?? 0) + 1);
-  }
+  const reportedFreshDup = new Set<string>();
 
   for (let i = 0; i < flow.steps.length; i++) {
     const step = flow.steps[i]!;
@@ -1275,14 +1484,44 @@ export function validateCreationFlow(
     }
 
     const mod = catalog?.modules.find((m) => m.name === step.name);
-    if (
+    if (isReviseStep(step)) {
+      const ref = step.revises?.trim() ?? "";
+      if (!ref) {
+        errors.push(
+          `「${step.id}」是回头修改，但未标明 revises（应指向更前的同名步骤 id）`,
+        );
+      } else {
+        const origin = findStepByRef(flow, ref);
+        if (!origin) {
+          errors.push(
+            `「${step.id}」回头修改「${ref}」，但流程中没有该步骤`,
+          );
+        } else if (origin.id === step.id) {
+          errors.push(`「${step.id}」不能回头修改自己`);
+        } else if (origin.name !== step.name) {
+          errors.push(
+            `「${step.id}」回头修改「${origin.id}」，但能力名不同（${step.name} ≠ ${origin.name}）`,
+          );
+        } else {
+          const originIndex = flow.steps.findIndex((s) => s.id === origin.id);
+          if (originIndex >= i) {
+            errors.push(
+              `「${step.id}」回头修改「${origin.id}」，但「${origin.id}」未排在其前面`,
+            );
+          }
+        }
+      }
+    } else if (
       catalog &&
-      (nameCount.get(step.name) ?? 0) > 1 &&
       mod &&
-      mod.repeatable !== true
+      mod.repeatable !== true &&
+      !reportedFreshDup.has(step.name) &&
+      flow.steps.filter((s) => s.name === step.name && !isReviseStep(s)).length >
+        1
     ) {
+      reportedFreshDup.add(step.name);
       errors.push(
-        `「${step.name}」出现多次，但目录未标 repeatable（仅可反复能力可同名多次）`,
+        `「${step.name}」出现多次新建，但目录未标 repeatable（非反复技能要改旧稿请用 mode=revise）`,
       );
     }
 
@@ -1306,7 +1545,7 @@ export function validateCreationFlow(
   return { ok: errors.length === 0, errors };
 }
 
-/** 进 design-step 前：本步必填编排参数是否已齐 */
+/** 进 design-step 前：本步必填编排参数是否已齐。〔先验产物〕不拦。 */
 export function validateStepReadyToRun(
   step: CreationFlowStep,
   catalog: ModuleCatalog | null,
@@ -1362,14 +1601,19 @@ export function formatCreationFlowForUser(
   const decl = new Map(
     (catalog?.modules ?? []).map((m) => [m.name, m] as const),
   );
-  const seenName = new Map<string, number>();
+  const seenFreshName = new Map<string, number>();
   const next = nextPendingStep(flow, acceptedStepIds);
   return {
     brief: flow.brief,
     status: flow.status,
     steps: flow.steps.map((s, i) => {
-      const n = (seenName.get(s.name) ?? 0) + 1;
-      seenName.set(s.name, n);
+      const revise = isReviseStep(s);
+      let occurrence: number | undefined;
+      if (!revise) {
+        const n = (seenFreshName.get(s.name) ?? 0) + 1;
+        seenFreshName.set(s.name, n);
+        occurrence = n;
+      }
       const mod = decl.get(s.name);
       const paramsMissing = missingRequiredStepParams(s, mod);
       const runState: FlowStepRunState = isStepAccepted(s, acceptedStepIds)
@@ -1382,9 +1626,12 @@ export function formatCreationFlowForUser(
         id: s.id,
         name: s.name,
         depends_on: s.depends_on,
-        occurrence: n,
+        occurrence,
+        ...(revise ? { mode: "revise" as const } : {}),
+        ...(s.revises ? { revises: s.revises } : {}),
         declaration: mod?.declaration,
         repeatable: mod?.repeatable,
+        ...(mod?.kind ? { kind: mod.kind } : {}),
         runState,
         ...(s.params ? { params: s.params } : {}),
         ...(paramsMissing.length > 0 ? { paramsMissing } : {}),
@@ -1443,6 +1690,7 @@ export function nextPendingStep(
   acceptedStepIds: readonly string[],
 ): CreationFlowStep | null {
   if (!flow?.steps.length) return null;
+  const ready: CreationFlowStep[] = [];
   for (const step of flow.steps) {
     if (isStepAccepted(step, acceptedStepIds)) continue;
     const depsOk = step.depends_on.every((dep) => {
@@ -1450,9 +1698,9 @@ export function nextPendingStep(
       if (!depStep) return false;
       return isStepAccepted(depStep, acceptedStepIds);
     });
-    if (depsOk) return step;
+    if (depsOk) ready.push(step);
   }
-  return null;
+  return ready.find((s) => isReviseStep(s)) ?? ready[0] ?? null;
 }
 
 /** 当前已列出的步骤是否都已验收（不管 status） */
@@ -1532,8 +1780,10 @@ export type DesignStepBinding = {
   module: ModuleCatalogEntry;
   depTags: string[];
   modulePrompt: string;
-  /** 程序开场白；无则本步直接调 LLM */
+  /** 程序开场白；无则本步直接调 LLM。回头修改不抛 opening。 */
   opening: string | null;
+  /** 回头修改时注入的既有产物 tag */
+  inheritTag: string | null;
 };
 
 /**
@@ -1570,7 +1820,9 @@ export async function resolveDesignStepBinding(params: {
     `# ${module.name}\n\n（模块 prompt.md 缺失，请补充 skills/.../modules/${module.id}/prompt.md）`;
 
   const opening =
-    module.opening?.trim() || extractModuleOpening(modulePromptRaw) || null;
+    isReviseStep(step) || module.auto
+      ? null
+      : module.opening?.trim() || extractModuleOpening(modulePromptRaw) || null;
 
   return {
     step,
@@ -1578,5 +1830,6 @@ export async function resolveDesignStepBinding(params: {
     depTags: dependencyArtifactTags(step, catalog, flow),
     modulePrompt: formatModulePromptForLlm(modulePromptRaw),
     opening,
+    inheritTag: isReviseStep(step) ? module.artifact : null,
   };
 }

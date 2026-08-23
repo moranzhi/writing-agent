@@ -209,6 +209,72 @@ describe("phase machine", () => {
     ]);
   });
 
+  it("later revision notes accumulate instead of replacing earlier ones", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "design-step",
+      outputTags: ["设计.正文组成"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+    };
+
+    session = applyEvent(session, {
+      type: "user_rejected_artifact",
+      payload: { artifactId: artifact.id, reason: "不如原本的上中下样式" },
+    }).session;
+
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+      pendingArtifactId: artifact.id,
+    };
+
+    const second = applyEvent(session, {
+      type: "user_rejected_artifact",
+      payload: { artifactId: artifact.id, reason: "状态很短，放到上面就行了" },
+    });
+
+    expect(second.session.slots["用户.修订说明"]).toContain("不如原本的上中下样式");
+    expect(second.session.slots["用户.修订说明"]).toContain("状态很短，放到上面就行了");
+  });
+
+  it("accepting a design-step artifact clears stale revision notes", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "design-step",
+      outputTags: ["设计.监控栏"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+      slots: {
+        "用户.修订说明": "上一步的意见",
+        revisionInstruction: "上一步的意见",
+        "用户.worker答复": "监控对象是剩余食物",
+      },
+    };
+
+    session = applyEvent(session, {
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
+    }).session;
+
+    expect(session.slots["用户.修订说明"]).toBeUndefined();
+    expect(session.slots.revisionInstruction).toBeUndefined();
+    expect(session.slots["用户.worker答复"]).toBeUndefined();
+    expect(session.slots["用户.需求"]).toContain("监控对象是剩余食物");
+    expect(session.slots["用户.需求"]).toContain("上一步的意见");
+  });
+
   it("failed revision rerun falls back to reviewing the previous artifact", () => {
     let session = createSession("default");
     const artifact = {
@@ -281,7 +347,35 @@ describe("phase machine", () => {
     ]);
   });
 
-  it("accepting design-step enters next_intent instead of invoking main agent", () => {
+  it("accepting design-step worker set proposes next step instead of invoking main agent", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "design-step",
+      stepId: "细化终稿",
+      outputTags: ["设计.worker集"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+    };
+
+    const accepted = applyEvent(session, {
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
+    });
+    expect(accepted.session.slots.designInstanceReady).toBe(true);
+    expect(accepted.session.phase).toBe("running");
+    expect(accepted.session.waitingReason).toBeUndefined();
+    expect(accepted.effects).toEqual([{ type: "propose_next_creation_step" }]);
+    expect(accepted.effects.some((e) => e.type === "invoke_main_agent")).toBe(
+      false,
+    );
+  });
+
+  it("accepting design-step proposes next step instead of invoking main agent", () => {
     let session = createSession("default");
     const artifact = createArtifact({
       workerId: "design-step",
@@ -300,12 +394,22 @@ describe("phase machine", () => {
       type: "user_accepted_artifact",
       payload: { artifactId: artifact.id },
     });
-    expect(accepted.session.waitingReason?.kind).toBe("next_intent");
+    expect(accepted.session.phase).toBe("running");
+    expect(accepted.effects).toEqual([{ type: "propose_next_creation_step" }]);
     expect(accepted.effects.some((e) => e.type === "invoke_main_agent")).toBe(
       false,
     );
+  });
 
-    const continued = applyEvent(accepted.session, {
+  it("legacy next_intent still proposes next step and records intent", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "next_intent", afterWorkerId: "design-step" },
+    };
+
+    const continued = applyEvent(session, {
       type: "user_submitted_input",
       payload: { text: "接下来写怪物生成规则" },
     });
@@ -316,5 +420,125 @@ describe("phase machine", () => {
     expect(continued.effects).toEqual([
       { type: "propose_next_creation_step" },
     ]);
+  });
+
+  it("accepting opening-setup seals creation instead of next_intent", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "design-step",
+      stepId: "开场白与开场变量",
+      outputTags: ["设计.开场白与开场变量"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+    };
+
+    const accepted = applyEvent(session, {
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
+    });
+    expect(accepted.session.waitingReason?.kind).toBe("input");
+    expect(accepted.session.waitingReason).toMatchObject({
+      kind: "input",
+    });
+    expect(accepted.effects).toEqual([{ type: "seal_creation_opening" }]);
+    expect(
+      accepted.effects.some((e) => e.type === "invoke_main_agent"),
+    ).toBe(false);
+  });
+
+  it("accepting opening-generator also seals creation", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "opening-generator",
+      outputTags: ["输出.开场白", "运行.初始变量"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+    };
+
+    const accepted = applyEvent(session, {
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
+    });
+    expect(accepted.session.waitingReason?.kind).toBe("input");
+    expect(accepted.effects).toEqual([{ type: "seal_creation_opening" }]);
+  });
+
+  it("sealed creation still blocks input until play", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "input" },
+      slots: { creationSealedByOpening: true, designInstanceReady: true },
+    };
+    const blocked = applyEvent(session, {
+      type: "user_submitted_input",
+      payload: { text: "我买金首饰" },
+    });
+    expect(blocked.effects).toEqual([
+      { type: "emit_message", message: "创作已收口并保存。请切换到「游玩」开始。" },
+    ]);
+    expect(blocked.effects.some((e) => e.type === "run_play_turn")).toBe(false);
+  });
+
+  it("play input starts a play turn even after opening seal", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "input" },
+      slots: {
+        creationSealedByOpening: true,
+        designInstanceReady: true,
+        uiLifecycleStage: "play",
+      },
+    };
+    const play = applyEvent(session, {
+      type: "user_submitted_input",
+      payload: { text: "我买金首饰" },
+    });
+    expect(play.session.phase).toBe("running");
+    expect(play.effects).toEqual([{ type: "run_play_turn" }]);
+  });
+
+  it("accepting a play worker continues the play pipeline", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "narrator",
+      outputTags: ["输出.用户展示"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+      slots: {
+        designInstanceReady: true,
+        uiLifecycleStage: "play",
+        playLayerActive: true,
+      },
+    };
+    const accepted = applyEvent(session, {
+      type: "user_accepted_artifact",
+      payload: { artifactId: artifact.id },
+    });
+    expect(accepted.effects).toEqual([{ type: "continue_play_turn" }]);
+    expect(accepted.effects.some((e) => e.type === "invoke_main_agent")).toBe(
+      false,
+    );
+    expect(accepted.effects.some((e) => e.type === "propose_next_creation_step")).toBe(
+      false,
+    );
   });
 });

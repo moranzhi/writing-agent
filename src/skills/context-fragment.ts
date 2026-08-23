@@ -163,11 +163,21 @@ export function projectFragmentContent(
   const frag = parseContextFragment(raw);
   const mode = projection.trim().toLowerCase();
   if (!frag) {
-    if (mode === "summary" && raw.length > 800) return `${raw.slice(0, 800)}…`;
+    if ((mode === "summary" || mode === "brief" || mode === "index") && raw.length > 800) {
+      return `${raw.slice(0, 800)}…`;
+    }
     return raw;
   }
   if (mode === "summary" || mode === "brief") {
     return frag.brief || raw;
+  }
+  if (mode === "index") {
+    const lines: string[] = [];
+    if (frag.技能) lines.push(`技能：${frag.技能}`);
+    if (frag.brief) lines.push(frag.brief);
+    if (frag.mount.length) lines.push(`挂载：${frag.mount.join("、")}`);
+    if (frag.稳变) lines.push(`稳变：${frag.稳变}`);
+    return lines.join("\n") || frag.brief || raw;
   }
   if (mode === "fields") {
     if (frag.正文 && typeof frag.正文 === "object" && !Array.isArray(frag.正文)) {
@@ -237,9 +247,11 @@ export function contextFragmentToView(raw: unknown): ContextFragmentView {
   const probe = rawDoc?.追问;
   if (probe && typeof probe === "object" && !Array.isArray(probe)) {
     const row = probe as Record<string, unknown>;
-    const lines: string[] = [];
-    if (typeof row.导语 === "string" && row.导语.trim()) lines.push(row.导语.trim());
     const qs = Array.isArray(row.题目) ? row.题目 : [];
+    const lines: string[] = [];
+    if (qs.length && typeof row.导语 === "string" && row.导语.trim()) {
+      lines.push(row.导语.trim());
+    }
     qs.forEach((q, i) => {
       if (!q || typeof q !== "object") return;
       const r = q as Record<string, unknown>;
@@ -282,7 +294,9 @@ export function extractFragmentAskSidecar(raw: unknown): {
 
   const looksFragment =
     row.schema === CONTEXT_FRAGMENT_SCHEMA ||
-    (typeof row.brief === "string" && ("正文" in row || "body" in row));
+    typeof row.技能 === "string" ||
+    (typeof row.brief === "string" &&
+      ("正文" in row || "body" in row || "追问" in row));
   if (!looksFragment) return { questions: [], assessment: "" };
 
   const assessmentParts: string[] = [];
@@ -358,7 +372,12 @@ export function extractFragmentAskSidecar(raw: unknown): {
   }
 
   const questions = normalizeQuestions(rawQs);
-  const assessment = [lead, ...assessmentParts].filter(Boolean).join("\n");
+  const assessment = [
+    questions.length ? lead : "",
+    ...assessmentParts,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return { questions, assessment };
 }
 

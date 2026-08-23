@@ -86,8 +86,11 @@ declaration: …
 | 字段 | 作用 |
 |------|------|
 | `id` / `name` / `declaration` / `artifact` | 索引与产物映射；`declaration` 可被 prompt `meta` 覆盖 |
-| `repeatable` | 可选；`true` = 允许同能力多次编入增量 DAG |
-| `params` | 可选；编排期 `steps[].params` 声明（`key`/`label`/`required`/`hint`）；必填项须在进执行前钉齐 |
+| `repeatable` | 可选；`true` = 允许同能力多次**新建**编入增量 DAG（每次彻底新的，不改旧条） |
+| `closer` | 可选；`true` = 创作终节点（选定后落库、关 DAG、保存定稿） |
+| `auto` | 可选；`true` = 程序步（提案后直接执行） |
+| `kind` | 可选；节点特性。缺省=普通执行步。`prior-artifact` = **先验产物**（须先定写什么；params 是规划产物，执行注入【规划产物】，不拦确认开干） |
+| `params` | 可选；普通节点=编排期 `steps[].params` 声明（必填项须在进执行前钉齐）。〔先验产物〕=规划产物字段（可提前填，空则步内钉） |
 | `opening` | 可选覆盖；一般只写在 prompt 的 `opening` 块 |
 
 编排器注入【能力 · 可选工序】时，会读取各能力 `prompt.md` 的 `meta`（`declaration` / `when` / `when_not` / `boundary`），**不是**只看 catalog 短声明。执行全文仍只在 design-step 注入。
@@ -104,6 +107,15 @@ declaration: …
 
 配方**不要**重复罗列各能力调用条件；那是能力 meta 的职责。旧字段 `hint` 仍可读作兜底。
 
+### 节点特性（`kind`）
+
+节点特性是 catalog 上的固定系统，不是某一步的特例。缺省为普通执行步；后续会加更多 kind。
+
+| kind | 中文 | 行为 |
+|------|------|------|
+| （缺省） | 普通执行步 | 有必填 params 时，确认开干前钉齐 |
+| `prior-artifact` | 先验产物 | 须先定「写什么」（生成规则、具体实例）。编排器可提前把规划写入 `params`——规划多条是正确的。执行时注入【规划产物】；规划可空，步内钉/修订。不拦确认开干 |
+
 ### 节点循环（通用）
 
 ```text
@@ -113,15 +125,21 @@ declaration: …
   → 用户选选项 / 写意见 →「按意见修改」
       （产物 + 追问 + 选项 + 意见 + 节点要求一并重跑）→ 新产物
   → 循环直到「接受」
-  →「下一步想写什么」（可留空，交给工作流计划 DAG）
-  → 展示下一节点并确认开干（可在此钉编排参数，如生成规则的 target）
+  → 直接提案下一节点并确认开干（普通节点可在此钉编排参数；〔先验产物〕不在此钉「写什么」；〔程序步〕如投影排序跳过确认直接执行）
+      · 可反复技能再来一次 = 彻底新建（新 id / 新 params）
+      · 已完成节点要改 = 回头修改（mode=revise，继承旧产物）
   → 下一节点 opening / design-step …
-直到创作收口
+直到「开场白与开场变量」（〔收口〕）
+  → 产出 1～多条开场白 → 选定 → 程序落库、关闭 DAG、保存创作定稿
 ```
 
 「按意见修改」只重跑当前节点，不得跳到「下一步想写什么」。底栏空且未选追问时 Enter＝接受；已选追问时 Enter＝按意见修改。点按钮仍只做按钮自己的事。
 
-有编排参数的能力：可在确认开干时钉齐 params；勿把「生成什么」拖到执行中途才问。
+「回头修改」是编排层能力：给已完成步骤追加一条 `mode=revise` 的新步，执行时注入既有产物继续改。它**不是**〔可反复〕再来一次——后者从零新建。漏了前面的节点、或谈完才发现要改上游，用回头修改，不必整局重开。
+
+〔先验产物〕节点（生成规则、具体实例）：编排器可提前规划「写什么」写入 params——提前规划多条是正确的。确认开干不补「生成什么」；执行时注入【规划产物】，步内钉或修订。
+
+有编排参数的**普通**能力：可在确认开干时钉齐 params。
 
 ---
 
@@ -140,15 +158,15 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写**；前端 mosaic 视图 |
 | 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm`；**专用卡已接** |
 | 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况；**专用卡已接** |
-| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；`params.target`；挂 gm+auditor；**专用卡已接** |
-| 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；`params.rule_id` |
+| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
+| 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；**〔先验产物〕**；规划字段 `rule_id` |
 | 叙事指南与故事推进 | `narrative` | **已写**：一份全文双挂；**不**为省 token 拆投影；结构化卡 |
 | 拓扑图谱 | `topology` | 骨架，待细写（拟改为选项小循环或降级） |
 | 设计监控栏 | `status-bar` | **已写**：只盯会变信息；通用 fragment 卡 |
-| 正文组成 | `reply-format` | **已写**：壳适配；P2 present 渲染已接 |
+| 正文组成 | `reply-format` | **已写**：壳适配 + 正文.`示例`（present.v1 预览，看美化）；P2 present 渲染已接 |
 | 变量设计与更新规则 | `variable-design` | **已写**；专用/结构化卡 |
 | 变量控制上下文 | `variable-context` | **已写**：旁观汇总；mount 含 auditor；通用 fragment 卡 |
-| 开场白与开场变量 | `opening-setup` | **已写**：开场守版式+同真相初值 |
+| 开场白与开场变量 | `opening-setup` | **已写**：开场守版式+同真相初值；**〔收口〕**选定后落库并保存定稿 |
 
 共用收成（池内保留，按需）：
 
@@ -170,6 +188,6 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 1. 只选配方 → 出**近期**创作流程（`status=open`）  
 2. design-step 能切割出 `opening`/`task`/…  
 3. 有 `opening` 时先程序开场再 LLM  
-4. 可追加同能力多次（不同 step.id + params）；收成前 `status=closed`  
-5. UI 用编排术语；有编排参数的步骤须展示 params  
-6. 缺必填 params 的步骤不得视为可执行（校验失败 / 编排先 askUser）  
+4. 可追加同能力多次（不同 step.id + params，**彻底新建**）；也可 `mode=revise` 回头修改已完成节点（继承旧产物）；收成前 `status=closed`  
+5. UI 用编排术语；有编排参数的步骤须展示 params；回头修改在流程上标「回头修改」，确认开干文案与「接下来生成」区分  
+6. 缺必填 params 的**普通**步骤不得视为可执行（校验失败 / 编排先 askUser）；〔先验产物〕规划可空，不拦确认开干；回头修改可继承原步 params  

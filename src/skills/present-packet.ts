@@ -132,6 +132,9 @@ function normalizeBlocks(raw: unknown): PresentBlocks {
   if (out.monitor === undefined && row.监控 !== undefined) {
     out.monitor = row.监控 as PresentBlocks["monitor"];
   }
+  if (typeof out.body === "string") {
+    out.body = stripPresentSourceFences(out.body);
+  }
   return out;
 }
 
@@ -170,15 +173,35 @@ export function presentFromPlainText(
   return {
     schema: PRESENT_SCHEMA,
     shell,
-    blocks: { body: text },
+    blocks: { body: stripPresentSourceFences(text) },
   };
 }
+
+/** 模型常把 tag 名写进正文开头；展示前剥掉 */
+export function stripPresentSourceFences(raw: string): string {
+  let s = raw.trim();
+  for (let i = 0; i < 3; i += 1) {
+    const next = s
+      .replace(/^(#{1,6}\s*)?输出[.:：]?\s*(用户展示|开场白)(?:\s*\n+|\s*$)/u, "")
+      .replace(/^【\s*输出[.:：]?\s*(用户展示|开场白)\s*】(?:\s*\n+|\s*$)/u, "")
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+export const PLAY_VISIBLE_BODY_INSTRUCTION = [
+  "用户可见正文（present.v1 的 blocks.body，或纯 Markdown 主读）默认 **500～2000 字**（按汉字计）。",
+  "不要写成几句气泡短信就结束，除非用户明确要求极短。",
+  "禁止把 tag 名（如「输出.用户展示」）、压缩摘要、过程日志写进正文。",
+].join("\n");
 
 export function parsePresentPacket(
   raw: string | undefined | null,
   fallbackShell: PresentShellId = "prose",
 ): PresentPacketView {
-  const text = raw?.trim() ?? "";
+  const text = stripPresentSourceFences(raw?.trim() ?? "");
   if (!text) {
     return {
       ok: true,

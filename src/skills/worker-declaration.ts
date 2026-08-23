@@ -1,5 +1,6 @@
 import type { Blackboard } from "../blackboard/blackboard.js";
 import type { RuntimeSession } from "../types/runtime.js";
+import { isPlayLayerActive } from "./play-turn.js";
 import {
   deriveDesignStageScope,
   deriveOnDemandWorkerScope,
@@ -45,8 +46,9 @@ export function canEnterPlay(session: RuntimeSession): boolean {
 }
 
 export function inferLifecycleStage(session: RuntimeSession): LifecycleStage {
-  const override = session.slots.uiLifecycleStage;
-  if (override === "play" && canEnterPlay(session)) return "play";
+  if (!canEnterPlay(session)) return "design";
+  if (session.slots.uiLifecycleStage === "play") return "play";
+  if (isPlayLayerActive(session.slots)) return "play";
   return "design";
 }
 

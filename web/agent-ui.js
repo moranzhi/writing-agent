@@ -12,6 +12,7 @@ import {
   parsePresentDoc,
   presentFromPlain,
   renderPresentShellHtml,
+  stripPresentSourceFences,
 } from "./present-shells.js";
 
 const HIDE_KINDS = new Set(["worker_stub"]);
@@ -57,6 +58,10 @@ function esc(s) {
     .replace(/>/g, "&gt;");
 }
 
+function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;");
+}
+
 function renderThinkingBlock(thinking, { open = false } = {}) {
   const text = (thinking ?? "").trim();
   if (!text) return "";
@@ -66,23 +71,39 @@ function renderThinkingBlock(thinking, { open = false } = {}) {
   </details>`;
 }
 
+function isPlayView(view) {
+  return Boolean(view?.playLayerActive || view?.lifecycleStage === "play");
+}
+
 function renderLiveStreamBody(live, view) {
   const thinking = (live?.thinking || view?.agentThinking || "").trim();
   const output = (live?.output ?? "").trim();
-  const showOutput =
-    Boolean(output) && (view?.lifecycleStage ?? document.body.dataset.lifecycle) === "play";
   const parts = [];
   if (thinking) {
     parts.push(
       `<section class="msg-live-section"><header>思考</header><pre class="msg-live-pre">${esc(thinking)}</pre></section>`,
     );
   }
-  if (showOutput) {
+  if (output) {
     parts.push(
       `<section class="msg-live-section"><header>输出</header><pre class="msg-live-pre">${esc(output)}</pre></section>`,
     );
   }
-  return parts.length ? parts.join("") : "…";
+  return parts.length
+    ? parts.join("")
+    : `<p class="msg-live-empty">正在生成，尚未收到内容</p>`;
+}
+
+function renderRetryRunButton() {
+  return `<button type="button" class="msg-action msg-action-primary" data-act="retry_run" title="停止当前生成并重试">↻</button>`;
+}
+
+function wireRetryRun(root, handlers) {
+  root?.querySelector("[data-act=retry_run]")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handlers.onRetryRun?.();
+  });
 }
 
 function fmtTime(iso) {
@@ -141,13 +162,19 @@ function hideMsgMenu() {
   const menu = document.getElementById("msg-action-menu");
   if (menu) menu.hidden = true;
   msgMenuState.messageId = null;
+  msgMenuState.contextMessageId = null;
   msgMenuState.rollbackMessageId = null;
+  msgMenuState.rollbackMode = "keep";
+  msgMenuState.restoreDraft = "";
   msgMenuState.card = null;
 }
 
 const msgMenuState = {
   messageId: null,
+  contextMessageId: null,
   rollbackMessageId: null,
+  rollbackMode: "keep",
+  restoreDraft: "",
   card: null,
   handlers: null,
 };
@@ -155,25 +182,38 @@ const msgMenuState = {
 function showMsgMenu(card, x, y) {
   const menu = document.getElementById("msg-action-menu");
   if (!menu || !card) return;
-  const isReview = card.dataset.review === "1";
-  const isReadOnly = card.dataset.readOnly === "1";
-  const canEdit = !isReview && card.dataset.canEdit === "1";
-  const canDelete = !isReview && !isReadOnly && Boolean(card.dataset.messageId);
-  const canRollback = !isReview && !isReadOnly && Boolean(card.dataset.rollbackMessageId);
-  const hasContext = card.dataset.hasContext === "1";
+  const pack = card.closest(".coord-pack");
+  const rollbackHost = pack || card;
+  // 上下文按单次请求（这条消息）区分，不能回落到整包里的另一条
+  const contextTarget = card.dataset.hasContext === "1" ? card : null;
+  const isReview = card.dataset.review === "1" || pack?.dataset.review === "1";
+  const isReadOnly = card.dataset.readOnly === "1" || pack?.dataset.readOnly === "1";
+  const canEdit = !isReview && !pack && card.dataset.canEdit === "1";
+  const canDelete = !isReview && !isReadOnly && !pack && Boolean(card.dataset.messageId);
+  const rollbackMessageId = rollbackHost.dataset.rollbackMessageId ?? null;
+  const rollbackMode = rollbackHost.dataset.rollbackMode || "keep";
+  const canRollback = !isReview && !isReadOnly && Boolean(rollbackMessageId);
+  const hasContext = Boolean(contextTarget);
   const editBtn = document.getElementById("msg-menu-edit");
   const delBtn = document.getElementById("msg-menu-delete");
   const rollbackBtn = document.getElementById("msg-menu-rollback");
   const ctxBtn = document.getElementById("msg-menu-context");
   if (editBtn) editBtn.toggleAttribute("hidden", !canEdit);
   if (delBtn) delBtn.toggleAttribute("hidden", !canDelete);
-  if (rollbackBtn) rollbackBtn.toggleAttribute("hidden", !canRollback);
+  if (rollbackBtn) {
+    rollbackBtn.toggleAttribute("hidden", !canRollback);
+    rollbackBtn.textContent =
+      rollbackMode === "pending-input" ? "回到这一轮输入" : "回退到这里";
+  }
   if (ctxBtn) ctxBtn.toggleAttribute("hidden", !hasContext);
   menu.hidden = false;
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
   msgMenuState.messageId = card.dataset.messageId ?? null;
-  msgMenuState.rollbackMessageId = card.dataset.rollbackMessageId ?? null;
+  msgMenuState.contextMessageId = contextTarget?.dataset.messageId ?? card.dataset.messageId ?? null;
+  msgMenuState.rollbackMessageId = rollbackMessageId;
+  msgMenuState.rollbackMode = rollbackMode;
+  msgMenuState.restoreDraft = rollbackHost.dataset.restoreDraft ?? "";
   msgMenuState.card = card;
   const rect = menu.getBoundingClientRect();
   if (rect.right > window.innerWidth) {
@@ -193,12 +233,15 @@ function wireMsgActionMenu(handlers) {
   menu.addEventListener("click", async (e) => {
     const action = e.target.closest("[data-msg-menu-action]")?.getAttribute("data-msg-menu-action");
     const messageId = msgMenuState.messageId;
+    const contextMessageId = msgMenuState.contextMessageId || messageId;
     const rollbackMessageId = msgMenuState.rollbackMessageId;
+    const rollbackMode = msgMenuState.rollbackMode;
+    const restoreDraft = msgMenuState.restoreDraft;
     const card = msgMenuState.card;
     hideMsgMenu();
     if (!messageId || !action) return;
     const bodyEl = card?.querySelector(".msg-body:not(.msg-body-editing), .coord-text");
-    const body = bodyEl?.textContent ?? card?.dataset.originalText ?? "";
+    const body = card?.dataset.originalText || bodyEl?.textContent || "";
 
     if (action === "copy") {
       try {
@@ -209,7 +252,7 @@ function wireMsgActionMenu(handlers) {
       return;
     }
     if (action === "view-context") {
-      msgMenuState.handlers?.onViewContext?.(messageId);
+      msgMenuState.handlers?.onViewContext?.(contextMessageId);
       return;
     }
     if (action === "edit") {
@@ -218,8 +261,20 @@ function wireMsgActionMenu(handlers) {
     }
     if (action === "rollback") {
       if (!rollbackMessageId) return;
-      if (!confirm("回退到这条消息？之后的对话和创作状态将被移除。")) return;
-      msgMenuState.handlers?.onDeleteMessage?.(rollbackMessageId);
+      const pendingInput = rollbackMode === "pending-input";
+      const confirmed = pendingInput
+        ? confirm(
+            "回到这一轮的待输入？这一轮及之后的对话和创作状态将被移除，原文会填回底栏。",
+          )
+        : confirm("回退到这条消息？之后的对话和创作状态将被移除。");
+      if (!confirmed) return;
+      if (pendingInput) {
+        const restore = msgMenuState.handlers?.onRollbackToInput;
+        if (typeof restore === "function") restore(rollbackMessageId, restoreDraft);
+        else msgMenuState.handlers?.onDeleteMessage?.(rollbackMessageId);
+      } else {
+        msgMenuState.handlers?.onDeleteMessage?.(rollbackMessageId);
+      }
       return;
     }
     if (action === "delete") {
@@ -234,7 +289,7 @@ function wireMessageContextMenu(feed, handlers) {
   feed.dataset.contextWired = "1";
   wireMsgActionMenu(handlers);
   feed.addEventListener("contextmenu", (e) => {
-    const bubble = e.target.closest(".msg-bubble, .workspace-review, .coord-line");
+    const bubble = e.target.closest(".msg-bubble, .workspace-review, .coord-line, .coord-pack");
     const card = e.target.closest("[data-message-id]");
     if (!bubble || !card || card.classList.contains("msg-pending")) return;
     e.preventDefault();
@@ -423,22 +478,40 @@ function formatQuestionsHtml(body) {
 }
 
 /** play 期助手终稿（含已验收的用户展示）用呈现壳渲染 */
+function isPlayHousekeepingMessage(msg) {
+  const title = String(msg.title ?? "");
+  const text = String(msg.text ?? msg.body ?? "").trim();
+  if (title === "上下文已压缩" || title === "阶段机") return true;
+  if (/^\[上下文已压缩\]/.test(text)) return true;
+  if (/^\[裁决合并\]/.test(text)) return true;
+  if (/^\[旁观维护\]/.test(text)) return true;
+  if (/归档\s*\d+\s*个过程 tag/.test(text)) return true;
+  return false;
+}
+
 function shouldRenderPlayPresent(msg, view) {
-  if (view?.lifecycleStage !== "play") return false;
+  if (!isPlayView(view)) return false;
   if (msg.role === "user") return false;
   const kind = msg.kind ?? "";
   if (kind === "worker_questions" || kind === "orchestrator_thinking") return false;
-  if (kind === "worker_output") return false; // 已走 formatArtifactBodyHtml
+  if (isPlayHousekeepingMessage(msg)) return false;
   const actor = String(msg.actor ?? "");
-  if (actor === "narrator" || /用户展示|开场白/.test(String(msg.title ?? ""))) {
-    return true;
-  }
-  // 助手可见终稿：无特殊 kind 的长文
-  return kind === "system_info" || kind === "worker_stub" || !kind;
+  const title = String(msg.title ?? "");
+  return actor === "narrator" || actor === "round-present" || /用户展示|开场白/.test(title);
+}
+
+function isPlayFinalReply(msg, view) {
+  if (!isPlayView(view) || msg.role === "user") return false;
+  return shouldRenderPlayPresent(msg, view);
+}
+
+function isPlayProcessMessage(msg, view) {
+  if (!isPlayView(view) || msg.role === "user") return false;
+  return !isPlayFinalReply(msg, view);
 }
 
 function formatPlayPresentHtml(body, view) {
-  const trimmed = (body || "").trim();
+  const trimmed = stripPresentSourceFences((body || "").trim());
   if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
   const tweaks = view?.presentationTweaks;
   const fallbackShell =
@@ -562,7 +635,7 @@ function wireRailChrome() {
 
 function hasStartedCreation(view) {
   if (!view?.id) return false;
-  if (view.lifecycleStage === "play") return true;
+  if (isPlayView(view)) return true;
   if (hasUserMessages(view)) return true;
   const reason = view.waitingReason?.kind;
   if (reason && reason !== "intake") return true;
@@ -626,6 +699,7 @@ function shouldShowInFeed(msg, view) {
   if (HIDE_KINDS.has(kind)) return false;
   if (FEED_HIDDEN_KINDS.has(kind)) return false;
   if (msg.compressed) return false;
+  if (isPlayView(view) && isPlayHousekeepingMessage(msg)) return false;
   if (isSkillSelectionMessage(msg)) return false;
   if (isReviewSidecarQuestionStub(msg)) return false;
   if (
@@ -635,11 +709,11 @@ function shouldShowInFeed(msg, view) {
   ) {
     return false;
   }
-  if (kind === "worker_output" && view.waitingReason?.kind === "review_artifact") {
+  if (kind === "worker_output" && view.waitingReason?.kind === "review_artifact" && !isPlayView(view)) {
     return false;
   }
-  // 创作：编排器思考进「调度」，不占主区；游玩保持原样
-  if (kind === "orchestrator_thinking" && view.lifecycleStage !== "play") {
+  // 创作：编排器思考进「调度」，不占主区；游玩保持原样（默认折叠）
+  if (kind === "orchestrator_thinking" && !isPlayView(view)) {
     return false;
   }
   if (kind === "orchestrator_prompt") return false;
@@ -661,10 +735,10 @@ function maybeSyncRail(view) {
 }
 
 export function renderLifecycle(view) {
-  const toggle = document.getElementById("lifecycle-toggle");
-  if (!toggle) return;
   const stage = view.lifecycleStage ?? "design";
   document.body.dataset.lifecycle = stage;
+  const toggle = document.getElementById("lifecycle-toggle");
+  if (!toggle) return;
   toggle.querySelectorAll("[data-stage]").forEach((btn) => {
     const s = btn.getAttribute("data-stage");
     btn.classList.toggle("active", s === stage);
@@ -1541,7 +1615,7 @@ function renderKnownArtifactHtml(doc, opts = {}) {
   if (schema === "context-fragment.v1" || isContextFragmentLike(doc)) {
     return renderContextFragmentHtml(doc, opts);
   }
-  if (schema === "context-order.v1" || Array.isArray(doc.slots)) {
+  if (schema === "context-order.v1" || Array.isArray(doc.slots) || Array.isArray(doc.agents)) {
     const orderHtml = renderContextOrderHtml(doc);
     if (orderHtml) return orderHtml;
   }
@@ -1666,6 +1740,105 @@ function renderContextFragmentHtml(doc, opts = {}) {
   return `<div class="artifact-friendly artifact-context-fragment">${parts.join("")}</div>`;
 }
 
+/** 开场白终节点：1～多条候选用呈现壳展示，选定后由程序落库 */
+function collectOpeningCandidateTexts(body) {
+  const texts = [];
+  const push = (value) => {
+    const text = String(value ?? "").trim();
+    if (text && !texts.includes(text)) texts.push(text);
+  };
+  push(body.开场白全文);
+  if (Array.isArray(body.开场白候选)) {
+    for (const item of body.开场白候选) {
+      if (typeof item === "string") push(item);
+      else if (item && typeof item === "object") {
+        push(item.全文 || item.text || item.开场白 || item.内容);
+      }
+    }
+  }
+  return texts;
+}
+
+function renderOpeningSetupBodyHtml(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const candidates = collectOpeningCandidateTexts(body);
+  if (!candidates.length) return "";
+  const total = candidates.length;
+  const slides = candidates
+    .map((text, i) => {
+      const hidden = i === 0 ? "" : " hidden";
+      const selected = i === 0 ? " is-selected" : "";
+      return `<article class="opening-candidate${selected}" data-opening-index="${i}"${hidden}>${renderPresentShellHtml(
+        presentFromPlain(text, "prose"),
+        esc,
+      )}</article>`;
+    })
+    .join("");
+  const nav =
+    total > 1
+      ? `<div class="opening-picker-nav">
+           <button type="button" class="opening-picker-btn" data-opening-delta="-1">上一版</button>
+           <span class="opening-picker-pos" data-opening-pos>1 / ${total}</span>
+           <button type="button" class="opening-picker-btn" data-opening-delta="1">下一版</button>
+         </div>`
+      : "";
+  const vars = Array.isArray(body.开场变量) ? body.开场变量 : [];
+  const varsHtml = vars.length
+    ? `<section class="artifact-block"><h4>开场变量</h4><ul class="artifact-list">${vars
+        .map((row) => {
+          const name = row?.名 || row?.name || row?.key || "";
+          const val = row?.值 !== undefined ? row.值 : row?.value;
+          const note = row?.依据 || row?.note || "";
+          const noteHtml = note
+            ? ` <span class="muted">（${esc(String(note))}）</span>`
+            : "";
+          return `<li><strong>${esc(String(name))}</strong>：${esc(String(val ?? ""))}${noteHtml}</li>`;
+        })
+        .join("")}</ul></section>`
+    : "";
+  const space = body.用户可行动空间
+    ? `<section class="artifact-block"><h4>可行动空间</h4>${renderProseHtml(
+        body.用户可行动空间,
+      )}</section>`
+    : "";
+  return `<div class="opening-setup-body">
+    <div class="opening-picker" data-opening-picker="1" data-selected="0" data-total="${total}">
+      ${slides}
+      ${nav}
+    </div>
+    ${varsHtml}
+    ${space}
+  </div>`;
+}
+
+function wireOpeningPicker() {
+  document.querySelectorAll("[data-opening-picker]").forEach((root) => {
+    if (root.dataset.wired === "1") return;
+    root.dataset.wired = "1";
+    const total = Math.max(1, Number(root.getAttribute("data-total")) || 1);
+    const show = (index) => {
+      const next = ((index % total) + total) % total;
+      root.setAttribute("data-selected", String(next));
+      root.querySelectorAll("[data-opening-index]").forEach((el) => {
+        const i = Number(el.getAttribute("data-opening-index"));
+        const on = i === next;
+        el.toggleAttribute("hidden", !on);
+        el.classList.toggle("is-selected", on);
+      });
+      const pos = root.querySelector("[data-opening-pos]");
+      if (pos) pos.textContent = `${next + 1} / ${total}`;
+    };
+    root.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-opening-delta]");
+      if (!btn || !root.contains(btn)) return;
+      const delta = Number(btn.getAttribute("data-opening-delta"));
+      if (delta !== 1 && delta !== -1) return;
+      const cur = Number(root.getAttribute("data-selected") || 0);
+      show(cur + delta);
+    });
+  });
+}
+
 /** 按技能分流正文视图；无专用模板则返回 ""（调用方走通用结构化） */
 function renderSpecialtyBodyHtml(body, skill) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
@@ -1701,6 +1874,22 @@ function renderSpecialtyBodyHtml(body, skill) {
     skillName.includes("叙事指南")
   ) {
     const html = renderNarrativeBodyHtml(body);
+    if (html) return html;
+  }
+  if (
+    body.呈现壳 != null ||
+    body.可见块 != null ||
+    (body.示例 != null && (skillName.includes("正文组成") || skillName.includes("回复格式")))
+  ) {
+    const html = renderReplyFormatBodyHtml(body);
+    if (html) return html;
+  }
+  if (
+    body.开场白全文 != null ||
+    body.开场白候选 != null ||
+    skillName.includes("开场白")
+  ) {
+    const html = renderOpeningSetupBodyHtml(body);
     if (html) return html;
   }
 
@@ -1780,6 +1969,101 @@ function renderSpecialtyBodyHtml(body, skill) {
       </aside>
     </div>
   </div>`;
+}
+
+/** 正文组成 · 壳适配 + 示例灌数（present 壳预览，验收美化） */
+function renderReplyFormatBodyHtml(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const shellDoc = body.呈现壳 && typeof body.呈现壳 === "object" ? body.呈现壳 : {};
+  const shellId =
+    typeof shellDoc.shell_id === "string" && PRESENT_SHELL_IDS.includes(shellDoc.shell_id)
+      ? shellDoc.shell_id
+      : typeof shellDoc.shell_id === "string"
+        ? shellDoc.shell_id
+        : "";
+  const tweaks =
+    shellDoc.微调 && typeof shellDoc.微调 === "object" && !Array.isArray(shellDoc.微调)
+      ? shellDoc.微调
+      : {};
+  const example = body.示例 && typeof body.示例 === "object" ? body.示例 : null;
+  const packetRaw = example?.灌数;
+  const presentView =
+    packetRaw && typeof packetRaw === "object"
+      ? parsePresentDoc(
+          {
+            ...packetRaw,
+            shell: packetRaw.shell || packetRaw.shell_id || shellId || "prose",
+          },
+          shellId || "prose",
+        )
+      : null;
+
+  const parts = [];
+  parts.push(`<div class="af-split-banner" role="note">
+    <span><b>本步看壳与美化</b></span>
+    <span>示例非正史 · 文笔不重要</span>
+  </div>`);
+
+  const metaBits = [];
+  if (shellId) {
+    metaBits.push(`<span class="ws-badge ws-badge-continue">壳 ${esc(shellId)}</span>`);
+  }
+  if (shellDoc.为何选它) {
+    metaBits.push(`<span class="ws-muted">${esc(String(shellDoc.为何选它))}</span>`);
+  }
+  if (body.版式隐喻) {
+    metaBits.push(`<span class="ws-muted">隐喻：${esc(String(body.版式隐喻))}</span>`);
+  }
+  if (metaBits.length) {
+    parts.push(`<div class="artifact-chip-row reply-format-shell-meta">${metaBits.join("")}</div>`);
+  }
+
+  if (presentView) {
+    const nature = example?.性质 ? esc(String(example.性质)) : "验收预览｜非正史";
+    const explain = example?.用来说明 ? `<p class="ws-muted">${esc(String(example.用来说明))}</p>` : "";
+    parts.push(`<section class="af-panel af-panel-wide reply-format-preview">
+      <h4>版式预览 <span class="ws-badge">${nature}</span></h4>
+      ${explain}
+      ${renderPresentShellHtml(presentView.packet, esc, { tweaks })}
+    </section>`);
+  } else {
+    parts.push(
+      `<section class="af-panel"><p class="ws-muted">（暂无示例灌数；定稿时应给 present.v1 预览）</p></section>`,
+    );
+  }
+
+  const contractKeys = [
+    "依据的体验与呈现",
+    "呈现壳",
+    "版式隐喻",
+    "可见块",
+    "监控栏锚点",
+    "隐藏段",
+    "前端拆分与美化",
+    "拼装与终稿",
+  ];
+  const used = new Set(["示例"]);
+  for (const key of contractKeys) {
+    if (body[key] == null || body[key] === "") continue;
+    used.add(key);
+    parts.push(
+      `<details class="skill-example reply-format-contract"><summary>${esc(key)}</summary>${renderStructuredValueHtml(
+        body[key],
+        0,
+      )}</details>`,
+    );
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (used.has(k) || v == null || v === "") continue;
+    parts.push(
+      `<details class="skill-example reply-format-contract"><summary>${esc(k)}</summary>${renderStructuredValueHtml(
+        v,
+        0,
+      )}</details>`,
+    );
+  }
+
+  return `<div class="artifact-friendly artifact-reply-format">${parts.join("")}</div>`;
 }
 
 /** 叙事指南 · 一份全文结构化卡（不强调双投影裁剪） */
@@ -2528,7 +2812,10 @@ function renderSelfScoreHtml(自评) {
 
 function renderProbeHtml(追问) {
   if (!追问 || typeof 追问 !== "object") return "";
-  const qs = Array.isArray(追问.题目) ? 追问.题目 : [];
+  const qs = Array.isArray(追问.题目)
+    ? 追问.题目.filter((q) => q && typeof q === "object" && (q.问 || q.prompt))
+    : [];
+  if (!qs.length) return "";
   const cards = [];
   if (追问.导语) {
     cards.push(`<p class="artifact-probe-lead">${esc(String(追问.导语))}</p>`);
@@ -2555,7 +2842,13 @@ function renderProbeHtml(追问) {
 }
 
 function renderContextOrderHtml(doc) {
-  if (!Array.isArray(doc.slots) || !doc.slots.length) return null;
+  const slots =
+    Array.isArray(doc.slots) && doc.slots.length
+      ? doc.slots
+      : Array.isArray(doc.agents)
+        ? doc.agents.filter((a) => a && a.enabled !== false)
+        : [];
+  if (!slots.length) return null;
   const parts = [];
   if (doc.brief) {
     parts.push(
@@ -2564,7 +2857,7 @@ function renderContextOrderHtml(doc) {
   }
   for (const slot of doc.slots) {
     if (!slot || typeof slot !== "object") continue;
-    const title = slot.label || slot.ref || "槽";
+    const title = slot.label || slot.ref || slot.id || "槽";
     const inserts = Array.isArray(slot.inserts) ? slot.inserts : [];
     if (!inserts.length && Array.isArray(slot.order)) {
       // 扁平序：直接是条目列表
@@ -2919,7 +3212,7 @@ function renderCreationFlowView(flowView) {
     return `<div class="review-parse-error" role="alert">
       <div class="review-parse-error-title">流程无法解析</div>
       <p>${esc(flowView.parseError)}</p>
-      <p class="review-parse-error-hint">需要 JSON：steps 数组，每步含 name（与可选 id）、depends_on、可选 params；可含 status=open|closed。</p>
+      <p class="review-parse-error-hint">需要 JSON：steps 数组，每步含 name（与可选 id）、depends_on、可选 params；可含 status=open|closed。回头修改用 mode=revise 与 revises。</p>
     </div>`;
   }
   if (!flowView.steps?.length) return "";
@@ -2943,7 +3236,9 @@ function renderCreationFlowView(flowView) {
           ? s.depends_on.map((d) => esc(d)).join("、")
           : "无";
       const occ =
-        s.occurrence && s.occurrence > 1
+        s.mode === "revise"
+          ? `<span class="flow-occ flow-occ-revise">回头修改</span>`
+          : s.occurrence && s.occurrence > 1
           ? `<span class="flow-occ">第 ${esc(String(s.occurrence))} 次</span>`
           : s.repeatable
             ? `<span class="flow-occ">可反复</span>`
@@ -3068,12 +3363,16 @@ function renderReviewWorkspace(review, opts = {}) {
     asPresentFallback:
       review.workerId === "narrator" ||
       review.workerId === "opening-generator" ||
+      (Array.isArray(review.outputTags) &&
+        review.outputTags.includes("设计.开场白与开场变量")) ||
       /用户展示|开场白/.test(review.body || ""),
   });
   const contextId = review.sourceMessageId || review.id || "";
   const hasContext = review.contextTrace ? "1" : "0";
   const label = displayWorkerLabel(review.workerId) || "产物";
-  const copy = reviewComposerCopy(review.workerId);
+  const copy = reviewComposerCopy(review.workerId, {
+    outputTags: review.outputTags,
+  });
   const sourceMsg =
     opts.sourceMessage ||
     (review.sourceMessageId
@@ -3211,25 +3510,65 @@ export function renderAgentPanel(view, loading) {
   timelineEl.scrollTop = timelineEl.scrollHeight;
 }
 
+function coordOriginalText(msg) {
+  return String(msg?.body ?? msg?.text ?? "").trim();
+}
+
+/** 一轮 = 一次用户输入 + 直到下一次输入前的全部输出。 */
+function groupCoordTurnPacks(messages) {
+  const packs = [];
+  for (const msg of messages) {
+    const isUser = msg.role === "user";
+    const last = packs[packs.length - 1];
+    if (isUser || !last) {
+      packs.push({ user: isUser ? msg : null, outputs: isUser ? [] : [msg] });
+    } else {
+      last.outputs.push(msg);
+    }
+  }
+  return packs;
+}
+
+function packAnchorMessage(pack) {
+  return pack.user || pack.outputs[0] || null;
+}
+
+function packLastMessage(pack) {
+  return pack.outputs[pack.outputs.length - 1] || pack.user || null;
+}
+
 function renderCoordLine(msg, view, opts = {}) {
   const isUser = msg.role === "user";
   const kind = msg.kind ?? (isUser ? "user_input" : "system_info");
   const who = isUser ? "你" : msgLabel(msg);
+  const full = coordOriginalText(msg) || msgBody(msg, view);
   const raw = msgBody(msg, view).replace(/\s+/g, " ").trim();
   const text = raw.length > 320 ? `${raw.slice(0, 320)}…` : raw;
   const nav = renderVariantNavHtml(msg);
+  const inPack = opts.inPack === true;
   const allMessages = view.messages ?? [];
-  const messageIndex = allMessages.findIndex((item) => item.id === msg.id);
-  const rollbackMessageId = messageIndex >= 0 ? allMessages[messageIndex + 1]?.id : null;
+  const rollbackMessageId = inPack ? null : getRollbackMessageId(allMessages, msg.id);
   const rollbackAttr = rollbackMessageId
     ? ` data-rollback-message-id="${esc(rollbackMessageId)}"`
     : "";
   const contextAttr = msg.contextTrace ? ` data-has-context="1"` : "";
   const readOnlyAttr = opts.traceOnly ? ` data-read-only="1"` : "";
+  const originalAttr = full ? ` data-original-text="${escAttr(full)}"` : "";
+  const menu = inPack
+    ? ""
+    : `<button type="button" class="coord-line-menu" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>`;
   const trace = msg.contextTrace;
+  const variantTotal = Math.max(1, Number(msg.branchTotal) || 1);
+  const variantIndex = Math.min(variantTotal, Math.max(1, (msg.branchIndex ?? 0) + 1));
+  const requestBits = [
+    opts.requestIndex ? `请求 ${opts.requestIndex}` : "",
+    variantTotal > 1 ? `${variantIndex}/${variantTotal} 版` : "",
+  ].filter(Boolean);
+  const requestHint = requestBits.length ? requestBits.join(" · ") : "本次请求";
   const traceMeta = trace
-    ? `<button type="button" class="coord-context-trigger" data-context-trigger aria-label="查看 ${esc(who)} 的完整请求上下文">
+    ? `<button type="button" class="coord-context-trigger" data-context-trigger aria-label="查看 ${esc(who)} 的${esc(requestHint)}上下文">
         <span class="coord-context-label">保留上下文</span>
+        <span class="coord-context-request">${esc(requestHint)}</span>
         <span>${trace.messages?.length ?? 0} 段</span>
         <span>${((trace.charCount ?? 0) / 1024).toFixed(1)} KB</span>
       </button>
@@ -3240,12 +3579,71 @@ function renderCoordLine(msg, view, opts = {}) {
       </div>`
     : "";
   const traceClass = trace ? " coord-line--trace" : "";
-  return `<div class="coord-line ${isUser ? "coord-user" : "coord-agent"}${traceClass}" data-message-id="${esc(msg.id)}" data-kind="${esc(kind)}"${rollbackAttr}${contextAttr}${readOnlyAttr}>
-    <button type="button" class="coord-line-menu" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>
+  return `<div class="coord-line ${isUser ? "coord-user" : "coord-agent"}${traceClass}" data-message-id="${esc(msg.id)}" data-kind="${esc(kind)}"${rollbackAttr}${contextAttr}${readOnlyAttr}${originalAttr}>
+    ${menu}
     <div class="coord-who"><span>${esc(who)}</span><span class="coord-kind">${esc(kind)}</span><span class="coord-time">${fmtTime(msg.createdAt)}</span>${nav}</div>
     <div class="coord-text">${esc(text || "（空）")}</div>
     ${traceMeta}
   </div>`;
+}
+
+function renderCoordPack(pack, view, opts = {}) {
+  const anchor = packAnchorMessage(pack);
+  if (!anchor) return "";
+  const last = packLastMessage(pack);
+  const pending = Boolean(pack.user) && pack.outputs.length === 0;
+  const userText = pack.user ? coordOriginalText(pack.user) : "";
+  const allMessages = view.messages ?? [];
+  let rollbackMode = "";
+  let rollbackId = "";
+  if (pack.user) {
+    rollbackMode = "pending-input";
+    rollbackId = pack.user.id;
+  } else if (last) {
+    const nextId = getRollbackMessageId(allMessages, last.id);
+    if (nextId) {
+      rollbackMode = "keep";
+      rollbackId = nextId;
+    }
+  }
+  const inCount = pack.user ? 1 : 0;
+  const outCount = pack.outputs.length;
+  const meta = pending ? "待输入" : `${inCount} 入 · ${outCount} 出`;
+  const rollbackAttr = rollbackId
+    ? ` data-rollback-message-id="${esc(rollbackId)}" data-rollback-mode="${esc(rollbackMode)}"`
+    : "";
+  const restoreAttr =
+    rollbackMode === "pending-input" && userText
+      ? ` data-restore-draft="${escAttr(userText)}"`
+      : "";
+  const originalAttr = userText ? ` data-original-text="${escAttr(userText)}"` : "";
+  const readOnlyAttr = opts.traceOnly ? ` data-read-only="1"` : "";
+  const tracedOutputCount = pack.outputs.filter((msg) => msg.contextTrace).length;
+  let requestIndex = 0;
+  const lines = [
+    pack.user
+      ? renderCoordLine(pack.user, view, {
+          inPack: true,
+          traceOnly: opts.traceOnly || opts.hiddenIds?.has(pack.user.id),
+        })
+      : "",
+    ...pack.outputs.map((msg) => {
+      const thisRequest =
+        tracedOutputCount > 1 && msg.contextTrace ? ++requestIndex : 0;
+      return renderCoordLine(msg, view, {
+        inPack: true,
+        traceOnly: opts.traceOnly || opts.hiddenIds?.has(msg.id),
+        requestIndex: thisRequest || undefined,
+      });
+    }),
+  ].join("");
+  return `<article class="coord-pack${pending ? " coord-pack--pending" : ""}" data-message-id="${esc(anchor.id)}"${rollbackAttr}${restoreAttr}${originalAttr}${readOnlyAttr}>
+    <button type="button" class="coord-line-menu" data-msg-menu-trigger aria-label="打开这一轮的操作菜单" title="更多操作">⋯</button>
+    <header class="coord-pack-head">
+      <span class="coord-pack-meta">${esc(meta)}</span>
+    </header>
+    ${lines}
+  </article>`;
 }
 
 function getRollbackMessageId(messages, messageId) {
@@ -3255,7 +3653,7 @@ function getRollbackMessageId(messages, messageId) {
 
 /** @returns {"speak"|"answer"|"review"|"busy"|null} */
 function resolveDesignSurface(view, loading) {
-  if (view.lifecycleStage === "play") return null;
+  if (isPlayView(view)) return null;
   if (view.phase === "done") return null;
   const busy = Boolean(loading || (view.phase === "running" && !view.waitingReason));
   if (busy) return "busy";
@@ -3300,6 +3698,12 @@ function proposedOutputCopy(proposed) {
     typeof target === "string" || typeof target === "number"
       ? String(target).trim()
       : "";
+  if (proposed?.mode === "revise") {
+    if (targetText) {
+      return `将在既有「${targetText}」的${proposed.name}上继续改，不是从零再生成。`;
+    }
+    return `将在既有「${proposed?.name || "该步"}」上继续改，不是从零再生成。`;
+  }
   if (targetText) {
     return `将生成「${targetText}」的${proposed.name}。`;
   }
@@ -3347,17 +3751,24 @@ function renderSpeakWorkspace(view) {
     hint = "写清楚要改哪里；发送后在现有产物上修改。";
   } else if (wr?.kind === "next_intent") {
     title = "下一步想写什么";
-    hint = "说说接下来想做什么；可留空，发送后会展示下一节点供确认。";
+    hint = "说说接下来想做什么；可留空，也可说回头改某步。发送后会展示下一节点供确认。";
   } else if (wr?.kind === "approve_step") {
     title = view.proposedNextStep?.name
-      ? `接下来生成 · ${view.proposedNextStep.name}`
+      ? view.proposedNextStep.mode === "revise"
+        ? `回头修改 · ${view.proposedNextStep.name}`
+        : `接下来生成 · ${view.proposedNextStep.name}`
       : "确认下一步";
     hint = view.proposedNextStep
       ? proposedOutputCopy(view.proposedNextStep)
       : view.focus?.detail || "确认执行，或在底栏说明意见。";
   } else if (wr?.kind === "input") {
-    title = "继续说";
-    hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
+    if (wr.message && /创作已收口/.test(wr.message)) {
+      title = "创作已收口";
+      hint = wr.message;
+    } else {
+      title = "继续说";
+      hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
+    }
   } else if (view.uiPrompt && !hasUserMessages(view)) {
     title = "描述你想创作什么";
     hint = String(view.uiPrompt).trim().slice(0, 280);
@@ -3400,19 +3811,25 @@ function fillCoordRail(visible, view, handlers) {
     return visibleIds.has(message.id) || Boolean(message.contextTrace);
   });
   const traceCount = history.filter((message) => message.contextTrace).length;
+  const packs = groupCoordTurnPacks(history);
+  const hiddenIds = new Set(
+    history.filter((message) => !visibleIds.has(message.id)).map((message) => message.id),
+  );
   coordRail.hidden = false;
   if (drawerBody) {
-    drawerBody.innerHTML = history.length
-      ? history
-          .map((m) => renderCoordLine(m, view, { traceOnly: !visibleIds.has(m.id) }))
-          .join("")
+    drawerBody.innerHTML = packs.length
+      ? packs.map((pack) => renderCoordPack(pack, view, { hiddenIds })).join("")
       : `<p class="coord-empty">暂无对话摘要</p>`;
     wireMessageFeedActions(drawerBody, handlers);
     wireMessageContextMenu(drawerBody, handlers);
   }
   if (drawerCount) {
-    drawerCount.textContent = history.length ? String(history.length) : "";
-    drawerCount.title = traceCount ? `${traceCount} 条保留了完整请求上下文` : "";
+    drawerCount.textContent = packs.length ? String(packs.length) : "";
+    drawerCount.title = traceCount
+      ? `${packs.length} 轮，其中 ${traceCount} 条保留了完整请求上下文`
+      : packs.length
+        ? `${packs.length} 轮对话`
+        : "";
   }
   syncCoordRailChrome();
 }
@@ -3444,6 +3861,7 @@ function mountReviewWorkspace(stage, view, handlers, opts = {}) {
     }) + askSlot;
   wireMessageFeedActions(stage, handlers);
   wireMessageContextMenu(stage, handlers);
+  wireOpeningPicker();
   if (opts.mountAskCard) {
     const askHost = document.getElementById("workspace-review-ask");
     if (askHost) ensureQuestionsHostIn(askHost);
@@ -3466,13 +3884,16 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   const surface = resolveDesignSurface(view, loading);
   const designWorkspace = surface != null;
   const reviewingNow =
-    view.waitingReason?.kind === "review_artifact" && Boolean(view.reviewArtifact);
+    !isPlayView(view) &&
+    view.waitingReason?.kind === "review_artifact" &&
+    Boolean(view.reviewArtifact);
 
   document.body.classList.toggle("is-reviewing", reviewingNow);
   document.body.classList.toggle("design-workspace", designWorkspace);
   if (reviewingNow) {
     document.body.dataset.reviewKind = reviewComposerCopy(
       view.reviewArtifact?.workerId,
+      { outputTags: view.reviewArtifact?.outputTags },
     ).kind;
   } else {
     delete document.body.dataset.reviewKind;
@@ -3529,9 +3950,11 @@ export function renderMessageFeed(view, loading, handlers = {}) {
           <header class="workspace-pending-head">
             <span class="msg-tag">${esc(label)}</span>
             <span class="msg-live-indicator">流式输出中</span>
+            ${renderRetryRunButton()}
           </header>
           <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
         </div>`;
+      wireRetryRun(stage, handlers);
       return;
     }
 
@@ -3565,8 +3988,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   if (!visible.length && !loading) {
     const p = document.createElement("p");
     p.className = "empty";
-    if (view.lifecycleStage === "play") {
-      p.textContent = "游玩模式：Agent 将按 Worker 集调度，推进世界与叙事。";
+    if (isPlayView(view)) {
+      p.textContent = "开场已就绪。在下方说你要做什么。";
     } else if (view.uiPrompt) {
       const recipeLine = view.selectedRecipe?.name
         ? `\n\n已选配方：${view.selectedRecipe.name}`
@@ -3621,31 +4044,48 @@ export function renderMessageFeed(view, loading, handlers = {}) {
 
     const questionsActive = kind === "worker_questions" && Boolean(activeQuestions);
     const showThinking =
-      !isUser && msg.thinking && view.lifecycleStage === "play";
-    const bodyHtml = questionsActive
+      !isUser && msg.thinking && isPlayView(view);
+    const innerBody = questionsActive
       ? `<p class="msg-q-index">${esc(body)}</p>`
       : kind === "worker_questions"
         ? formatQuestionsHtml(body)
-        : kind === "worker_output"
-          ? formatArtifactBodyHtml(body)
-          : shouldRenderPlayPresent(msg, view)
-            ? formatPlayPresentHtml(body, view)
+        : shouldRenderPlayPresent(msg, view)
+          ? formatPlayPresentHtml(body, view)
+          : kind === "worker_output"
+            ? formatArtifactBodyHtml(body)
             : esc(body);
 
-    card.innerHTML = `
-      <div class="msg-bubble${questionsActive ? " msg-bubble-index" : ""}">
-        ${isUser ? "" : `<header class="msg-head">${headInner}${menuTrigger}</header>`}
-        ${showThinking ? renderThinkingBlock(msg.thinking) : ""}
-        <div class="msg-body">${bodyHtml}</div>
-        ${isUser ? `<footer class="msg-foot">${headInner}${menuTrigger}</footer>` : ""}
-      </div>`;
+    const process = !isUser && isPlayProcessMessage(msg, view);
+    const playFinal = !isUser && isPlayFinalReply(msg, view);
+    if (process) {
+      card.classList.add("msg-play-process-row");
+      card.innerHTML = `
+        <details class="msg-play-process">
+          <summary>
+            <span class="msg-tag">${esc(label)}</span>
+            ${showSubtitle ? `<span class="msg-subtitle">${esc(subtitle)}</span>` : ""}
+            <span class="msg-time">${fmtTime(msg.createdAt)}</span>
+          </summary>
+          ${showThinking ? renderThinkingBlock(msg.thinking) : ""}
+          <div class="msg-body">${innerBody}</div>
+        </details>`;
+    } else {
+      if (playFinal) card.classList.add("msg-play-final");
+      card.innerHTML = `
+        <div class="msg-bubble${questionsActive ? " msg-bubble-index" : ""}">
+          ${isUser ? "" : `<header class="msg-head">${headInner}${menuTrigger}</header>`}
+          ${showThinking ? renderThinkingBlock(msg.thinking) : ""}
+          <div class="msg-body">${innerBody}</div>
+          ${isUser ? `<footer class="msg-foot">${headInner}${menuTrigger}</footer>` : ""}
+        </div>`;
+    }
     feed.appendChild(card);
   }
 
   wireMessageFeedActions(feed, handlers);
   wireMessageContextMenu(feed, handlers);
 
-  if (reviewingNow && view.reviewArtifact && !loading && stage) {
+  if (reviewingNow && view.reviewArtifact && !loading && stage && !isPlayView(view)) {
     const hasHungAsk = Boolean(activeQuestions?.questions?.length);
     mountReviewWorkspace(stage, view, handlers, {
       hideAskSidecar: hasHungAsk,
@@ -3661,10 +4101,11 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     const label = live?.label ?? view.focus?.action ?? "处理中";
     pending.innerHTML = `
       <div class="msg-bubble">
-        <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span></header>
+        <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
         <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
       </div>`;
     feed.appendChild(pending);
+    wireRetryRun(pending, handlers);
   }
 
   feed.scrollTop = feed.scrollHeight;
@@ -3682,7 +4123,7 @@ export function updateLiveStreamPanel(view) {
   if (labelEl && live?.label) labelEl.textContent = live.label;
   const next = renderLiveStreamBody(live, view);
   const hadThinking = Boolean(body.querySelector(".msg-live-pre"));
-  if (next === "…" && hadThinking) return;
+  if (next.includes("msg-live-empty") && hadThinking) return;
   body.innerHTML = next;
   const pre = body.querySelector(".msg-live-pre:last-of-type");
   if (pre) pre.scrollTop = pre.scrollHeight;

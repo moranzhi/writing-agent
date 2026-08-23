@@ -62,6 +62,7 @@ import {
   CREATION_MODULE_OPENING_STATE_TAG,
   SLOT_CREATION_MODULE_OPENING_STATE,
   loadModuleCatalog,
+  isReviseStep,
   mergeCreationFlowPreservingAccepted,
   nextPendingStep,
   parseCreationFlow,
@@ -71,10 +72,12 @@ import {
   resolveDesignStepBinding,
   shouldSkipModuleOpening,
   isProgressPointerTag,
+  missingRequiredStepParams,
   stepUnitId,
   stringifyCreationFlow,
   stringifyModuleOpeningState,
   type CreationFlowStepParams,
+  type ModuleCatalogEntry,
   type ModuleParamSpec,
 } from "../skills/creation-flow.js";
 import {
@@ -86,6 +89,22 @@ import {
   SLOT_ASKED_QUESTIONS,
 } from "../skills/question-protocol.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
+import {
+  closeCreationFlowRaw,
+  CREATION_SEALED_WAITING_MESSAGE,
+  mergeOpeningTablePatch,
+  OPENING_CURRENT_VARS_TAG,
+  OPENING_INITIAL_VARS_TAG,
+  OPENING_OUTPUT_TAG,
+  OPENING_SETUP_ARTIFACT_TAG,
+  parseOpeningSealPayload,
+  SLOT_CREATION_SEALED_BY_OPENING,
+  SLOT_OPENING_SELECTED_INDEX,
+} from "../skills/opening-seal.js";
+import {
+  readPlayTurnQueue,
+  withPlayTurnQueue,
+} from "../skills/play-turn.js";
 import { debugLog, labelAction, logStateChange, sessionSnap } from "../log.js";
 import {
   executeChance,
@@ -270,6 +289,26 @@ export class PhaseRuntime {
     }
     this.pendingWorkerEffect = null;
     this.lastWorkerRunSnapshot = null;
+  }
+
+  /**
+   * 执行中卡住：有进行中的 worker 则按开跑快照重跑；否则重跑总管。
+   */
+  async retryStuckRun(): Promise<RuntimeSession> {
+    const workerId = this.session.currentWorkerId;
+    const snap = this.lastWorkerRunSnapshot;
+    if (workerId && snap && snap.workerId === workerId) {
+      this.restoreFromCheckpoint(
+        snap.runtimeSession,
+        snap.blackboardItems,
+      );
+      return this.rerunWorker(workerId);
+    }
+    if (this.session.phase === "running" && !this.session.waitingReason) {
+      await this.runMainAgent();
+      return this.session;
+    }
+    throw new Error("当前没有可重试的执行");
   }
 
   /** 重 roll 指定 worker（刷新 Skill 回复） */
@@ -575,15 +614,38 @@ export class PhaseRuntime {
   }
 
   /** 用户接受 pendingArtifact；创作单位验收 vs 终稿验收分流 */
-  async acceptArtifact(artifactId?: string): Promise<RuntimeSession> {
+  async acceptArtifact(
+    artifactId?: string,
+    opts?: { openingIndex?: number },
+  ): Promise<RuntimeSession> {
     const id = artifactId ?? this.session.pendingArtifactId;
     if (!id) throw new Error("当前没有待验收的产物");
     const artifact = this.session.artifacts.find((a) => a.id === id);
+    if (artifact && opts?.openingIndex != null && Number.isFinite(opts.openingIndex)) {
+      this.session = {
+        ...this.session,
+        slots: {
+          ...this.session.slots,
+          [SLOT_OPENING_SELECTED_INDEX]: Math.trunc(opts.openingIndex),
+        },
+      };
+    }
+    const unitAccept = artifact ? isDesignUnitArtifact(artifact) : false;
+    // 细化终稿写「设计.worker集」，不是单位草稿，但仍须记入已验收步骤，
+    // 否则编排器会当成没做完再跑一遍。须在 dispatch 之前写入。
+    const shouldRecordStep = Boolean(
+      artifact && (unitAccept || artifact.workerId === "design-step"),
+    );
+    if (artifact && shouldRecordStep) {
+      const slots = { ...this.session.slots };
+      this.recordCreationUnitAccepted(slots, artifact);
+      this.session = { ...this.session, slots };
+    }
+
     await this.dispatch({ type: "user_accepted_artifact", payload: { artifactId: id } });
     this.persistInstanceWorkerDeclaration();
 
     if (artifact) {
-      const unitAccept = isDesignUnitArtifact(artifact);
       const result = compressAfterWorkerAccept({
         blackboard: this.blackboard,
         workerId: artifact.workerId,
@@ -598,8 +660,7 @@ export class PhaseRuntime {
         lastCompressedWorkerId: artifact.workerId,
       };
 
-      if (unitAccept) {
-        this.recordCreationUnitAccepted(slots, artifact);
+      if (shouldRecordStep) {
         const unitId = String(slots[SLOT_CREATION_CURRENT_UNIT] ?? "").trim();
         this.onMessage(
           `[创作单位已验收] ${unitId || artifact.workerId}：${
@@ -608,7 +669,8 @@ export class PhaseRuntime {
         );
         slots[SLOT_CREATION_CURRENT_UNIT] = undefined;
         slots[SLOT_CREATION_UNIT_ANCHOR_AT] = undefined;
-      } else {
+      }
+      if (!unitAccept) {
         this.onMessage(
           `[上下文已压缩] ${artifact.workerId}：保留 ${result.finals.map((f) => f.tag).join("、") || "（无终产物）"}；归档 ${result.archivedTags.length} 个过程 tag。下一阶段以定稿为准。`,
         );
@@ -814,6 +876,15 @@ export class PhaseRuntime {
         case "propose_next_creation_step":
           await this.proposeNextCreationStep();
           break;
+        case "seal_creation_opening":
+          this.sealCreationOpening();
+          break;
+        case "run_play_turn":
+          await this.startPlayTurn();
+          break;
+        case "continue_play_turn":
+          await this.continuePlayTurn();
+          break;
       }
     }
   }
@@ -822,6 +893,10 @@ export class PhaseRuntime {
    * 用户填完「下一步想写什么」后：有待执行步则提案并进入确认；否则交总管扩步/收口。
    */
   private async proposeNextCreationStep(): Promise<void> {
+    if (this.session.slots[SLOT_CREATION_SEALED_BY_OPENING]) {
+      this.onMessage(CREATION_SEALED_WAITING_MESSAGE);
+      return;
+    }
     this.syncSlotsToBlackboard(this.session);
     const flow = parseCreationFlow(
       this.blackboard.getContentByTag(CREATION_FLOW_TAG),
@@ -853,6 +928,9 @@ export class PhaseRuntime {
     const active = this.getActiveSkill();
     let paramSpecs: ModuleParamSpec[] = [];
     let declaration = "";
+    let auto = false;
+    let kind: ModuleCatalogEntry["kind"];
+    let pendingModule: ModuleCatalogEntry | null = null;
     if (active?.name) {
       try {
         const skill = await loadSkill(active.name);
@@ -861,6 +939,9 @@ export class PhaseRuntime {
           const mod = catalog?.modules.find((m) => m.name === pending.name);
           paramSpecs = mod?.params ?? [];
           declaration = mod?.declaration?.trim() || "";
+          auto = mod?.auto === true;
+          kind = mod?.kind;
+          pendingModule = mod ?? null;
         }
       } catch {
         /* catalog optional */
@@ -870,13 +951,7 @@ export class PhaseRuntime {
     debugLog("step", `提案下一步 ${pending.id}（${pending.name}）`);
 
     const params = pending.params ? { ...pending.params } : {};
-    const paramsMissing = paramSpecs
-      .filter((p) => p.required)
-      .map((p) => p.key)
-      .filter((key) => {
-        const v = params[key];
-        return v == null || (typeof v === "string" && !v.trim());
-      });
+    const paramsMissing = missingRequiredStepParams(pending, pendingModule);
 
     const intent =
       typeof this.session.slots["用户.下一步意向"] === "string"
@@ -890,8 +965,9 @@ export class PhaseRuntime {
         : paramsMissing.length
           ? `；待钉参数：${paramsMissing.join("、")}`
           : "";
+    const revise = isReviseStep(pending);
     const reason = [
-      `下一步：${pending.name}`,
+      revise ? `下一步：回头修改 · ${pending.name}` : `下一步：${pending.name}`,
       declaration ? `—— ${declaration}` : "",
       paramHint,
       intent ? `（你的意向：${intent}）` : "",
@@ -912,6 +988,9 @@ export class PhaseRuntime {
         hint: p.hint,
       })),
       intent: intent || undefined,
+      ...(kind ? { kind } : {}),
+      ...(revise ? { mode: "revise" as const } : {}),
+      ...(pending.revises ? { revises: pending.revises } : {}),
     };
     this.blackboard.write({
       tag: CREATION_PROPOSED_STEP_TAG,
@@ -930,12 +1009,88 @@ export class PhaseRuntime {
       action: "run_worker",
       workerId: "design-step",
       reason,
-      requiresApproval: true,
+      // 程序步（如投影排序）且参数已齐：跳过「同意并开始」，直接执行。
+      requiresApproval: !(auto && paramsMissing.length === 0),
     });
     await this.dispatch({
       type: "main_agent_decision_created",
       payload: { decision },
     });
+  }
+
+  /**
+   * 选定开场白后：把候选落成 输出.开场白 / 初值表，关闭 DAG。
+   */
+  private sealCreationOpening(): void {
+    const selectedRaw = this.session.slots[SLOT_OPENING_SELECTED_INDEX];
+    const selectedIndex =
+      typeof selectedRaw === "number"
+        ? selectedRaw
+        : typeof selectedRaw === "string" && selectedRaw.trim()
+          ? Number(selectedRaw)
+          : 0;
+
+    const fragmentRaw =
+      this.blackboard.getContentByTag(OPENING_SETUP_ARTIFACT_TAG) ?? "";
+    const payload = parseOpeningSealPayload(fragmentRaw, selectedIndex);
+    const existingOpening = this.blackboard.getContentByTag(OPENING_OUTPUT_TAG)?.trim();
+    const openingText = payload?.selectedText?.trim() || existingOpening || "";
+
+    if (openingText) {
+      this.writeWorkerTagContent(OPENING_OUTPUT_TAG, openingText, "opening-setup");
+    }
+
+    if (payload?.variables.length) {
+      const source = "worker:opening-setup";
+      const initialPatch = mergeOpeningTablePatch(
+        this.blackboard.getContentByTag(OPENING_INITIAL_VARS_TAG),
+        payload.variables,
+        source,
+      );
+      if (initialPatch) {
+        this.writeWorkerTagContent(OPENING_INITIAL_VARS_TAG, initialPatch, "opening-setup");
+      }
+      const currentPatch = mergeOpeningTablePatch(
+        this.blackboard.getContentByTag(OPENING_CURRENT_VARS_TAG),
+        payload.variables,
+        source,
+      );
+      if (currentPatch) {
+        this.writeWorkerTagContent(OPENING_CURRENT_VARS_TAG, currentPatch, "opening-setup");
+      }
+    }
+
+    const closed = closeCreationFlowRaw(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (closed) {
+      this.blackboard.write({
+        tag: CREATION_FLOW_TAG,
+        content: closed,
+        source: "runtime",
+      });
+    }
+
+    const n = payload?.candidates.length ?? (openingText ? 1 : 0);
+    const which =
+      n > 1 && payload
+        ? `第 ${payload.selectedIndex + 1}/${n} 条`
+        : n
+          ? "开场白"
+          : "开场";
+    this.onMessage(
+      `[创作收口] 已选定${which}，工作流计划已关闭。可切换到「游玩」。`,
+    );
+
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [SLOT_CREATION_SEALED_BY_OPENING]: true,
+        [CREATION_FLOW_TAG]: closed ?? this.session.slots[CREATION_FLOW_TAG],
+        [OPENING_OUTPUT_TAG]: openingText || this.session.slots[OPENING_OUTPUT_TAG],
+      },
+    };
   }
 
   private applyProposedStepParams(params: CreationFlowStepParams): void {
@@ -947,6 +1102,7 @@ export class PhaseRuntime {
     if (!raw?.trim()) return;
     let snap: {
       stepId?: string;
+      kind?: string;
       paramSpecs?: Array<{ key: string; required?: boolean }>;
     };
     try {
@@ -967,13 +1123,16 @@ export class PhaseRuntime {
       content,
       source: "user",
     });
-    const paramsMissing = (snap.paramSpecs ?? [])
-      .filter((p) => p.required)
-      .map((p) => p.key)
-      .filter((key) => {
-        const v = params[key];
-        return v == null || (typeof v === "string" && !v.trim());
-      });
+    const paramsMissing =
+      snap.kind === "prior-artifact"
+        ? []
+        : (snap.paramSpecs ?? [])
+            .filter((p) => p.required)
+            .map((p) => p.key)
+            .filter((key) => {
+              const v = params[key];
+              return v == null || (typeof v === "string" && !v.trim());
+            });
     const snapshot = {
       ...snap,
       params,
@@ -1122,6 +1281,7 @@ export class PhaseRuntime {
     this.onMessage(
       `[Worker] ${workerId} 执行中…${resolved.source === "declaration" ? "（声明驱动）" : ""}`,
     );
+    debugLog("step", `调用模型 ${workerId}`);
     this.onWorkerStreamStart?.(workerId);
 
     try {
@@ -1131,10 +1291,7 @@ export class PhaseRuntime {
         slots,
         blackboard: this.blackboard,
         llm: workerLlm,
-        declared:
-          resolved.source === "declaration"
-            ? { worker: resolved.worker, promptBody: resolved.promptBody }
-            : undefined,
+        declared: { worker: resolved.worker, promptBody: resolved.promptBody },
         stream: {
           onThinkingDelta: (delta) =>
             this.onWorkerThinkingDelta?.(workerId, delta),
@@ -1193,8 +1350,13 @@ export class PhaseRuntime {
     });
     this.session = { ...this.session, artifacts: [...this.session.artifacts, artifact] };
 
+    const hasPlayVisible = Object.keys(result.outputs).some(
+      (t) => t === "输出.用户展示" || t === "输出.开场白",
+    );
     this.onMessage(
-      `[Worker] ${workerId} 已完成\n\n${result.preview}${result.preview.length >= 4000 ? "\n\n…" : ""}`,
+      `[Worker] ${workerId} 已完成\n\n${result.preview}${
+        !hasPlayVisible && result.preview.length >= 4000 ? "\n\n…" : ""
+      }`,
     );
 
     await this.dispatch({
@@ -1907,8 +2069,59 @@ export class PhaseRuntime {
     );
   }
 
+  /** 游玩：按 playWorkerIds 开一轮 */
+  private async startPlayTurn(): Promise<void> {
+    this.syncSlotsToBlackboard(this.session);
+    const ids = this.getInstanceWorkerDeclaration().playWorkerIds;
+    if (!ids.length) {
+      this.onMessage(
+        "[游玩] 运行规格里没有可上场的执行单元，无法推进回合。",
+      );
+      this.waitForPlayInput();
+      return;
+    }
+    const [first, ...rest] = ids;
+    this.session = {
+      ...this.session,
+      slots: withPlayTurnQueue(this.session.slots, rest),
+    };
+    await this.processEffects([{ type: "run_worker", workerId: first }]);
+  }
+
+  /** 游玩：跑管线下一个；队空则等用户 */
+  private async continuePlayTurn(): Promise<void> {
+    if (this.session.phase === "waiting_user") return;
+    const queue = readPlayTurnQueue(this.session.slots);
+    if (!queue.length) {
+      this.waitForPlayInput();
+      return;
+    }
+    const [next, ...rest] = queue;
+    this.session = {
+      ...this.session,
+      slots: withPlayTurnQueue(this.session.slots, rest),
+    };
+    await this.processEffects([{ type: "run_worker", workerId: next }]);
+  }
+
+  private waitForPlayInput(): void {
+    this.session = {
+      ...this.session,
+      phase: "waiting_user",
+      waitingReason: { kind: "input" },
+      currentWorkerId: undefined,
+      pendingArtifactId: undefined,
+      pendingDecision: undefined,
+      resumeContext: undefined,
+      slots: withPlayTurnQueue(this.session.slots, undefined),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   /** invoke_main_agent 副作用：running 时调用总管 LLM，链式推进直到需用户介入 */
   private async maybeRunMainAgent(effects: PhaseEffect[]): Promise<void> {
+    if (inferLifecycleStage(this.session) === "play") return;
+    if (this.session.slots[SLOT_CREATION_SEALED_BY_OPENING]) return;
     if (this.mainAgent && effects.some((e) => e.type === "invoke_main_agent")) {
       await this.runMainAgent();
     }

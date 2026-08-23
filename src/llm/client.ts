@@ -1,6 +1,10 @@
 import type { LlmConfig } from "../config/env.js";
 import type { GenerationParameters } from "../types/preset.js";
 import { consumeOpenAiToolStream } from "./stream-complete.js";
+import {
+  currentAbortSignal,
+  throwIfAborted,
+} from "./run-abort.js";
 
 export type ToolCallPayload = {
   id: string;
@@ -58,6 +62,8 @@ export type CompleteOptions = {
   generation?: GenerationParameters;
   /** 统计用途，如 main_agent / worker:write-rules */
   caller?: string;
+  /** 取消进行中的 LLM 请求（停止并重试） */
+  signal?: AbortSignal;
 };
 
 export type CompleteWithToolsOptions = CompleteOptions & {
@@ -237,6 +243,24 @@ function extractMessageParts(message: Record<string, unknown> | undefined): {
   return { content: "", toolCalls };
 }
 
+async function llmFetch(
+  url: string,
+  apiKey: string,
+  body: unknown,
+  options?: CompleteOptions,
+): Promise<Response> {
+  throwIfAborted(options?.signal);
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: options?.signal ?? currentAbortSignal(),
+  });
+}
+
 export class OpenAiCompatibleProvider implements LlmProvider {
   constructor(private readonly config: LlmConfig) {}
 
@@ -245,14 +269,12 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     options?: CompleteOptions,
   ): Promise<CompleteResult> {
     const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(buildRequestBody(this.config, messages, options)),
-    });
+    const response = await llmFetch(
+      url,
+      this.config.apiKey,
+      buildRequestBody(this.config, messages, options),
+      options,
+    );
 
     if (!response.ok) {
       const body = await response.text();
@@ -282,16 +304,12 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     callbacks: StreamCallbacks = {},
   ): Promise<CompleteResult> {
     const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(
-        buildRequestBody(this.config, messages, { ...options, stream: true }),
-      ),
-    });
+    const response = await llmFetch(
+      url,
+      this.config.apiKey,
+      buildRequestBody(this.config, messages, { ...options, stream: true }),
+      options,
+    );
 
     if (!response.ok) {
       const body = await response.text();
@@ -319,19 +337,15 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     options: CompleteWithToolsOptions,
   ): Promise<CompleteWithToolsResult> {
     const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(
-        buildRequestBody(this.config, messages, {
-          ...options,
-          tools: options.tools,
-        }),
-      ),
-    });
+    const response = await llmFetch(
+      url,
+      this.config.apiKey,
+      buildRequestBody(this.config, messages, {
+        ...options,
+        tools: options.tools,
+      }),
+      options,
+    );
 
     if (!response.ok) {
       const body = await response.text();
@@ -362,20 +376,16 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     callbacks: StreamCallbacks,
   ): Promise<CompleteWithToolsResult> {
     const url = `${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify(
-        buildRequestBody(this.config, messages, {
-          ...options,
-          tools: options.tools,
-          stream: true,
-        }),
-      ),
-    });
+    const response = await llmFetch(
+      url,
+      this.config.apiKey,
+      buildRequestBody(this.config, messages, {
+        ...options,
+        tools: options.tools,
+        stream: true,
+      }),
+      options,
+    );
 
     if (!response.ok) {
       const body = await response.text();
@@ -425,6 +435,7 @@ export class MockLlmProvider implements LlmProvider {
     _messages: ChatMessage[],
     options?: CompleteOptions,
   ): Promise<CompleteResult> {
+    throwIfAborted(options?.signal);
     const step = this.nextStep();
     const response =
       typeof step === "string"
@@ -448,6 +459,7 @@ export class MockLlmProvider implements LlmProvider {
     options?: CompleteOptions,
     callbacks: StreamCallbacks = {},
   ): Promise<CompleteResult> {
+    throwIfAborted(options?.signal);
     const step = this.nextStep();
     const response =
       typeof step === "string"
@@ -455,10 +467,12 @@ export class MockLlmProvider implements LlmProvider {
         : (step.content ?? JSON.stringify({ action: "ask_user", reason: "mock" }));
     const reasoning = "用户需要明确分工 → 调用 design-intake 产出 worker 集。";
     for (const ch of reasoning) {
+      throwIfAborted(options?.signal);
       callbacks.onReasoningDelta?.(ch);
       await new Promise((r) => setTimeout(r, 0));
     }
     for (const ch of response) {
+      throwIfAborted(options?.signal);
       callbacks.onContentDelta?.(ch);
       await new Promise((r) => setTimeout(r, 0));
     }
@@ -480,6 +494,7 @@ export class MockLlmProvider implements LlmProvider {
     _messages: ChatMessage[],
     _options: CompleteWithToolsOptions,
   ): Promise<CompleteWithToolsResult> {
+    throwIfAborted(_options?.signal);
     const step = this.nextStep();
     if (typeof step === "string") {
       return {
@@ -507,9 +522,11 @@ export class MockLlmProvider implements LlmProvider {
     _options: CompleteWithToolsOptions,
     callbacks: StreamCallbacks,
   ): Promise<CompleteWithToolsResult> {
+    throwIfAborted(_options?.signal);
     const reasoning =
       "用户需要明确 Worker 分工 → 先读取黑板与 worker 列表 → 调用 design-intake 产出 worker 集。";
     for (const ch of reasoning) {
+      throwIfAborted(_options?.signal);
       callbacks.onReasoningDelta?.(ch);
       await new Promise((r) => setTimeout(r, 0));
     }

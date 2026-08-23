@@ -57,7 +57,7 @@
 生成规则正文：必要性判断 + `rules[]`（生成与描写 + **单层**产物格式 + 可选多池绑顶层字段）；自评＝必要性/属性妥当/格式准确。  
 美学纲领自评仍为：交互范式 / 美学纲领 / 整体协调（勿与生成规则三维混用）。  
 叙事指南与故事推进正文：一份全文（纲领/遣词/笔墨/禁忌/推进等）；**整份**双挂转述与主世界层，不为省 token 拆两套投影。artifact=`设计.叙事指南与故事推进`。  
-正文组成：**基于固定呈现壳适配微调**（选 `shell_id` + 微调轴；块只挂壳已有区域）；artifact=`设计.正文组成`。见 `docs/play-presentation-shells.md`。
+正文组成：**基于固定呈现壳适配微调**（选 `shell_id` + 微调轴；块只挂壳已有区域）；正文含 **`示例`**（`present.v1` 灌数，验收壳与美化；非正史，文笔不重要）；artifact=`设计.正文组成`。见 `docs/play-presentation-shells.md`。
 设计监控栏：只监控会变字段（可含攻略目标/场景交互物）；artifact=`设计.监控栏`（旧称状态栏）。  
 变量设计：真值 + **维护语句** + **Data映射索引**（指向具体实例）+ side_effects。  
 变量控制上下文：各槽视野 + **旁观汇总**；mount 含主世界层与旁观维护。  
@@ -82,8 +82,8 @@ order 4: 用户.最新输入（full）
 ```json
 {
   "schema": "context-order.v1",
-  "brief": "扁平投影序",
-  "play_slots": { "gm": true, "narrator": true, "perspective": false },
+  "brief": "先名册再分配：旁观 + 主世界层 + 转述",
+  "play_slots": { "auditor": true, "gm": true, "narrator": true, "perspective": false },
   "slots": [
     {
       "ref": "world-simulator",
@@ -98,6 +98,8 @@ order 4: 用户.最新输入（full）
   ]
 }
 ```
+
+创作期 LLM 也可先写 `agents[]`（`id` 为 `auditor` / `gm` / `narrator` / `perspective` / `chance`，含 `enabled` / `when` / `inserts`）；程序会收成上表的 `slots` + `play_slots`。运行时仍读 `slots[].ref`（worker ref）。
 
 | 字段 | 说明 |
 |------|------|

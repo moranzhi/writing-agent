@@ -30,6 +30,12 @@ import {
   isModuleOpeningQuestions,
   normalizeQuestions,
 } from "../skills/question-protocol.js";
+import {
+  CREATION_SEALED_WAITING_MESSAGE,
+  SLOT_CREATION_SEALED_BY_OPENING,
+  isOpeningSealArtifact,
+} from "../skills/opening-seal.js";
+import { inferLifecycleStage } from "../skills/worker-declaration.js";
 import type { QuestionItem } from "../types/questions.js";
 
 function nowIso(): string {
@@ -81,7 +87,45 @@ function mergeSlotText(
   const trimmed = text.trim();
   if (!trimmed) return;
   const prev = String(slots[key] ?? "").trim();
-  slots[key] = prev ? `${prev}\n\n${trimmed}` : trimmed;
+  if (!prev) {
+    slots[key] = trimmed;
+    return;
+  }
+  if (
+    prev === trimmed ||
+    prev.includes(`\n\n${trimmed}`) ||
+    prev.startsWith(`${trimmed}\n\n`)
+  ) {
+    return;
+  }
+  slots[key] = `${prev}\n\n${trimmed}`;
+}
+
+/** 同一步内多次「按意见修改」叠意见；较新的写在后面 */
+function accumulateRevisionInstruction(prev: unknown, next: string): string {
+  const trimmed = next.trim();
+  const old = typeof prev === "string" ? prev.trim() : "";
+  if (!old || old === trimmed) return trimmed;
+  if (old.includes(trimmed)) return old;
+  return `${old}\n\n——\n\n${trimmed}`;
+}
+
+/** 验收后把本步意见并入「用户.需求」按时间保留，再清掉本步槽位以免下一步误进修订 */
+function archiveStepNotesIntoDemand(slots: Record<string, unknown>): void {
+  const reply =
+    typeof slots["用户.worker答复"] === "string"
+      ? slots["用户.worker答复"].trim()
+      : "";
+  const note =
+    typeof slots["用户.修订说明"] === "string"
+      ? slots["用户.修订说明"].trim()
+      : "";
+  if (reply) mergeSlotText(slots, "用户.需求", reply);
+  if (note) mergeSlotText(slots, "用户.需求", note);
+  delete slots["用户.修订说明"];
+  delete slots.revisionInstruction;
+  delete slots.revisionTargetArtifactId;
+  delete slots["用户.worker答复"];
 }
 
 /** 追加事件到 history 并 touch */
@@ -100,6 +144,30 @@ function waiting(session: RuntimeSession, reason: WaitingReason): RuntimeSession
 /** 进入 running，清除 waitingReason */
 function running(session: RuntimeSession): RuntimeSession {
   return touch({ ...session, phase: "running", waitingReason: undefined });
+}
+
+/** 游玩连跑下一执行单元；创作则交总管 */
+function afterPlayOrMainAgent(
+  session: RuntimeSession,
+  next: RuntimeSession,
+): ApplyEventResult {
+  const cleared = {
+    ...next,
+    pendingArtifactId: undefined,
+    currentWorkerId: undefined,
+    pendingDecision: undefined,
+    resumeContext: undefined,
+  };
+  if (inferLifecycleStage(session) === "play") {
+    return {
+      session: touch(running(cleared)),
+      effects: [{ type: "continue_play_turn" }],
+    };
+  }
+  return {
+    session: touch(running(cleared)),
+    effects: [{ type: "invoke_main_agent" }],
+  };
 }
 
 function findArtifact(
@@ -150,11 +218,14 @@ function beginRevisionRerun(
   artifact: ArtifactRecord,
   instruction: string,
 ): ApplyEventResult {
-  const trimmed = instruction.trim();
+  const trimmed = accumulateRevisionInstruction(
+    session.slots["用户.修订说明"] ?? session.slots.revisionInstruction,
+    instruction,
+  );
   const slots: Record<string, unknown> = {
     ...session.slots,
     "用户.修订说明": trimmed,
-    "用户.最新输入": trimmed,
+    "用户.最新输入": instruction.trim(),
     revisionInstruction: trimmed,
     // 本次重跑的底稿；重跑写不出新版时只许退回这一份
     revisionTargetArtifactId: artifact.id,
@@ -319,7 +390,10 @@ function handleWorkerCompleted(
     return fail(session, `Artifact not found: ${event.payload.artifactId}`);
   }
 
-  const mode = session.acceptanceMode ?? "user_confirmed";
+  const mode =
+    inferLifecycleStage(session) === "play"
+      ? "no_confirmation"
+      : (session.acceptanceMode ?? "user_confirmed");
   let next = appendHistory(session, event);
 
   if (next.slots.revisionTargetArtifactId) {
@@ -346,16 +420,13 @@ function handleWorkerCompleted(
 
   if (mode === "no_confirmation") {
     next = updateArtifact(next, artifact.id, { status: "accepted" });
-    return {
-      session: touch({
-        ...running(next),
-        pendingArtifactId: undefined,
-        currentWorkerId: undefined,
-        pendingDecision: undefined,
-        resumeContext: undefined,
-      }),
-      effects: [{ type: "invoke_main_agent" }],
-    };
+    return afterPlayOrMainAgent(session, {
+      ...next,
+      pendingArtifactId: undefined,
+      currentWorkerId: undefined,
+      pendingDecision: undefined,
+      resumeContext: undefined,
+    });
   }
 
   // programmatic_review
@@ -587,9 +658,8 @@ export function applyEvent(
       if (session.waitingReason?.kind === "worker_questions") {
         slots["用户.worker答复"] = text;
         if (text) slots["用户.最新输入"] = text;
-        if (demandKey && text) {
-          mergeSlotText(slots, demandKey, text);
-        }
+        // 开场/追问答复只进「用户.worker答复」，不追加进「用户.需求」
+        // （否则后续步骤的用户表述会把各步答复叠成一份长转录，修订意见被淹没）
       } else if (session.waitingReason?.kind === "input" && text) {
         const key = demandKey || "用户.需求";
         applyUserTextToSlots(slots, text, key, {
@@ -612,6 +682,28 @@ export function applyEvent(
         return {
           session: touch(running({ ...next, resumeContext: session.resumeContext })),
           effects: [{ type: "resume_worker" }],
+        };
+      }
+
+      if (inferLifecycleStage(session) === "play") {
+        return {
+          session: touch(running({ ...next, resumeContext: undefined })),
+          effects: [{ type: "run_play_turn" }],
+        };
+      }
+
+      if (session.slots[SLOT_CREATION_SEALED_BY_OPENING]) {
+        return {
+          session: waiting(touch({ ...next, resumeContext: undefined }), {
+            kind: "input",
+            message: CREATION_SEALED_WAITING_MESSAGE,
+          }),
+          effects: [
+            {
+              type: "emit_message",
+              message: "创作已收口并保存。请切换到「游玩」开始。",
+            },
+          ],
         };
       }
 
@@ -817,7 +909,10 @@ export function applyEvent(
 
     case "worker_completed": {
       const result = handleWorkerCompleted(session, event);
-      const mode = session.acceptanceMode ?? "user_confirmed";
+      const mode =
+        inferLifecycleStage(session) === "play"
+          ? "no_confirmation"
+          : (session.acceptanceMode ?? "user_confirmed");
       if (mode === "user_confirmed" && result.session.pendingArtifactId) {
         const sidecar = asOptionalSidecarQuestions(event.payload.questions);
         const assessment =
@@ -908,6 +1003,7 @@ export function applyEvent(
         return fail(session, `Artifact not found: ${event.payload.artifactId}`);
       }
       const slots: Record<string, unknown> = { ...session.slots };
+      archiveStepNotesIntoDemand(slots);
       // 仅终稿 tag「设计.worker集」表示完整 Worker 集验收；草稿单位验收不得开 play
       const isFinalSet = artifact.outputTags.some((tag) => tag === "设计.worker集");
       if (isFinalSet) {
@@ -924,24 +1020,29 @@ export function applyEvent(
         pendingDecision: undefined,
         currentWorkerId: undefined,
       };
-      // 创作步验收后：先问下一步意向，再展示下一节点确认开干（勿直接连跑）
-      const gateNextIntent =
-        !isFinalSet &&
-        (artifact.workerId === "design-step" ||
-          artifact.workerId === "design-flow");
-      if (gateNextIntent) {
+      // 开场白终节点：选定后落库、关 DAG，不再问「下一步想写什么」。
+      if (isOpeningSealArtifact(artifact)) {
         return {
           session: waiting(cleared, {
-            kind: "next_intent",
-            afterWorkerId: artifact.workerId,
+            kind: "input",
+            message: CREATION_SEALED_WAITING_MESSAGE,
           }),
-          effects: [
-            {
-              type: "emit_message",
-              message:
-                "这一步已收下。下一步想写什么？可留空，直接发送后看下一节点并确认开干。",
-            },
-          ],
+          effects: [{ type: "seal_creation_opening" }],
+        };
+      }
+      if (inferLifecycleStage(session) === "play") {
+        return afterPlayOrMainAgent(session, cleared);
+      }
+      // 创作步验收后直接提案下一步（有待执行步则确认开干；否则交总管扩步）。
+      // 不再先停在「下一步想写什么」——与「同意并开始」叠成双重确认。
+      // 细化终稿也走提案，而不是 invoke_main_agent（否则容易把刚收下的终稿再跑一遍）。
+      const proposeNext =
+        artifact.workerId === "design-step" ||
+        artifact.workerId === "design-flow";
+      if (proposeNext) {
+        return {
+          session: touch(running(cleared)),
+          effects: [{ type: "propose_next_creation_step" }],
         };
       }
       return {
@@ -1029,7 +1130,10 @@ export function applyEvent(
         session: touch(
           running({ ...next, pendingArtifactId: undefined }),
         ),
-        effects: [{ type: "invoke_main_agent" }],
+        effects:
+          inferLifecycleStage(session) === "play"
+            ? [{ type: "continue_play_turn" }]
+            : [{ type: "invoke_main_agent" }],
       };
     }
 

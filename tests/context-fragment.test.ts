@@ -77,6 +77,24 @@ describe("context-fragment.v1", () => {
     ]);
   });
 
+  it("does not surface empty 追问 导语 as sidecar assessment", () => {
+    const side = extractFragmentAskSidecar({
+      schema: "context-fragment.v1",
+      brief: "返现都市",
+      正文: { 美学纲领: { 体验内核: "被宠" } },
+      自评: {
+        维度: [{ 名: "交互范式", 分数: 9, 说明: "站位已清" }],
+      },
+      追问: {
+        导语: "为贴近你要的质感，还需确认：",
+        题目: [],
+      },
+    });
+    expect(side.questions).toHaveLength(0);
+    expect(side.assessment).toContain("交互范式 9/10");
+    expect(side.assessment).not.toContain("还需确认");
+  });
+
   it("isUsableContextFragment requires non-empty 正文", () => {
     expect(
       isUsableContextFragment({
@@ -123,6 +141,63 @@ describe("context-order.v1", () => {
     expect(segs[1].tags).toEqual(["设计.实现机制"]);
     expect(segs[2].tags).toEqual(["对话.历史"]);
     expect(segs[3].tier).toBe("dynamic");
+  });
+
+  it("accepts agents[] roster and maps gm → world-simulator", () => {
+    const doc = parseContextOrder({
+      schema: "context-order.v1",
+      brief: "旁观+主世界层+转述",
+      agents: [
+        {
+          id: "auditor",
+          label: "表格管理",
+          enabled: true,
+          when: "every_turn",
+          inserts: [
+            { order: 0, ref: "worker.persona", projection: "fixed" },
+            { order: 1, ref: "设计.变量设计与更新规则", projection: "summary" },
+          ],
+        },
+        {
+          id: "gm",
+          enabled: true,
+          inserts: [
+            { order: 0, ref: "worker.persona", projection: "fixed" },
+            { order: 1, ref: "对话.历史", projection: "summary" },
+          ],
+        },
+        { id: "narrator", enabled: true, inserts: [] },
+        { id: "perspective", enabled: false, inserts: [] },
+        { id: "chance", enabled: false, when: "on_demand", inserts: [] },
+      ],
+    })!;
+    expect(doc.play_slots?.auditor).not.toBe(false);
+    expect(doc.play_slots?.gm).toBe(true);
+    expect(doc.play_slots?.perspective).toBe(false);
+    expect(doc.play_slots?.chance).toBe(false);
+    expect(slotOrderForRef(doc, "auditor")?.label).toBe("表格管理");
+    expect(slotOrderForRef(doc, "world-simulator")?.inserts.some((i) => i.ref === "对话.历史")).toBe(
+      true,
+    );
+    expect(slotOrderForRef(doc, "role-decide")).toBeUndefined();
+  });
+
+  it("index projection keeps brief, mount and 稳变 without 正文", () => {
+    const text = projectFragmentContent(
+      JSON.stringify({
+        schema: "context-fragment.v1",
+        技能: "美学纲领与交互范式",
+        brief: "免疫即权力",
+        mount: ["world-simulator", "narrator"],
+        稳变: "stable",
+        正文: { 美学纲领: { 体验内核: "很长不应出现在 index 里的正文" } },
+      }),
+      "index",
+    );
+    expect(text).toContain("免疫即权力");
+    expect(text).toContain("挂载：world-simulator、narrator");
+    expect(text).toContain("稳变：stable");
+    expect(text).not.toContain("很长不应出现在 index 里的正文");
   });
 
   it("reorders flat list and merges into worker set JSON", () => {

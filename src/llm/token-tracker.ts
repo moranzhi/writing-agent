@@ -32,14 +32,21 @@ export type LlmTrackingContext = {
 
 function capturePendingTrace(
   ctx: LlmTrackingContext,
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<{
+    role: string;
+    content?: string | null;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+  }>,
   caller: string | undefined,
   model?: string,
+  generation?: CompleteOptions["generation"],
 ): void {
   ctx.pendingContextTrace = buildContextTrace({
     caller: caller ?? "unknown",
     messages,
     model,
+    generation,
   });
 }
 
@@ -130,7 +137,13 @@ export class TokenTrackingProvider implements LlmProvider {
       async () => {
         const result = await this.inner.complete(messages, options);
         const ctx = this.getContext();
-        capturePendingTrace(ctx, messages, options?.caller, result.model);
+        capturePendingTrace(
+          ctx,
+          messages,
+          options?.caller,
+          result.model,
+          options?.generation,
+        );
         recordUsage(ctx, options?.caller, result.model, result.usage);
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
@@ -168,7 +181,13 @@ export class TokenTrackingProvider implements LlmProvider {
           onContentDelta: callbacks.onContentDelta,
         });
         const ctx = this.getContext();
-        capturePendingTrace(ctx, messages, options?.caller, result.model);
+        capturePendingTrace(
+          ctx,
+          messages,
+          options?.caller,
+          result.model,
+          options?.generation,
+        );
         recordUsage(ctx, options?.caller, result.model, result.usage);
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
@@ -189,7 +208,13 @@ export class TokenTrackingProvider implements LlmProvider {
       async () => {
         const result = await this.inner.completeWithTools(messages, options);
         const ctx = this.getContext();
-        capturePendingTrace(ctx, messages, options.caller, result.model);
+        capturePendingTrace(
+          ctx,
+          messages,
+          options.caller,
+          result.model,
+          options.generation,
+        );
         recordUsage(ctx, options.caller, result.model, result.usage);
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
@@ -224,7 +249,13 @@ export class TokenTrackingProvider implements LlmProvider {
           onContentDelta: callbacks.onContentDelta,
         });
         const ctx = this.getContext();
-        capturePendingTrace(ctx, messages, options.caller, result.model);
+        capturePendingTrace(
+          ctx,
+          messages,
+          options.caller,
+          result.model,
+          options.generation,
+        );
         recordUsage(ctx, options.caller, result.model, result.usage);
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();

@@ -1,3 +1,5 @@
+import type { GenerationParameters } from "./preset.js";
+
 /** 一次 LLM 调用实际发送的上下文（全量，供右键观察） */
 export type LlmContextMessage = {
   role: string;
@@ -12,17 +14,51 @@ export type LlmContextTrace = {
   /** 便于列表展示 */
   charCount: number;
   model?: string;
+  /** 与请求一并送出的生成参数（无则未带） */
+  generation?: GenerationParameters;
 };
+
+/** 把即将写入请求 body.messages 的条目冻成痕迹（含 tool_calls 等附加字段） */
+export function snapshotRequestMessages(
+  messages: Array<{
+    role: string;
+    content?: string | null;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+  }>,
+): LlmContextMessage[] {
+  return messages.map((m) => {
+    const hasExtras = Boolean(m.tool_calls) || Boolean(m.tool_call_id);
+    if (!hasExtras) {
+      return {
+        role: m.role,
+        content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
+      };
+    }
+    return {
+      role: m.role,
+      content: JSON.stringify({
+        role: m.role,
+        content: m.content ?? "",
+        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+      }),
+    };
+  });
+}
 
 export function buildContextTrace(params: {
   caller: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{
+    role: string;
+    content?: string | null;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+  }>;
   model?: string;
+  generation?: GenerationParameters;
 }): LlmContextTrace {
-  const messages = params.messages.map((m) => ({
-    role: m.role,
-    content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
-  }));
+  const messages = snapshotRequestMessages(params.messages);
   const charCount = messages.reduce((n, m) => n + m.content.length, 0);
   return {
     caller: params.caller,
@@ -30,6 +66,9 @@ export function buildContextTrace(params: {
     messages,
     charCount,
     model: params.model,
+    ...(params.generation && Object.keys(params.generation).length
+      ? { generation: params.generation }
+      : {}),
   };
 }
 

@@ -25,7 +25,7 @@ worker-templates/
 ```text
 选导演（recipes）→ design-flow → 验收近期 设计.创作流程（status=open）
   → 反复 design-step（注入 modules/{id}/prompt.md）
-  → 不够则再 design-flow（可追加 repeatable 能力）→ closed
+  → 不够则再 design-flow（可追加 repeatable 新建，或 mode=revise 回头修改）→ closed
   → （可选）opening-generator → 手动进 play
 ```
 
