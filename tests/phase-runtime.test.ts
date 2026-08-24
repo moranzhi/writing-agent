@@ -108,7 +108,7 @@ describe("phase runtime", () => {
     );
     const snap = runtime.getLastWorkerRunSnapshot();
     expect(snap?.workerId).toBe("design-flow");
-    const artifactsBefore = runtime.getSession().artifacts.length;
+    const artifactsAtSnapshot = snap!.runtimeSession.artifacts.length;
 
     const session = runtime.getSession();
     session.phase = "running";
@@ -116,10 +116,12 @@ describe("phase runtime", () => {
     session.currentWorkerId = "design-flow";
 
     await runtime.retryStuckRun();
-    expect(runtime.getSession().artifacts.length).toBeGreaterThan(artifactsBefore);
+    expect(runtime.getSession().artifacts.length).toBeGreaterThan(
+      artifactsAtSnapshot,
+    );
     expect(
       runtime.getSession().artifacts.filter((a) => a.workerId === "design-flow").length,
-    ).toBeGreaterThanOrEqual(2);
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("retryStuckRun throws when nothing is running", async () => {

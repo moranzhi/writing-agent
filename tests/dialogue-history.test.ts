@@ -88,27 +88,29 @@ describe("flat context order", () => {
     const doc = synthesizeContextOrderFromWorkers(
       [
         {
-          ref: "narrator",
-          name: "叙事转述",
+          ref: "world-simulator",
+          name: "主世界层",
           context: {
             static: ["设计.叙事指南"],
-            dynamic: ["运行.本轮.裁决", "用户.最新输入"],
+            dynamic: ["用户.最新输入"],
           },
         },
       ],
       { gm: true, narrator: true, perspective: false },
     )!;
-    expect(doc.slots[0]!.inserts.some((i) => i.ref === "对话.历史")).toBe(true);
+    const gmSlot = doc.slots.find((s) => s.ref === "world-simulator")!;
+    expect(gmSlot.inserts.some((i) => i.ref === "对话.历史")).toBe(true);
 
-    const histIdx = doc.slots[0]!.inserts.findIndex((i) => i.ref === "对话.历史");
+    const histIdx = gmSlot.inserts.findIndex((i) => i.ref === "对话.历史");
     const moved = applyContextOrderEdit(doc, {
       action: "set_anchor",
-      slotRef: "narrator",
-      index: doc.slots[0]!.inserts.length - 1,
+      slotRef: "world-simulator",
+      index: gmSlot.inserts.length - 1,
       anchor: "pre_history",
     });
-    const newHist = moved.slots[0]!.inserts.findIndex((i) => i.ref === "对话.历史");
-    const lastUser = moved.slots[0]!.inserts.findIndex(
+    const movedGm = moved.slots.find((s) => s.ref === "world-simulator")!;
+    const newHist = movedGm.inserts.findIndex((i) => i.ref === "对话.历史");
+    const lastUser = movedGm.inserts.findIndex(
       (i) => i.ref === "用户.最新输入",
     );
     expect(lastUser).toBeLessThan(newHist);
