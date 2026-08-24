@@ -54,7 +54,7 @@ boundary: |
 核心操作：让用户勾选固定槽，写成 `play_slots`（世界模拟）或 `writing_slots`（扩写）。**禁止**新建未在固定列表中的 ref。
 
 固定 ref 白名单：
-- 世界模拟每轮：`auditor`（旁观维护）、`world-simulator`（gm）、`narrator`、`role-decide`（perspective，默认关）
+- 世界模拟每轮：`world-simulator`（gm）、`narrator`、`auditor`（回合末）、`role-decide`（perspective，默认关）
 - 世界模拟按需：`chance`（机遇裁定，默认关；invocation=on_demand）
 - 扩写：`outline`、`chapter-writer`
 - 禁止：`variable-update`、自造 kebab、为世界观/性格再拆槽
@@ -62,7 +62,7 @@ boundary: |
 执行顺序：
 1. 读配方与体验契约，判断路径：世界模拟 vs 写手分段。
 2. 默认世界模拟：`auditor: true, gm: true, narrator: true, perspective: false, chance: false`；
-   调度序 auditor → perspective? → gm → narrator；
+   调度序 gm → perspective? → narrator → auditor；
    仅信息隔离才开 perspective；需要骰子/抽签/比点等真随机时开 chance。
 3. 写手路径：`outline` + `chapter-writer` 默认都开；用户明确只要正文则可关 outline。
 4. 可写简短 `mount_notes`（哪类上游产物挂哪槽），不粘贴长文。

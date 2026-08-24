@@ -36,7 +36,7 @@ feeds: design_only
 ```opening
 按已验收产物的概括，给每个固定执行单元分配上下文顺序（只排序，不改设定、不演游玩）。
 
-名册由程序钉死：旁观维护（表格）/ 主世界层 / 叙事转述 / 可选角色视角 / 按需机遇。
+名册由程序钉死：主世界层 / 叙事转述 / 旁观维护（回合末）/ 可选角色视角 / 按需机遇（已并入主世界层工具）。
 若前面产物够用，直接回复「按已有概括排序」。
 ```
 
@@ -55,7 +55,9 @@ feeds: design_only
 1. 禁止发明白名单外 id（含画图等未入册槽）。
 2. 禁止重写上游长文；只写顺序与投影。
 3. 每轮槽：order 0＝该槽固定人设；其后按「稳→对话.历史→易变」软排。
-4. 主世界层与转述必须含 ref=`对话.历史`（默认 projection=summary）；旁观维护默认不含历史。
+4. 主世界层必须含 ref=`对话.历史`（默认 projection=summary）；转述与旁观维护默认不含历史。
+5. 主世界层应双挂「设计.叙事指南与故事推进」等 mount 到 gm 的块；转述只读裁决+文风/壳。
+6. 旁观维护在回合末：须含「运行.本轮.裁决」与变量合同，不含历史。
 5. 按需槽（机遇）enabled 时 inserts 可空。
 6. 越稳越靠前；本轮输入/真值/裁决通常在历史之后。
 7. 同一内容可挂多槽；chance 不必排进每轮 inserts。
@@ -94,20 +96,6 @@ feeds: design_only
   "brief": "一句话：本局有哪些执行单元、各自上下文怎么排",
   "agents": [
     {
-      "id": "auditor",
-      "label": "旁观维护",
-      "enabled": true,
-      "when": "every_turn",
-      "duty": "查表/补规则，不写正文、不写真相",
-      "inserts": [
-        { "order": 0, "ref": "worker.persona", "projection": "fixed", "note": "人设" },
-        { "order": 1, "ref": "设计.变量设计与更新规则", "projection": "summary" },
-        { "order": 2, "ref": "设计.生成规则", "projection": "summary" },
-        { "order": 3, "ref": "变量.当前", "projection": "fields" },
-        { "order": 4, "ref": "用户.最新输入", "projection": "full" }
-      ]
-    },
-    {
       "id": "gm",
       "label": "主世界层",
       "enabled": true,
@@ -116,9 +104,13 @@ feeds: design_only
       "inserts": [
         { "order": 0, "ref": "worker.persona", "projection": "fixed" },
         { "order": 1, "ref": "设计.舞台骨架", "projection": "summary" },
-        { "order": 2, "ref": "对话.历史", "projection": "summary" },
-        { "order": 3, "ref": "变量.当前", "projection": "fields" },
-        { "order": 4, "ref": "用户.最新输入", "projection": "full" }
+        { "order": 2, "ref": "设计.实现机制", "projection": "summary" },
+        { "order": 3, "ref": "设计.变量设计与更新规则", "projection": "summary" },
+        { "order": 4, "ref": "设计.生成规则", "projection": "summary" },
+        { "order": 5, "ref": "设计.叙事指南与故事推进", "projection": "summary" },
+        { "order": 6, "ref": "对话.历史", "projection": "summary" },
+        { "order": 7, "ref": "变量.当前", "projection": "fields" },
+        { "order": 8, "ref": "用户.最新输入", "projection": "full" }
       ]
     },
     {
@@ -130,8 +122,24 @@ feeds: design_only
       "inserts": [
         { "order": 0, "ref": "worker.persona", "projection": "fixed" },
         { "order": 1, "ref": "设计.叙事指南与故事推进", "projection": "summary" },
-        { "order": 2, "ref": "对话.历史", "projection": "summary" },
+        { "order": 2, "ref": "设计.正文组成", "projection": "summary" },
         { "order": 3, "ref": "运行.本轮.裁决", "projection": "full" }
+      ]
+    },
+    {
+      "id": "auditor",
+      "label": "旁观维护",
+      "enabled": true,
+      "when": "every_turn",
+      "duty": "回合末查表/补规则，不写正文",
+      "inserts": [
+        { "order": 0, "ref": "worker.persona", "projection": "fixed" },
+        { "order": 1, "ref": "设计.变量设计与更新规则", "projection": "summary" },
+        { "order": 2, "ref": "设计.生成规则", "projection": "summary" },
+        { "order": 3, "ref": "设计.变量控制上下文", "projection": "summary" },
+        { "order": 4, "ref": "运行.本轮.裁决", "projection": "full" },
+        { "order": 5, "ref": "变量.当前", "projection": "fields" },
+        { "order": 6, "ref": "用户.最新输入", "projection": "full" }
       ]
     },
     {
@@ -162,7 +170,8 @@ feeds: design_only
 - [ ] 未重写上游长文，只有排序/投影
 - [ ] 未把游玩选项示例当成当前提问
 - [ ] 已启用的每轮槽有 order 0 人设位
-- [ ] 主世界层与转述含「对话.历史」；旁观维护默认无历史
+- [ ] 主世界层含「对话.历史」；转述与旁观维护默认无历史
+- [ ] 旁观维护含「运行.本轮.裁决」；转述含裁决且不含历史
 - [ ] 少变块整体靠前、本轮/真值靠后（软规则）
 - [ ] 与游玩拓扑勾选一致
 ```

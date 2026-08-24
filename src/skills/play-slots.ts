@@ -90,7 +90,7 @@ export const PLAY_SLOT_ORDER: PlaySlotId[] = [
 
 /** 这些槽的默认上下文不注入「对话.历史」长聊 */
 export const PLAY_SLOTS_WITHOUT_DIALOGUE_HISTORY: ReadonlySet<PlaySlotId> =
-  new Set(["auditor"]);
+  new Set(["auditor", "narrator"]);
 
 export function playSlotIdForRef(ref: string): PlaySlotId | undefined {
   const trimmed = ref.trim();

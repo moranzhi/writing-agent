@@ -26,8 +26,8 @@
 | `narrator` | `narrator` | 叙事转述 | 开 |
 | `perspective` | `role-decide` | 角色视角 | 关 |
 
-推荐游玩调度：`auditor → perspective? → gm → narrator`。  
-旁观维护默认**不注入**「对话.历史」；主世界层 / 转述按投影排序表裁剪历史。
+推荐游玩调度：`gm → perspective? → narrator → auditor`。  
+旁观维护与叙事转述默认**不注入**「对话.历史」；主世界层按投影排序表裁剪历史。
 
 ## 3. 上下文片段：`context-fragment.v1`
 

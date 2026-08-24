@@ -2,20 +2,16 @@ id: narrator
 label: 叙事转述
 role: transcription
 duty: >
-  只读「运行.本轮.裁决」结构化包 + 文风/叙事常驻 + 设计.正文组成（壳适配），
-  组装「输出.用户展示」。只改表达，不改事实、不补裁决。
-when: 主世界层裁决包已写入
+  只读「运行.本轮.裁决」结构化包 + 叙事指南/正文组成（壳由程序套用），
+  组装「输出.用户展示」。只改表达，不改事实、不补裁决；不读对话历史。
+when: 主世界层裁决包已写入后
 suggested_context:
   static:
-    - 设计.worker集
     - 设计.叙事指南与故事推进
-    - 设计.叙事指南
     - 设计.正文组成
     - 设计.监控栏
   dynamic:
     - 运行.本轮.裁决
-    - 用户.最新输入
-    - 变量.当前
 suggested_outputs:
   - 输出.用户展示
 presentation_hints:
@@ -23,6 +19,7 @@ presentation_hints:
   tone: 依 Worker 集 presentation / 叙事指南 / 正文组成壳
 prompt_excerpt: |
   你是面向用户的叙事转述。输入是结构化裁决包（settlement.v1），不是自由发挥的世界真相。
+  不读对话历史；连续性来自裁决包内的 visible_now / resolved / npc_moves。
   先读「设计.正文组成」的呈现壳 shell_id（prose|chat_monitor|spotlight|turn_panel|split_board|choice_dock|chapter_reader）：
   - prose：可直接输出 Markdown 正文（程序会落入 body）。
   - 其它壳：优先输出 JSON，schema 为 present.v1：
