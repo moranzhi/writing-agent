@@ -6,7 +6,7 @@
 import type { WorkerAcceptance, WorkerSetEntry } from "./worker-set-parse.js";
 
 export type PlaySlotId = "auditor" | "gm" | "narrator" | "perspective";
-/** 按需槽（不进入 auditor→perspective→gm→narrator 管线） */
+/** 按需槽（不进入 gm→perspective?→narrator→auditor 管线） */
 export type OnDemandSlotId = "chance";
 
 export type PlaySlotsConfig = {
@@ -82,10 +82,10 @@ export const ON_DEMAND_SLOT_META: Record<
 
 /** 推荐回合顺序（启用的槽按此排序；不含按需槽） */
 export const PLAY_SLOT_ORDER: PlaySlotId[] = [
-  "auditor",
-  "perspective",
   "gm",
+  "perspective",
   "narrator",
+  "auditor",
 ];
 
 /** 这些槽的默认上下文不注入「对话.历史」长聊 */
@@ -194,21 +194,21 @@ export function workerEntryForSlot(
     role: id,
     duty: meta.purpose,
     when:
-      id === "auditor"
-        ? "每轮用户输入后、主世界层之前"
+      id === "gm"
+        ? "每轮用户输入后首先上场（主 LLM / 裁决权威）"
         : id === "perspective"
-          ? "强信息隔离且本轮需要该角色独立反应时"
-          : id === "gm"
-            ? "每轮用户输入后（旁观维护与可选视角之后）"
-            : "主世界层裁决包就绪后",
+          ? "强信息隔离且本轮需要该角色独立反应时（主世界层之后）"
+          : id === "narrator"
+            ? "主世界层裁决包就绪后"
+            : "转述完成后；表维护合并进变量.当前，供下一轮主世界层读取",
     rationale:
-      id === "auditor"
-        ? "表与规则补充与主裁决分槽，避免挤占对话历史上下文"
+      id === "gm"
+        ? "等同 SillyTavern 主 LLM：读设定与状态并产出裁决"
         : id === "perspective"
           ? "知密内容不能进主世界层上下文"
-          : id === "gm"
-            ? "裁决与真值变更需要独立推理槽"
-            : "用户可见正文与裁决分离，避免文风与规则互相挤压",
+          : id === "narrator"
+            ? "用户可见正文与裁决分离，避免文风与规则互相挤压"
+            : "表与规则补充延后执行，改表结果作用于下一轮而非本轮重裁",
     acceptance: meta.defaultAcceptance,
     invocation: "turn",
   };

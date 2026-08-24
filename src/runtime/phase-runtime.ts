@@ -154,6 +154,14 @@ import type {
 } from "../types/runtime.js";
 import type { BlackboardItem } from "../types/blackboard.js";
 
+/** 每轮开始前清掉的 transient tag（避免主世界层读到上一轮裁决/旁观包） */
+const PLAY_ROUND_TRANSIENT_TAGS = [
+  SETTLEMENT_TAG,
+  MAINTAIN_TAG,
+  "运行.本轮.机遇",
+  "运行.本轮.变量变更",
+] as const;
+
 export type PhaseRuntimeOptions = {
   presetId?: string;
   flowId?: string;
@@ -2072,6 +2080,7 @@ export class PhaseRuntime {
   /** 游玩：按 playWorkerIds 开一轮 */
   private async startPlayTurn(): Promise<void> {
     this.syncSlotsToBlackboard(this.session);
+    this.clearPlayRoundTransientTags();
     const ids = this.getInstanceWorkerDeclaration().playWorkerIds;
     if (!ids.length) {
       this.onMessage(
@@ -2116,6 +2125,29 @@ export class PhaseRuntime {
       slots: withPlayTurnQueue(this.session.slots, undefined),
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  /** 新回合开始前归档上一轮 transient 产物（表合并结果保留在 变量.当前） */
+  private clearPlayRoundTransientTags(): void {
+    const slots = { ...this.session.slots };
+    const archivedAt = new Date().toISOString();
+    for (const tag of PLAY_ROUND_TRANSIENT_TAGS) {
+      const hadBoard = this.blackboard.getLatestByTag(tag) != null;
+      const hadSlot = tag in slots;
+      if (!hadBoard && !hadSlot) continue;
+      this.blackboard.write({
+        tag,
+        content: "",
+        source: "runtime",
+        metadata: {
+          role: "archived",
+          archivedAt,
+          reason: "play_round_reset",
+        },
+      });
+      delete slots[tag];
+    }
+    this.session = { ...this.session, slots };
   }
 
   /** invoke_main_agent 副作用：running 时调用总管 LLM，链式推进直到需用户介入 */

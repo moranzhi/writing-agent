@@ -41,22 +41,22 @@ describe("play_slots", () => {
     })!;
     expect(slots.auditor).toBe(true);
     expect(refsFromPlaySlots(slots)).toEqual([
-      "auditor",
       "world-simulator",
       "narrator",
+      "auditor",
     ]);
     const workers = expandPlaySlotsToWorkers(slots);
     expect(workers.map((w) => w.ref)).toEqual([
-      "auditor",
       "world-simulator",
       "narrator",
+      "auditor",
     ]);
     expect(workers[0].acceptance).toBe("continue");
-    expect(workers[1].acceptance).toBe("continue");
-    expect(workers[2].acceptance).toBe("review");
+    expect(workers[1].acceptance).toBe("review");
+    expect(workers[2].acceptance).toBe("continue");
   });
 
-  it("orders auditor then perspective before gm", () => {
+  it("orders gm first then perspective before narrator and auditor", () => {
     const slots = parsePlaySlots({
       auditor: true,
       gm: true,
@@ -64,10 +64,10 @@ describe("play_slots", () => {
       perspective: true,
     })!;
     expect(refsFromPlaySlots(slots)).toEqual([
-      "auditor",
-      "role-decide",
       "world-simulator",
+      "role-decide",
       "narrator",
+      "auditor",
     ]);
   });
 
@@ -97,9 +97,9 @@ describe("play_slots", () => {
     expect(parsed?.play_slots?.auditor).toBe(true);
     expect(parsed?.workers).toHaveLength(3);
     expect(deriveRunWorkerScope(parsed)).toEqual([
-      "auditor",
       "world-simulator",
       "narrator",
+      "auditor",
     ]);
   });
 

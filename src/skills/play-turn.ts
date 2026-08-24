@@ -1,5 +1,6 @@
 /**
- * 游玩回合：按运行规格 playWorkerIds 连跑（旁观 → 视角? → 主世界层 → 转述）。
+ * 游玩回合：按运行规格 playWorkerIds 连跑（主世界层 → 视角? → 转述 → 旁观维护）。
+ * 旁观维护在本轮末执行，表变更供下一轮主世界层读取。
  * 与创作总管无关；收口后的输入走这里。
  */
 export const SLOT_PLAY_TURN_QUEUE = "playTurnQueue";
