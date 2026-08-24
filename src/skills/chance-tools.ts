@@ -52,6 +52,19 @@ export type ChanceResult = {
   error?: string;
 };
 
+export const CHANCE_BATCH_SCHEMA = "chance.batch.v1" as const;
+
+export type ChanceBatchRequestItem = ChanceRequest & { id: string };
+
+export type ChanceBatchResultItem = ChanceResult & { id: string };
+
+export type ChanceBatchResult = {
+  schema: typeof CHANCE_BATCH_SCHEMA;
+  ok: boolean;
+  results: ChanceBatchResultItem[];
+  summary: string;
+};
+
 const DICE_RE = /^\s*(\d*)\s*[dD]\s*(\d+)\s*([+-]\s*\d+)?\s*$/;
 
 function randInt(min: number, max: number): number {
@@ -305,7 +318,98 @@ function executePick(req: ChancePickRequest, reason?: string): ChanceResult {
 }
 
 /** 从黑板正文或 workerContext 解析请求 */
+export function parseChanceBatchRequest(
+  raw: unknown,
+): ChanceBatchRequestItem[] | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  const listRaw = row.requests ?? row.batch ?? row.items;
+  if (!Array.isArray(listRaw)) return null;
+  const out: ChanceBatchRequestItem[] = [];
+  for (const item of listRaw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const entry = item as Record<string, unknown>;
+    const id =
+      typeof entry.id === "string"
+        ? entry.id.trim()
+        : typeof entry.name === "string"
+          ? entry.name.trim()
+          : "";
+    if (!id) continue;
+    const { id: _drop, name: _n, ...rest } = entry;
+    const req = parseChanceRequest(rest);
+    if (!req) continue;
+    out.push({ ...req, id });
+  }
+  return out.length ? out : null;
+}
+
+/** 一次性执行多条随机请求；每项必须有稳定 id 供裁决引用 */
+export function executeChanceBatch(
+  items: ChanceBatchRequestItem[],
+): ChanceBatchResult {
+  const results: ChanceBatchResultItem[] = items.map((item) => {
+    const { id, ...req } = item;
+    const result = executeChance(req);
+    return { ...result, id };
+  });
+  const ok = results.every((r) => r.ok);
+  const summary = results.map((r) => `${r.id}: ${r.summary}`).join("；");
+  return {
+    schema: CHANCE_BATCH_SCHEMA,
+    ok,
+    results,
+    summary: ok ? summary : `部分失败：${summary}`,
+  };
+}
+
+/** 从黑板正文或 workerContext 解析请求（单条或批量） */
 export function resolveChanceRequest(params: {
+  workerContext?: Record<string, unknown> | null;
+  blackboardRequestJson?: string | null;
+}): ChanceRequest | null {
+  const batch = resolveChanceBatchRequest(params);
+  if (batch?.length === 1) {
+    const { id: _id, ...single } = batch[0]!;
+    return single;
+  }
+  return resolveChanceSingleRequest(params);
+}
+
+/** 批量解析：workerContext / 黑板 JSON */
+export function resolveChanceBatchRequest(params: {
+  workerContext?: Record<string, unknown> | null;
+  blackboardRequestJson?: string | null;
+}): ChanceBatchRequestItem[] | null {
+  const ctx = params.workerContext;
+  if (ctx && typeof ctx === "object") {
+    const nested = ctx.chance ?? ctx.request ?? ctx;
+    const batch = parseChanceBatchRequest(nested);
+    if (batch) return batch;
+    const single = parseChanceRequest(nested);
+    if (single) {
+      const id =
+        typeof (nested as Record<string, unknown>).id === "string"
+          ? String((nested as Record<string, unknown>).id).trim()
+          : "chance-1";
+      return [{ ...single, id: id || "chance-1" }];
+    }
+  }
+  const raw = params.blackboardRequestJson?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const batch = parseChanceBatchRequest(parsed);
+    if (batch) return batch;
+    const single = parseChanceRequest(parsed);
+    if (single) return [{ ...single, id: "chance-1" }];
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveChanceSingleRequest(params: {
   workerContext?: Record<string, unknown> | null;
   blackboardRequestJson?: string | null;
 }): ChanceRequest | null {

@@ -1,5 +1,5 @@
 import type { Blackboard } from "../blackboard/blackboard.js";
-import type { LlmProvider, StreamCallbacks } from "../llm/client.js";
+import type { LlmProvider, StreamCallbacks, ChatMessage } from "../llm/client.js";
 import { supportsContentStream } from "../llm/stream-complete.js";
 import { loadWorkerSkillWithContext } from "../skills/loader.js";
 import { filterInputsForRolePerspective } from "../skills/worker-llm.js";
@@ -22,6 +22,11 @@ import { assemblePlayWorkerMessages } from "../preset/play-frame.js";
 import { worldInfoPackFromSegments } from "../preset/world-info-pack.js";
 import { PRESENT_TAG } from "../skills/present-packet.js";
 import {
+  gmChanceToolsEnabled,
+  GM_CHANCE_HARNESS_INSTRUCTION,
+} from "../skills/gm-tools.js";
+import { runGmHarness } from "./gm-harness.js";
+import {
   mergeQuestionsPreferFragment,
   normalizeQuestions,
   type QuestionItem,
@@ -38,6 +43,11 @@ import {
   serializeContextOrder,
 } from "../skills/context-order.js";
 
+export type WorkerStreamCallbacks = {
+  onThinkingDelta?: (delta: string) => void;
+  onOutputDelta?: (delta: string) => void;
+};
+
 export type WorkerRunParams = {
   skillName: string;
   workerId: string;
@@ -47,11 +57,6 @@ export type WorkerRunParams = {
   stream?: WorkerStreamCallbacks;
   /** 声明驱动：跳过磁盘 SKILL，直接用解析好的契约 */
   declared?: { worker: ParsedWorkerSkill; promptBody: string };
-};
-
-export type WorkerStreamCallbacks = {
-  onThinkingDelta?: (delta: string) => void;
-  onOutputDelta?: (delta: string) => void;
 };
 
 export type WorkerRunResult = {
@@ -557,7 +562,19 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     inputs[CONTEXT_BRIEF_TAG] = priorBrief;
   }
 
-  const systemContent = promptBody + WORKER_OUTPUT_INSTRUCTION;
+  const useGmHarness =
+    isPlayLayerActive(params.slots) &&
+    worker.id === "world-simulator" &&
+    gmChanceToolsEnabled(
+      parseWorkerSetYaml(
+        params.blackboard.getContentByTag("设计.worker集") ?? "",
+      )?.play_slots,
+    );
+
+  const systemContent =
+    promptBody +
+    WORKER_OUTPUT_INSTRUCTION +
+    (useGmHarness ? GM_CHANCE_HARNESS_INSTRUCTION : "");
   const playPreset = isPlayLayerActive(params.slots)
     ? resolveActivePreset(loadAppSettings().activePresetId)
     : null;
@@ -588,6 +605,19 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
           }),
         },
       ];
+
+  if (useGmHarness) {
+    const systemMsg = messages.find((m) => m.role === "system");
+    const rest = messages.filter((m) => m.role !== "system") as ChatMessage[];
+    const harness = await runGmHarness({
+      llm: params.llm,
+      system: systemMsg?.content ?? systemContent,
+      messages: rest,
+      stream: params.stream,
+      caller: `worker:${worker.id}`,
+    });
+    return parseWorkerResponse(harness.content, worker.outputTags);
+  }
 
   const result = await completeWorkerPreferStream(
     params.llm,

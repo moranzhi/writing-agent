@@ -108,6 +108,8 @@ import {
 import { debugLog, labelAction, logStateChange, sessionSnap } from "../log.js";
 import {
   executeChance,
+  executeChanceBatch,
+  resolveChanceBatchRequest,
   resolveChanceRequest,
 } from "../skills/chance-tools.js";
 import {
@@ -1412,21 +1414,31 @@ export class PhaseRuntime {
     ).session;
 
     const boardRaw = this.blackboard.getContentByTag("运行.机会请求");
-    const request = resolveChanceRequest({
+    const batch = resolveChanceBatchRequest({
       workerContext: effect.workerContext ?? null,
       blackboardRequestJson: boardRaw,
     });
 
-    const result = request
-      ? executeChance(request)
-      : {
-          schema: "chance.v1" as const,
-          op: "roll" as const,
-          ok: false,
-          summary: "机遇失败：缺少请求（workerContext.chance 或 运行.机会请求）",
-          detail: {},
-          error: "missing_request",
-        };
+    const result = batch?.length
+      ? batch.length === 1
+        ? executeChance(batch[0]!)
+        : executeChanceBatch(batch)
+      : (() => {
+          const single = resolveChanceRequest({
+            workerContext: effect.workerContext ?? null,
+            blackboardRequestJson: boardRaw,
+          });
+          if (single) return executeChance(single);
+          return {
+            schema: "chance.v1" as const,
+            op: "roll" as const,
+            ok: false,
+            summary:
+              "机遇失败：缺少请求（workerContext.chance.requests 或 运行.机会请求）",
+            detail: {},
+            error: "missing_request",
+          };
+        })();
 
     const content = JSON.stringify(result, null, 2);
     const written = this.writeWorkerTagContent(

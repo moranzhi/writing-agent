@@ -37,6 +37,7 @@ export type DriverRunInput = {
   maxIterations?: number;
   onThinkingDelta?: (delta: string) => void;
   onThinkingDone?: (text: string) => void;
+  onOutputDelta?: (delta: string) => void;
   handleStep: (
     calls: DriverToolCall[],
   ) => DriverStepOutcome | Promise<DriverStepOutcome>;
@@ -109,6 +110,7 @@ export function createLocalLlmDriver(llm: LlmProvider): AgentDriver {
       ];
       const streamCallbacks: StreamCallbacks = {
         onReasoningDelta: (delta) => input.onThinkingDelta?.(delta),
+        onContentDelta: (delta) => input.onOutputDelta?.(delta),
       };
       const label = input.label ?? "driver";
 

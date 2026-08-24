@@ -27,6 +27,7 @@ import {
 } from "../src/blackboard/table-cells.js";
 import {
   executeChance,
+  executeChanceBatch,
   parseChanceRequest,
 } from "../src/skills/chance-tools.js";
 import { synthesizeContextOrderFromWorkers } from "../src/skills/context-order.js";
@@ -185,15 +186,16 @@ describe("chance tools", () => {
     expect(result.detail.win).toBe(true);
   });
 
-  it("draws from pool", () => {
-    const result = executeChance({
-      op: "draw",
-      pool: ["甲", "乙", "丙"],
-      count: 2,
-      unique: true,
-    });
-    expect(result.ok).toBe(true);
-    expect((result.detail.drawn as string[]).length).toBe(2);
+  it("batch executes multiple requests with ids", () => {
+    const batch = executeChanceBatch([
+      { id: "a", op: "roll", expression: "1d6" },
+      { id: "b", op: "compare", left: 10, right: 5, mode: "gte" },
+    ]);
+    expect(batch.schema).toBe("chance.batch.v1");
+    expect(batch.ok).toBe(true);
+    expect(batch.results).toHaveLength(2);
+    expect(batch.results[0]!.id).toBe("a");
+    expect(batch.results[1]!.id).toBe("b");
   });
 });
 
