@@ -125,7 +125,7 @@
 | `role-decide` | **角色决策** |
 | `world-simulator` | **主世界层**（旧称：世界推演） |
 | `auditor` | **旁观维护**（表/规则检查；默认空操作） |
-| `chance` | **机遇裁定**（按需：骰子/抽签/比点；程序工具） |
+| `chance` | **机遇裁定**（主世界层 harness 批量工具；非每轮独立 LLM） |
 | `round-present` | **回合呈现** |
 
 配方选项展示名示例：`world-simulator`（recipe）→ **世界模拟器**；`expand-assistant` → **扩写助手**。
@@ -143,10 +143,10 @@
 | **旁观维护** | `auditor` | 副 LLM：表/规则检查与按需补充；默认每轮上场、多数轮空操作；不写真相 |
 | **主世界层** | `world-simulator` | 读变量与 Progressive 投影、按规则改真值/交事件；多数世界观与查表归这里 |
 | **叙事转述** | `narrator` | 把裁决写成用户可见正文（若规格拆了呈现） |
-| **机遇裁定** | `chance` | 按需程序工具（掷骰/比点/抽签）；不进每轮管线；结果 tag `运行.本轮.机遇` |
+| **机遇裁定** | `chance` | 主世界层 harness 内批量程序工具（掷骰/比点/抽签）；`play_slots.chance` 为 false 时关闭；结果可写入 `运行.本轮.机遇`；非每轮独立上场 |
 | **角色视角** | `role-decide` | 仅强信息隔离；只出反应建议 |
 
-推荐调度：`auditor → perspective? → gm → narrator`。
+推荐调度：`gm → perspective? → narrator → auditor`。
 
 默认少拆：百科、分档性格、章大纲投影 → 主世界层 + 表副作用，**不要**再拆「世界观执行单元」「性格执行单元」。详见 `docs/progressive-data-design.md` §5。
 

@@ -17,7 +17,7 @@
 | `modules/context-order/prompt.md` | **骨架已写**（`context-order.v1`） |
 | `docs/context-fragment-design.md` | **已写**；范例技能已对齐 `context-fragment.v1` |
 | 程序：片段解析 / 扁平投影序 / `对话.历史` 可投影 | **已落地**（非硬双锚） |
-| `orchestrator.md` | **已改**：play 调度 auditor → perspective? → gm → narrator |
+| `orchestrator.md` | **已改**：play 调度 gm → perspective? → narrator → auditor |
 
 ## 优先级 P1（能力归属 feeds）
 
@@ -56,7 +56,7 @@
 ```json
 // 设计.worker集（世界模拟）
 {
-  "play_slots": { "auditor": true, "gm": true, "narrator": true, "perspective": false },
+  "play_slots": { "auditor": true, "gm": true, "narrator": true, "perspective": false, "chance": false },
   "tables": { "side_effects": [/* 来自变量设计 */] },
   "workers": [/* 可空，由程序按槽展开；或覆盖 context/outputs */]
 }

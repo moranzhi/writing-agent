@@ -198,7 +198,7 @@
 | 记忆 / 长线 / 大纲 / 随机分支 / 人设阶段 | **统一用表**（§5）：维护 + 显隐 + 副作用插换上下文 |
 | 信息差玩法 | 分角 worker；极贵，慎用 |
 | 格式 | 程序拼 |
-| 真随机 / 骰子卡组计算 | 固定按需槽 `chance`（程序工具：roll/compare/draw/pick）→ `运行.本轮.机遇`；`play_slots.chance` 开启后由编排器 run_worker；禁止临时造 LLM「骰子演员」 |
+| 真随机 / 骰子卡组计算 | 主世界层 harness 批量 `chance` 工具（`requests[]`）；`play_slots.chance` 开关；禁止临时造 LLM「骰子演员」；可选保留按需 `chance` worker 供显式 run_worker |
 | 用户不应知道的信息 | 程序固定注入，不进可见区；非 input 整理 worker |
 | 输入协议 | 常驻上下文（`()` 元要求、`""` 对白、无包裹=事实等） |
 

@@ -25,7 +25,7 @@ boundary: |
   细化终稿：按本步勾选展开 workers、合并常驻与 tables。
   变量设计 / 变量控制上下文：真值与投影，不是推理槽。
   旁观维护（auditor）：副 LLM，表/规则检查，默认空操作；无长对话史。
-  机遇裁定（chance）：按需程序工具槽，不进每轮管线。
+  机遇裁定（chance）：`play_slots.chance` 开时主世界层 harness 获批量程序工具；非每轮独立上场。
   叙事指南与故事推进：挂到转述槽（推进可兼挂主世界层）；世界/机制：挂到主世界层——本步只点名槽。
 ```
 
@@ -55,7 +55,7 @@ boundary: |
 
 固定 ref 白名单：
 - 世界模拟每轮：`world-simulator`（gm）、`narrator`、`auditor`（回合末）、`role-decide`（perspective，默认关）
-- 世界模拟按需：`chance`（机遇裁定，默认关；invocation=on_demand）
+- 世界模拟机遇：`play_slots.chance` 控制主世界层 harness 的批量 `chance` 工具（默认 false）；非每轮独立 LLM 槽
 - 扩写：`outline`、`chapter-writer`
 - 禁止：`variable-update`、自造 kebab、为世界观/性格再拆槽
 
@@ -63,7 +63,7 @@ boundary: |
 1. 读配方与体验契约，判断路径：世界模拟 vs 写手分段。
 2. 默认世界模拟：`auditor: true, gm: true, narrator: true, perspective: false, chance: false`；
    调度序 gm → perspective? → narrator → auditor；
-   仅信息隔离才开 perspective；需要骰子/抽签/比点等真随机时开 chance。
+   仅信息隔离才开 perspective；需要骰子/抽签/比点等真随机时设 `chance: true`（主世界层 harness 批量工具，不进每轮序）。
 3. 写手路径：`outline` + `chapter-writer` 默认都开；用户明确只要正文则可关 outline。
 4. 可写简短 `mount_notes`（哪类上游产物挂哪槽），不粘贴长文。
 5. 输出 JSON。summary：`游玩拓扑 · 旁观+gm+转述` 或 `游玩拓扑 · gm+转述+机遇` 等。
@@ -115,7 +115,7 @@ boundary: |
     "生成规则/变量合同/旁观摘要 → auditor（无长对话史）",
     "叙事指南与故事推进 → narrator（推进兼 gm）",
     "世界/机制/变量规则 → gm",
-    "真随机检定 → chance（按需）",
+    "真随机检定 → play_slots.chance=true（gm harness 批量工具，非每轮 chance worker）",
     "真值与 side_effects → 细化终稿 tables"
   ],
   "开放问题": []
@@ -125,7 +125,7 @@ boundary: |
 填写规则：
 - `path=world_sim` 时必须有 `play_slots`；`writing_slots` 可省略。
 - `path=writing` 时必须有 `writing_slots`；`play_slots` 可省略。
-- `auditor` / `chance` 缺省：auditor 视为 true，chance 视为 false；chance 为 true 时不进每轮序，仅可按需调度。
+- `auditor` / `chance` 缺省：auditor 视为 true，chance 视为 false；`chance: true` 时为主世界层开启 harness 机遇工具（仍可声明按需 `chance` ref 供显式 run_worker，但游玩默认不走每轮 chance 演员）。
 - 不要输出自造 `actors[]` / 自由 `workers[]`。
 - 旧产物若含 `actors[]`：本步应改写为槽位勾选，不再追加自定义 ref。
 
@@ -144,7 +144,7 @@ boundary: |
 好：
 - play_slots: auditor+gm+narrator，perspective/chance false；mount_notes 一行。
 - 有凶手真名不能进 GM：perspective true，并说明只出反应建议。
-- 需要检定/抽签：chance true（按需程序工具）。
+- 需要检定/抽签：`chance: true`（gm harness 批量工具）。
 
 坏：
 - actors 里发明 affinity-manager、lore-keeper、dice-master（LLM）。

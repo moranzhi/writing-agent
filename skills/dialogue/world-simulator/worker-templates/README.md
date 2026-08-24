@@ -26,10 +26,10 @@ Runtime 执行时读 Worker 集条目，不直接读本目录。
 | 槽 | 默认 ref | 模板 |
 |----|----------|------|
 | auditor | `auditor` | `auditor.yaml` — maintain.v1；默认空操作；无长对话史 |
-| gm | `world-simulator` | `world-simulator.yaml` — 裁决包 settlement.v1 |
+| gm | `world-simulator` | `world-simulator.yaml` — 裁决包 settlement.v1；`play_slots.chance` 开时 harness 批量机遇工具 |
 | narrator | `narrator` | `narrator.yaml` — 只读裁决包写正文 |
 | perspective | `role-decide` | `role-decide.yaml` — 可选知密视角 |
-| chance（按需） | `chance` | `chance.yaml` — 程序骰子/抽签/比点；不进每轮管线 |
+| chance（拓扑开关） | `chance` | `play_slots.chance` 控制 gm harness；可选声明按需 `chance` ref 供显式 run_worker |
 
 变量 / Progressive：**不是**独立 LLM 模板；见 `docs/progressive-data-design.md`（真值 + side_effects）。  
 Runtime：写入 `运行.本轮.裁决` 时自动合并 `variable_changes` → `变量.当前`；写入 `运行.本轮.旁观` 时按需合并 `table_ops`。
@@ -38,7 +38,7 @@ Runtime：写入 `运行.本轮.裁决` 时自动合并 `variable_changes` → `
 
 | 文件 | 说明 |
 |------|------|
-| `chance.yaml` | 机遇裁定（按需程序工具） |
+| `chance.yaml` | 机遇裁定（按需 run_worker 或 gm harness 共用程序实现） |
 | `round-present.yaml` | 结构化回合陈述（可选） |
 | `opening-generator.yaml` | 开局生成器（创作末尾） |
 | `outline.yaml` / `chapter-writer.yaml` | 扩写路径固定槽 |

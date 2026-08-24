@@ -178,7 +178,7 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 
 | 编排器 | 状态 |
 |------|------|
-| 世界模拟器 | 创作链路已写；**play**：`auditor → perspective? → gm → narrator`；settlement/maintain 合并变量已接 |
+| 世界模拟器 | 创作链路已写；**play**：`gm → perspective? → narrator → auditor`；gm harness 批量 chance；settlement/maintain 合并变量已接 |
 | 扩写助手 | 方法论已写；起点：美学纲领与交互范式；勿默认套世界模拟全套 |
 
 ---

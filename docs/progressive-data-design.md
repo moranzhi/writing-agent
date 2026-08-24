@@ -70,7 +70,7 @@ Progressive 投影              本轮主世界层只看见「当前档」；未
 3. 程序：在边沿或回合结算时抽一条 → 写入 `运行.事件流` 或投影 tag；主世界层只演绎已抽中的条目。  
 4. once / fired：同一事件 id 不重复（除非规则允许）。
 
-（真随机：启用 `play_slots.chance`，由按需执行单元 `chance` 程序掷骰/抽签/比点，结果在 `运行.本轮.机遇`；主世界层只演绎已出的结果。事件池权重抽签也可走 chance.pick。）
+（真随机：主世界层 harness 内调用批量 `chance` 工具（`requests[]` 一次交齐）；由 `play_slots.chance` 开关（默认 false 关闭；规格未写 `play_slots` 时 harness 默认开启）。结果可落 `运行.本轮.机遇`；主世界层只演绎已出的结果。旁观 `need_generate` 走程序抽样 → `运行.本轮.旁观.生成抽样`。事件池权重抽签也可走 chance.pick。）
 
 ## 4. 哪些需要变量（判定）
 
@@ -94,10 +94,10 @@ Progressive 投影              本轮主世界层只看见「当前档」；未
 
 ```text
 用户输入
-  → 主世界层（世界推演）：读变量 + 已投影 data，交事件/改真值（按规则）
-  →（可选）叙事转述：把裁决写成用户可见正文
-  → 旁观维护（副 LLM）：合同+表+本轮裁决；默认空操作（maintain.v1）
+  → 主世界层（世界推演）：读变量 + 已投影 data，交事件/改真值（按规则）；可经 harness 批量调 chance 工具
   →（可选）角色视角：强信息隔离时出反应建议（默认关，插在主世界层之后）
+  →（可选）叙事转述：把裁决写成用户可见正文
+  → 旁观维护（副 LLM）：合同+表+本轮裁决；默认空操作（maintain.v1）；改表供下一轮主世界层读取
 ```
 
 | 内容 | 给谁 | 不要做成 |
@@ -111,7 +111,7 @@ Progressive 投影              本轮主世界层只看见「当前档」；未
 
 用户可见名：`ui-glossary.md`（主世界层、旁观维护、叙事转述…）。作者文档可称 **主世界层 / 旁观维护**，与酒馆「主 GM + auditor」同构；**不要**对用户改称整套系统为「GM 框架」而废弃「执行单元」。
 
-**维护路径（不是 chance toolcall）**：主世界层输出 settlement.v1 → Runtime 合并 `variable_changes` 进 `变量.当前` → `side_effects` 换投影；旁观维护输出 maintain.v1 → Runtime 按需合并 `table_ops`；chance 只负责骰子/抽签。
+**维护路径（不是 gm 的 chance toolcall）**：主世界层输出 settlement.v1 → Runtime 合并 `variable_changes` 进 `变量.当前` → `side_effects` 换投影；旁观维护输出 maintain.v1 → Runtime 按需合并 `table_ops` / `need_generate` 程序抽样。gm harness 的 `chance` 只负责本回合裁决前的骰子/抽签。
 
 ## 6. 世界模拟器技能落点
 

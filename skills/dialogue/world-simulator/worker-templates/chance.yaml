@@ -2,8 +2,8 @@ id: chance
 label: 机遇裁定
 role: chance
 duty: >
-  按需程序工具：掷骰、点数比拼、抽签/加权抽取。不进每轮管线；由编排器
-  run_worker（workerContext.chance 或黑板 运行.机会请求）调用。禁止模型编造随机。
+  程序随机工具：掷骰、点数比拼、抽签/加权抽取。游玩期默认经主世界层 harness 批量调用
+  （play_slots.chance）；也可由编排器 run_worker 显式调度本 ref。禁止模型编造随机。
 when: 需要真随机或可复核比点时
 suggested_context:
   static:

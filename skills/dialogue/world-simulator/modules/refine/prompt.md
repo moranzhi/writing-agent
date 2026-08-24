@@ -58,8 +58,8 @@ boundary: |
 执行顺序：
 1. 复述站位、体验内核、禁忌；矛盾处 askUser 1 点。
 2. 写入 `play_slots`（世界模拟）或等价写手槽；**workers 只含白名单 ref**：
-   - world_sim 每轮：auditor / world-simulator / narrator / role-decide（仅 perspective 开时）
-   - world_sim 按需：chance（仅 chance 开时；`invocation: on_demand`）
+   - world_sim 每轮（顺序）：world-simulator（gm）→ role-decide（仅 perspective 开）→ narrator → auditor
+   - world_sim 机遇：`play_slots.chance` 开时 gm harness 获批量工具；可另声明 `chance` ref（`invocation: on_demand`）供显式调度
    - writing：outline / chapter-writer
    - 程序也会按 play_slots 展开；你仍应写出与槽一致的 workers[]（含 acceptance），便于人读验收。
 3. **禁止**自造 ref、禁止添加 variable-update / lore-keeper / 自造骰子 LLM 等。
