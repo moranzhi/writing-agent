@@ -141,6 +141,10 @@ import {
   parseMaintainPacket,
 } from "../skills/maintain-packet.js";
 import {
+  MAINTAIN_GENERATE_TAG,
+  runMaintainNeedGenerateSampling,
+} from "../skills/maintain-need-generate.js";
+import {
   mountResidentContextForWorker as writeResidentContextTags,
   parseResidentContext,
 } from "../skills/resident-context.js";
@@ -160,6 +164,7 @@ import type { BlackboardItem } from "../types/blackboard.js";
 const PLAY_ROUND_TRANSIENT_TAGS = [
   SETTLEMENT_TAG,
   MAINTAIN_TAG,
+  MAINTAIN_GENERATE_TAG,
   "运行.本轮.机遇",
   "运行.本轮.变量变更",
 ] as const;
@@ -1633,7 +1638,12 @@ export class PhaseRuntime {
   private applyMaintainTableOps(maintainRaw: string, workerId: string): void {
     const view = parseMaintainPacket(maintainRaw);
     const ops = view.packet?.table_ops;
-    if (!view.ok || !ops?.length) return;
+    if (!view.ok || !ops?.length) {
+      if (view.ok && view.packet?.need_generate) {
+        this.applyMaintainNeedGenerateSampling(view.packet.need_generate, workerId);
+      }
+      return;
+    }
     const current = parseTableDoc(
       this.blackboard.getContentByTag("变量.当前"),
     );
@@ -1650,6 +1660,34 @@ export class PhaseRuntime {
     if (keys.length) {
       this.onMessage(`[旁观维护] 变量.当前 ← ${keys.join("、")}`);
     }
+    if (view.packet?.need_generate) {
+      this.applyMaintainNeedGenerateSampling(view.packet.need_generate, workerId);
+    }
+  }
+
+  /** need_generate：按生成规则合同程序批量抽样，写入 运行.本轮.旁观.生成抽样 */
+  private applyMaintainNeedGenerateSampling(
+    need: { rule_id: string; reason: string },
+    workerId: string,
+  ): void {
+    const rulesRaw = this.blackboard.getContentByTag("设计.生成规则");
+    const result = runMaintainNeedGenerateSampling({
+      need,
+      generationRulesRaw: rulesRaw,
+    });
+    if (!result) {
+      this.onMessage(
+        `[旁观维护] need_generate=${need.rule_id}：未找到可抽样的池（请检查设计.生成规则）`,
+      );
+      return;
+    }
+    const content = JSON.stringify(
+      { rule_id: need.rule_id, reason: need.reason, chance: result },
+      null,
+      2,
+    );
+    this.writeWorkerTagContent(MAINTAIN_GENERATE_TAG, content, workerId);
+    this.onMessage(`[旁观维护] 生成抽样 ${need.rule_id}：${result.summary}`);
   }
 
   /** 避免 syncSlots 重复把同一句用户输入追加进历史 */
