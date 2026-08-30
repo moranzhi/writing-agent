@@ -1,6 +1,7 @@
 import type { Blackboard } from "../blackboard/blackboard.js";
 import type { LlmProvider, StreamCallbacks, ChatMessage } from "../llm/client.js";
-import { supportsContentStream } from "../llm/stream-complete.js";
+import { completeStructured } from "../llm/structured-complete.js";
+import { resolveActiveProfile } from "../config/settings.js";
 import { loadWorkerSkillWithContext } from "../skills/loader.js";
 import { filterInputsForRolePerspective } from "../skills/worker-llm.js";
 import { collectUserInputTranscript } from "../intake/intake.js";
@@ -14,6 +15,10 @@ import {
   looksLikeProseNotSpec,
   parseWorkerSetYaml,
 } from "../skills/worker-set-parse.js";
+import {
+  selectJsonPayload,
+  tryParseJsonDoc,
+} from "../parse/json-doc.js";
 import { assembleWorkerContext } from "../skills/context-segments.js";
 import { isPlayLayerActive } from "../skills/play-turn.js";
 import { loadAppSettings } from "../config/settings.js";
@@ -21,6 +26,10 @@ import { resolveActivePreset } from "../preset/store.js";
 import { assemblePlayWorkerMessages } from "../preset/play-frame.js";
 import { worldInfoPackFromSegments } from "../preset/world-info-pack.js";
 import { PRESENT_TAG } from "../skills/present-packet.js";
+import {
+  coerceToFlatArtifact,
+  flatArtifactToFragmentDoc,
+} from "../skills/flat-artifact.js";
 import {
   gmChanceToolsEnabled,
   GM_CHANCE_HARNESS_INSTRUCTION,
@@ -36,7 +45,10 @@ import {
   isUsableContextFragment,
   looksLikeFragmentDoc,
 } from "../skills/context-fragment.js";
-import { isProgressPointerTag } from "../skills/creation-flow.js";
+import {
+  isProgressPointerTag,
+  looksLikeCreationFlowDoc,
+} from "../skills/creation-flow.js";
 import {
   CONTEXT_ORDER_TAG,
   parseContextOrder,
@@ -93,28 +105,19 @@ const WORKER_OUTPUT_INSTRUCTION = `
 
 ---
 
-## 运行时输出协议（必须遵守）
+## 运行时输出协议
 
-请输出 **单个 JSON 对象**（不要 markdown 代码块），字段：
-{
-  "outputs": { "<outputTag>": "<内容字符串>" },
-  "summary": "50字以内产物摘要",
-  "askUser": null 或 问题数组
-}
+输出 **一个 JSON 对象**（由程序按模型能力用 schema / tool / json_object 约束投递）。
 
-askUser 每项可为：
-- 字符串："需要用户补充的问题"
-- 或结构化：{ "id": "q1", "prompt": "问题", "options": [{ "id": "A", "label": "可编辑完整句选项" }], "allowOther": true }
+按本步 SKILL 规定的产物形状写。有正文的技能稿按该步 \`正文\` 对象写（柱下到条目/诊断三元组），不要把业务字段改成一段 \`sections[].text\`。
+「设计.创作流程」必须是带 \`steps\` 数组的 DAG，worker 集必须是带 \`workers\` 的规格。
 
-- outputs 的 key 必须是要求的 outputTags
-- **设计.worker集 / 设计.worker集.草稿**：value 必须是 JSON 对象文本（以 { 开头），禁止中文说明、元叙述、提问长文；禁止 YAML
-- **context-fragment.v1**：必须放在 outputs["<本步 artifact tag>"]，禁止把片段当根对象。题目只写在产物「追问」（建议选项 + 示例）；顶层 askUser 必须为 **null**。程序会把「追问」挂到询问卡。禁止同一问再抄一份 askUser。禁止写入「创作.当前步骤」等进度指针
-- **其它产物**：优先同时给 outputs + askUser；有产物时追问挂在产物下（用户可直接接受而不作答）
-- **残稿也要交**：JSON 不完美、字段不全、截断，只要有可展示正文就必须写入 outputs，交给用户验收（可打回重生成，也可接着改）。不要因为渲染不出就把稿扔掉改成提问
-- 仅当完全没有可展示正文、只有提问时，才留空 outputs、只填 askUser
-- 能推断选项时 **必须**给 options（完整句、可改写）；不要只丢裸问题逼用户写长段
-- 若 inputs 中 \`用户.需求\` / \`用户.博弈需求\`（或 book.brief）已有实质内容，禁止 askUser 要求用户重复提供其中已写明的情境、角色、规则等；仅对 genuinely 缺失且无法推断的要点提问
-- summary 用于界面展示`;
+也兼容：
+1. 直接输出本步产物对象（创作流程 / context-fragment.v1 / worker 集等）
+2. \`{ "outputs": { "<本步 tag>": { … } }, "summary":"…", "askUser": null }\`（values 用对象）
+
+不要写入进度指针。追问用 \`questions\`（或旧 \`追问.题目\`）；\`questions: []\` 表示可验收。
+「开放问题」留给后续步。残稿也要交。summary 用于界面展示。`;
 
 function slotValueForTag(
   tag: string,
@@ -193,6 +196,13 @@ function assignOutput(
 }
 
 /** 模型常把片段当根对象，或写进「创作.当前步骤」 */
+function existingOutputIsProduct(text: string | undefined): boolean {
+  if (!text?.trim()) return false;
+  if (isUsableContextFragment(text)) return true;
+  const parsed = tryParseJsonDoc(text);
+  return looksLikeCreationFlowDoc(parsed) || looksLikeFragmentDoc(parsed);
+}
+
 function recoverFragmentOutputs(
   obj: Record<string, unknown>,
   outputs: Record<string, string>,
@@ -200,7 +210,7 @@ function recoverFragmentOutputs(
 ): void {
   const target = productOutputTags(outputTags)[0];
   if (!target) return;
-  if (outputs[target] && isUsableContextFragment(outputs[target])) return;
+  if (existingOutputIsProduct(outputs[target])) return;
 
   const outputsRaw =
     obj.outputs && typeof obj.outputs === "object" && !Array.isArray(obj.outputs)
@@ -212,7 +222,11 @@ function recoverFragmentOutputs(
       if (key === target) continue;
       const text = stringifyOutputValue(val);
       if (!text) continue;
-      if (isUsableContextFragment(text) || looksLikeFragmentDoc(val)) {
+      if (
+        isUsableContextFragment(text) ||
+        looksLikeFragmentDoc(val) ||
+        looksLikeCreationFlowDoc(val)
+      ) {
         outputs[target] = text;
         return;
       }
@@ -227,6 +241,13 @@ function recoverFragmentOutputs(
   if (looksLikeFragmentDoc(obj) || looksLikeFragmentDoc(rest)) {
     const source = looksLikeFragmentDoc(obj) ? obj : rest;
     outputs[target] = JSON.stringify(source);
+    return;
+  }
+  if (looksLikeCreationFlowDoc(obj) || looksLikeCreationFlowDoc(rest)) {
+    const source = looksLikeCreationFlowDoc(obj) ? obj : rest;
+    if (!outputs[target]?.trim()) {
+      outputs[target] = JSON.stringify(source);
+    }
   }
 }
 
@@ -283,14 +304,26 @@ const INCOMPLETE_FRAGMENT_ASK = normalizeQuestions([
   },
 ]);
 
+function lookupOutputValue(
+  raw: Record<string, unknown>,
+  tag: string,
+): unknown {
+  if (raw[tag] != null) return raw[tag];
+  const leaf = tag.includes(".") ? tag.slice(tag.lastIndexOf(".") + 1) : tag;
+  if (!leaf) return undefined;
+  for (const [key, val] of Object.entries(raw)) {
+    if (val == null) continue;
+    if (key === leaf || key.endsWith(`.${leaf}`)) return val;
+  }
+  return undefined;
+}
+
 function parseWorkerResponse(
   raw: string,
   outputTags: string[],
 ): WorkerRunResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
+  const parsed = tryParseJsonDoc(raw);
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
     const target = productOutputTags(outputTags)[0] ?? outputTags[0];
     if (target && looksLikeStructuredDraft(raw)) {
       return finalizeParsedOutputs(
@@ -322,17 +355,43 @@ function parseWorkerResponse(
     };
   }
 
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("Worker 返回了无效 JSON");
+  const obj = parsed as Record<string, unknown>;
+
+  // 创作流程 DAG：根对象就是产物，不能先收成扁形（brief 会被当成稿、steps 丢掉）
+  if (looksLikeCreationFlowDoc(obj)) {
+    const target = productOutputTags(outputTags)[0] ?? outputTags[0];
+    if (target) {
+      return finalizeParsedOutputs(
+        { [target]: JSON.stringify(obj) },
+        obj,
+        outputTags,
+      );
+    }
   }
 
-  const obj = parsed as Record<string, unknown>;
+  // 扁形产物 → 旧 fragment 外壳。已是 context-fragment 深树则原样收下（保留自评与嵌套正文）。
+  if (!looksLikeFragmentDoc(obj)) {
+    const asFlat = coerceToFlatArtifact(obj);
+    if (asFlat) {
+      const frag = flatArtifactToFragmentDoc(asFlat);
+      const target = productOutputTags(outputTags)[0] ?? outputTags[0];
+      if (target) {
+        return finalizeParsedOutputs(
+          { [target]: JSON.stringify(frag) },
+          { ...frag, summary: asFlat.summary || obj.summary },
+          outputTags,
+        );
+      }
+    }
+  }
+
   const outputsRaw = obj.outputs;
   const outputs: Record<string, string> = {};
 
-  if (outputsRaw && typeof outputsRaw === "object") {
+  if (outputsRaw && typeof outputsRaw === "object" && !Array.isArray(outputsRaw)) {
+    const bag = outputsRaw as Record<string, unknown>;
     for (const tag of productOutputTags(outputTags)) {
-      assignOutput(outputs, tag, (outputsRaw as Record<string, unknown>)[tag]);
+      assignOutput(outputs, tag, lookupOutputValue(bag, tag));
     }
   }
   recoverFragmentOutputs(obj, outputs, outputTags);
@@ -484,25 +543,6 @@ function extractQuestionsFromText(text: string): string[] {
   return [];
 }
 
-async function completeWorkerPreferStream(
-  llm: LlmProvider,
-  messages: Parameters<LlmProvider["complete"]>[0],
-  options: Parameters<LlmProvider["complete"]>[1],
-  stream?: WorkerStreamCallbacks,
-): Promise<Awaited<ReturnType<LlmProvider["complete"]>>> {
-  const callbacks: StreamCallbacks = {
-    onReasoningDelta: (delta) => stream?.onThinkingDelta?.(delta),
-    onContentDelta: (delta) => stream?.onOutputDelta?.(delta),
-  };
-  if (supportsContentStream(llm)) {
-    return llm.completeStream!(messages, options, callbacks);
-  }
-  const result = await llm.complete(messages, options);
-  if (result.reasoning) callbacks.onReasoningDelta?.(result.reasoning);
-  if (result.content) callbacks.onContentDelta?.(result.content);
-  return result;
-}
-
 export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRunResult> {
   const workerId = resolveWorkerId(params.workerId);
   let worker: ParsedWorkerSkill;
@@ -519,9 +559,15 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       params.slots.creationAcceptedUnits ??
       params.blackboard.getContentByTag("创作.已验收单位");
     let acceptedStepNames: string[] = [];
+    let inheritExisting = false;
     try {
-      const { parseAcceptedSteps } = await import("../skills/creation-flow.js");
+      const { parseAcceptedSteps, isInheritExistingFlag } = await import(
+        "../skills/creation-flow.js"
+      );
       acceptedStepNames = parseAcceptedSteps(acceptedRaw);
+      inheritExisting = isInheritExistingFlag(
+        params.blackboard.getContentByTag("创作.继承修改"),
+      );
     } catch {
       acceptedStepNames = [];
     }
@@ -538,6 +584,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
         acceptedStepNames,
         selectedRecipeRef,
         filledArtifactTags,
+        inheritExisting,
       },
     );
     worker = loaded.worker;
@@ -616,20 +663,36 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       stream: params.stream,
       caller: `worker:${worker.id}`,
     });
-    return parseWorkerResponse(harness.content, worker.outputTags);
+    return parseWorkerResponse(selectJsonPayload(harness.content), worker.outputTags);
   }
 
-  const result = await completeWorkerPreferStream(
-    params.llm,
-    messages,
-    {
-      responseFormat: "json_object",
-      caller: `worker:${worker.id}`,
-    },
-    params.stream,
-  );
+  const streamCallbacks: StreamCallbacks | undefined = params.stream
+    ? {
+        onReasoningDelta: (delta) => params.stream?.onThinkingDelta?.(delta),
+        onContentDelta: (delta) => params.stream?.onOutputDelta?.(delta),
+      }
+    : undefined;
 
-  return parseWorkerResponse(result.content, worker.outputTags);
+  const result = await completeStructured(params.llm, messages, {
+    schema: {
+      type: "object",
+      additionalProperties: true,
+    },
+    name: "submit_worker_result",
+    schemaIsLoose: true,
+    capabilities: resolveActiveProfile()?.capabilities,
+    caller: `worker:${worker.id}`,
+    stream: streamCallbacks,
+  });
+
+  const raw =
+    typeof result.parsed === "string"
+      ? result.parsed
+      : JSON.stringify(result.parsed);
+  return parseWorkerResponse(
+    selectJsonPayload(raw, result.reasoning) || raw,
+    worker.outputTags,
+  );
 }
 
 /** @internal 供单测 */

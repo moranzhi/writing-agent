@@ -127,4 +127,32 @@ describe("session persistence", () => {
 
     deleteBook(book.id);
   });
+
+  it("createForBook with recipe lands on that recipe's seeded pick graph", async () => {
+    const { createBook, deleteBook } = await import("../src/book/store.js");
+    const { SessionManager } = await import("../src/server/session-manager.js");
+
+    const book = createBook({ title: "配方开局" });
+    const mgr = new SessionManager();
+    const view = await mgr.createForBook(
+      book.id,
+      "world-simulator",
+      "world-simulator",
+    );
+    expect(view.waitingReason?.kind).toBe("pick_creation_step");
+    expect(view.startupCompleted).toBe(true);
+    expect(view.uiPrompt).toBeUndefined();
+    expect(view.openingGuide).toBeNull();
+    const { loadAllRecipeDetails } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const details = await loadAllRecipeDetails("dialogue/world-simulator");
+    const seedNames = details
+      .find((d) => d.id === "world-simulator")
+      ?.seed?.steps.map((s) => s.name);
+    expect(seedNames?.length).toBeGreaterThan(0);
+    expect(view.creationFlowView?.steps.map((s) => s.name)).toEqual(seedNames);
+
+    deleteBook(book.id);
+  });
 });

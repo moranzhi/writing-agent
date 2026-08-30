@@ -160,6 +160,9 @@ export class RuntimeOrchestrator {
         case "invoke_main_agent":
         case "propose_next_creation_step":
         case "seal_creation_opening":
+        case "unseal_creation_opening":
+        case "run_play_turn":
+        case "continue_play_turn":
           break;
       }
     }

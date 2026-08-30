@@ -12,25 +12,28 @@
     />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body data-lifecycle="design">
+  <body data-lifecycle="design" data-nav-level="root">
     <div class="layout">
       <aside class="panel panel-rail" id="panel-books">
         <header class="panel-head rail-head">
-          <button type="button" class="rail-toggle btn-sm" id="btn-rail-toggle" title="展开 / 收起侧栏" aria-label="展开或收起侧栏">‹</button>
-          <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="侧栏">
-            <button type="button" class="rail-tab active" data-rail-tab="books" role="tab" aria-selected="true" title="作品">
+          <div class="rail-head-row">
+            <button type="button" class="rail-toggle btn-sm" id="btn-rail-toggle" title="返回作品目录" aria-label="返回作品目录">‹</button>
+            <h1 class="rail-context" id="rail-context">作品</h1>
+            <div class="panel-head-actions rail-head-actions">
+              <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
+              <span class="burst-badge" id="burst-badge" hidden></span>
+            </div>
+          </div>
+          <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="本书侧栏" hidden>
+            <button type="button" class="rail-tab active" data-rail-tab="books" role="tab" aria-selected="true" title="本书">
               <span class="rail-tab-icon" aria-hidden="true">书</span>
-              <span class="rail-tab-label">作品</span>
+              <span class="rail-tab-label">本书</span>
             </button>
             <button type="button" class="rail-tab" data-rail-tab="log" role="tab" aria-selected="false" title="调度">
               <span class="rail-tab-icon" aria-hidden="true">志</span>
               <span class="rail-tab-label">调度</span>
             </button>
           </nav>
-          <div class="panel-head-actions rail-head-actions">
-            <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
-            <span class="burst-badge" id="burst-badge" hidden></span>
-          </div>
         </header>
 
         <div class="rail-panels">
@@ -50,9 +53,7 @@
         <div class="main-body">
           <section class="panel-feed" id="panel-feed">
             <div id="skill-picker" class="skill-picker" hidden></div>
-            <div id="message-feed" class="message-feed">
-              <p class="empty">正在打开作品…</p>
-            </div>
+            <div id="message-feed" class="message-feed"></div>
             <div id="workspace-stage" class="workspace-stage" hidden aria-label="验收工作面"></div>
             <div id="questions-card-host" class="questions-card-host" hidden></div>
           </section>
@@ -137,6 +138,21 @@
       <button type="button" class="context-menu-item context-menu-separator-before" id="msg-menu-rollback" data-msg-menu-action="rollback" hidden>回退到这里</button>
       <button type="button" class="context-menu-item context-menu-danger" id="msg-menu-delete" data-msg-menu-action="delete">从这里重开</button>
     </menu>
+
+    <menu id="flow-node-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" id="flow-menu-view" data-flow-menu-action="view">查看产物</button>
+      <button type="button" class="context-menu-item" id="flow-menu-reenter" data-flow-menu-action="reenter">重新进入修改</button>
+    </menu>
+
+    <dialog id="dialog-step-artifact" class="dialog dialog-wide" aria-labelledby="step-artifact-title">
+      <form method="dialog" class="context-trace-form">
+        <h2 id="step-artifact-title">产物</h2>
+        <div id="step-artifact-body" class="step-artifact-body"></div>
+        <div class="dialog-actions">
+          <button type="submit" class="btn btn-primary" value="close">关闭</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="dialog-context-trace" class="dialog dialog-wide" aria-labelledby="context-trace-title">
       <form method="dialog" class="context-trace-form">

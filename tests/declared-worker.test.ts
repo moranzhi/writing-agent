@@ -8,11 +8,20 @@ import {
 import { parseWorkerSetYaml } from "../src/skills/worker-set-parse.js";
 
 describe("resolveAcceptanceModeForWorker", () => {
-  it("always confirms design-flow", () => {
+  it("auto-continues design-flow without a confirm step", () => {
     const mode = resolveAcceptanceModeForWorker({
       session: createSession(),
       blackboard: new Blackboard(),
       workerId: "design-flow",
+    });
+    expect(mode).toBe("no_confirmation");
+  });
+
+  it("still confirms design-step", () => {
+    const mode = resolveAcceptanceModeForWorker({
+      session: createSession(),
+      blackboard: new Blackboard(),
+      workerId: "design-step",
     });
     expect(mode).toBe("user_confirmed");
   });

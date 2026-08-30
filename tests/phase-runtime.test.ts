@@ -7,6 +7,7 @@ import {
 import { PhaseRuntime, createDecision } from "../src/runtime/phase-runtime.js";
 import { createSession } from "../src/runtime/phase-machine.js";
 import { Blackboard } from "../src/blackboard/blackboard.js";
+import { parseCreationFlow } from "../src/skills/creation-flow.js";
 
 describe("phase runtime", () => {
   it("auto-loads default orchestrator and awaits first user input", async () => {
@@ -128,5 +129,168 @@ describe("phase runtime", () => {
     const runtime = new PhaseRuntime({ autoStubWorker: true });
     await runtime.start();
     await expect(runtime.retryStuckRun()).rejects.toThrow("当前没有可重试的执行");
+  });
+
+  it("first input with seeded DAG waits for node pick instead of calling main agent", async () => {
+    const llm = new MockLlmProvider(["Let me analyze the DAG in English prose"]);
+    const runtime = new PhaseRuntime({ llm });
+    await runtime.start();
+    runtime.getBlackboard().write({
+      tag: "设计.创作流程",
+      content: JSON.stringify({
+        version: 1,
+        status: "open",
+        steps: [
+          {
+            id: "美学纲领与交互范式",
+            name: "美学纲领与交互范式",
+            depends_on: [],
+          },
+        ],
+      }),
+      source: "runtime",
+    });
+    await runtime.submitInput("丧尸世界，但只有我不会被感染");
+    expect(runtime.getSession().phase).toBe("waiting_user");
+    expect(runtime.getSession().waitingReason?.kind).toBe("pick_creation_step");
+  });
+
+  it("enterSeededCreationPick skips first demand and waits on the seeded graph", async () => {
+    const runtime = new PhaseRuntime();
+    await runtime.start();
+    runtime.getBlackboard().write({
+      tag: "设计.创作流程",
+      content: JSON.stringify({
+        version: 1,
+        status: "open",
+        steps: [
+          {
+            id: "舞台骨架",
+            name: "舞台骨架",
+            depends_on: [],
+          },
+        ],
+      }),
+      source: "runtime",
+    });
+    await runtime.enterSeededCreationPick();
+    expect(runtime.getSession().slots.startupCompleted).toBe(true);
+    expect(runtime.getSession().waitingReason?.kind).toBe("pick_creation_step");
+  });
+
+  it("unusable main agent output without DAG starts design-flow", async () => {
+    const llm = new MockLlmProvider(["Let me think about routing"]);
+    const runtime = new PhaseRuntime({ llm, autoStubWorker: true });
+    await runtime.start();
+    await runtime.submitInput("网恋对象对话");
+    expect(runtime.getSession().phase).not.toBe("running");
+    expect(
+      runtime.getSession().artifacts.some((a) => a.workerId === "design-flow"),
+    ).toBe(true);
+  });
+
+  it("failRun leaves error phase instead of running", async () => {
+    const runtime = new PhaseRuntime();
+    await runtime.start();
+    await runtime.submitInput("随便写点");
+    expect(runtime.getSession().phase).toBe("running");
+    await runtime.failRun("fetch failed");
+    expect(runtime.getSession().phase).toBe("error");
+    expect(runtime.getSession().waitingReason).toBeUndefined();
+  });
+
+  it("recoverOrphanedRun turns stuck running into node pick when DAG exists", async () => {
+    const runtime = new PhaseRuntime();
+    await runtime.start();
+    runtime.getBlackboard().write({
+      tag: "设计.创作流程",
+      content: JSON.stringify({
+        version: 1,
+        status: "open",
+        steps: [
+          {
+            id: "美学纲领与交互范式",
+            name: "美学纲领与交互范式",
+            depends_on: [],
+          },
+        ],
+      }),
+      source: "runtime",
+    });
+    const session = runtime.getSession();
+    session.phase = "running";
+    session.waitingReason = undefined;
+    expect(runtime.recoverOrphanedRun()).toBe(true);
+    expect(runtime.getSession().phase).toBe("waiting_user");
+    expect(runtime.getSession().waitingReason?.kind).toBe("pick_creation_step");
+  });
+
+  it("leaveCreationStep returns to pick and unsawns an empty instance", async () => {
+    const session = createSession("default");
+    session.phase = "waiting_user";
+    session.waitingReason = {
+      kind: "worker_questions",
+      workerId: "design-step",
+      questions: [{ id: "module-opening", prompt: "生成规则引导" }],
+    };
+    session.currentWorkerId = "design-step";
+    session.slots = { startupCompleted: true };
+    const blackboard = new Blackboard();
+    blackboard.write({
+      tag: "设计.创作流程",
+      content: JSON.stringify({
+        version: 1,
+        status: "open",
+        steps: [
+          {
+            id: "美学纲领与交互范式",
+            name: "美学纲领与交互范式",
+            depends_on: [],
+          },
+          {
+            id: "生成规则",
+            name: "生成规则",
+            role: "prototype",
+            depends_on: ["美学纲领与交互范式"],
+          },
+          {
+            id: "生成规则#1",
+            name: "生成规则",
+            role: "instance",
+            from: "生成规则",
+            depends_on: ["美学纲领与交互范式"],
+          },
+          {
+            id: "开场白与开场变量",
+            name: "开场白与开场变量",
+            depends_on: ["美学纲领与交互范式", "生成规则#1"],
+          },
+        ],
+      }),
+      source: "runtime",
+    });
+    blackboard.write({
+      tag: "创作.当前步骤",
+      content: "生成规则#1",
+      source: "runtime",
+    });
+    const runtime = new PhaseRuntime({
+      initialSession: session,
+      initialBlackboardItems: blackboard.exportItems(),
+    });
+    await runtime.leaveCreationStep();
+    expect(runtime.getSession().waitingReason?.kind).toBe("pick_creation_step");
+    expect(runtime.getSession().currentWorkerId).toBeUndefined();
+    const flow = parseCreationFlow(
+      runtime.getBlackboard().getContentByTag("设计.创作流程"),
+    );
+    expect(flow?.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "生成规则",
+      "开场白与开场变量",
+    ]);
+    expect(
+      flow?.steps.find((s) => s.name === "开场白与开场变量")?.depends_on,
+    ).toEqual(["美学纲领与交互范式"]);
   });
 });

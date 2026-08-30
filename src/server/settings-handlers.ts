@@ -4,9 +4,13 @@ import {
   deleteApiProfile,
   getApiProfile,
   listApiProfiles,
-  testApiProfile,
+  probeAndSaveProfileCapabilities,
   updateApiProfile,
 } from "../config/api-profiles.js";
+import {
+  deliveryModeLabel,
+  resolveStructuredDeliveryMode,
+} from "../llm/capabilities.js";
 import {
   ensureActiveProfileDefault,
   loadAppSettings,
@@ -120,12 +124,14 @@ export async function handleSettingsApi(
       baseUrl?: string;
       apiKey?: string;
       model?: string;
+      reasoningEffort?: string;
     };
     const profile = createApiProfile({
       name: body.name ?? "新配置",
       baseUrl: body.baseUrl ?? "https://api.deepseek.com",
       apiKey: body.apiKey ?? "",
       model: body.model ?? "deepseek-v4-pro",
+      reasoningEffort: body.reasoningEffort,
     });
     const activate = (body as { activate?: boolean }).activate === true;
     if (activate) {
@@ -136,19 +142,34 @@ export async function handleSettingsApi(
     return true;
   }
 
-  const profileMatch = pathname.match(/^\/api\/profiles\/([^/]+)(\/test)?$/);
+  const profileMatch = pathname.match(
+    /^\/api\/profiles\/([^/]+)(\/probe-capabilities)?$/,
+  );
   if (profileMatch) {
     const id = decodeURIComponent(profileMatch[1]);
-    const isTest = profileMatch[2] === "/test";
+    const suffix = profileMatch[2];
 
-    if (isTest && req.method === "POST") {
-      const profile = getApiProfile(id);
-      if (!profile) {
-        json(res, 404, { error: "配置不存在" });
-        return true;
+    if (suffix === "/probe-capabilities" && req.method === "POST") {
+      try {
+        const profile = await probeAndSaveProfileCapabilities(id);
+        const mode = resolveStructuredDeliveryMode(profile.capabilities);
+        const settings = loadAppSettings();
+        const reloadedSessions =
+          settings.activeProfileId === id
+            ? sessionManager.reloadAllLlms()
+            : 0;
+        json(res, 200, {
+          ok: profile.capabilities?.chat === "ok",
+          profile,
+          deliveryMode: mode,
+          deliveryModeLabel: deliveryModeLabel(mode),
+          reloadedSessions,
+        });
+      } catch (err) {
+        json(res, 400, {
+          error: err instanceof Error ? err.message : "能力探测失败",
+        });
       }
-      const result = await testApiProfile(profile);
-      json(res, 200, result);
       return true;
     }
 
@@ -168,10 +189,16 @@ export async function handleSettingsApi(
         baseUrl?: string;
         apiKey?: string;
         model?: string;
+        reasoningEffort?: string;
       };
       try {
         const profile = updateApiProfile(id, body);
-        json(res, 200, { profile });
+        const settings = loadAppSettings();
+        const reloadedSessions =
+          settings.activeProfileId === id
+            ? sessionManager.reloadAllLlms()
+            : 0;
+        json(res, 200, { profile, reloadedSessions });
       } catch (err) {
         json(res, 404, {
           error: err instanceof Error ? err.message : "更新失败",

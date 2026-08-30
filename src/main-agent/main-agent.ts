@@ -24,25 +24,26 @@ function buildMainAgentSystemPrompt(
       ? workers.map((w) => `- ${w.id}：${w.description}`).join("\n")
       : "- （当前 skill 未加载 worker 列表）";
 
-  return `你是创作节点路由器。只读取「设计.创作流程」DAG，并选择下一个要执行的创作节点。
-
-- DAG 不存在或需要追加节点：调用 design-flow。
-- DAG 中已有下一个可执行节点：调用 design-step。
-- 只调度 worker，不创作正文，不规划 DAG 之外的流程。
+  return `你是创作节点路由器。当前没有「设计.创作流程」。本轮调用 run_worker：workerId 为 design-flow，排出近期起点。
 
 当前 skill 可用 worker（workerId 必须与下列 id 完全一致）：
 ${workerLines}
 
-输出必须是 JSON 对象，字段：
-{
-  "action": "ask_user" | "run_worker" | "create_temp_worker" | "review_blackboard" | "finish",
-  "reason": "string",
-  "assessment": "string | null",
-  "questions": [{ "id": "q1", "prompt": "…", "options": [{ "label": "建议示范…" }] }] | null,
-  "workerId": "string | null",
-  "requiresApproval": boolean,
-  "workerContext": { "roleId": "string" } | null
-}`;
+结束本轮必须调用 run_worker(design-flow)。reason 用一句话说明根据用户需求开始编排；requiresApproval 为 false。`;
+}
+
+/** 总管把推理写成正文、未给出可用工具/JSON 时，运行时改走点选或 design-flow。 */
+export function isUnusableMainAgentOutput(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /invalid JSON/i.test(msg) ||
+    /no tool calls and no content/i.test(msg) ||
+    /Invalid action/i.test(msg) ||
+    /must be an object/i.test(msg) ||
+    /requires reason/i.test(msg) ||
+    /multiple terminal tools/i.test(msg) ||
+    /Not a terminal tool/i.test(msg)
+  );
 }
 
 export class MainAgent {

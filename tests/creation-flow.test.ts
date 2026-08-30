@@ -6,6 +6,8 @@ import {
   artifactTagForStep,
   extractModuleOpening,
   formatCreationFlowForUser,
+  deriveFlowStepTitle,
+  titleFromSuggestion,
   formatFlowProgressForAgent,
   formatModuleCatalogForAgent,
   formatRecipeCatalogForAgent,
@@ -18,6 +20,13 @@ import {
   mergeCreationFlowPreservingAccepted,
   needsFlowExpansion,
   nextPendingStep,
+  listReadySteps,
+  computeStepLayers,
+  spawnRepeatableCreationStep,
+  spawnInstanceFromPrototype,
+  hasSelectableCreationWork,
+  removeUnstartedInstance,
+  looksLikeCreationFlowDoc,
   parseCreationFlow,
   pickRecordedStepId,
   parseModuleCatalog,
@@ -29,6 +38,7 @@ import {
   shouldSkipModuleOpening,
   isProgressPointerTag,
   stringifyCreationFlow,
+  stripReviseSteps,
   creationFlowFromRecipeSeed,
   validateCreationFlow,
   validateStepReadyToRun,
@@ -51,6 +61,10 @@ modules:
     declaration: 锚定实例
     artifact: 设计.具体实例
     repeatable: true
+  - name: 开场白与开场变量
+    declaration: 收口
+    artifact: 设计.开场白与开场变量
+    closer: true
 `)!;
 
 describe("creation-flow", () => {
@@ -145,7 +159,44 @@ describe("creation-flow", () => {
       acceptedStepIds: ["美学纲领与交互范式"],
     });
     expect(merged.restored).toEqual([]);
-    expect(merged.raw).toBe(rewritten);
+    expect(parseCreationFlow(merged.raw)!.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "实现机制",
+    ]);
+  });
+
+  it("drops planner revise steps when merging flow", () => {
+    const prev = `{
+      "status": "open",
+      "steps": [
+        { "id": "美学纲领与交互范式", "name": "美学纲领与交互范式", "depends_on": [] }
+      ]
+    }`;
+    const rewritten = `{
+      "status": "open",
+      "steps": [
+        { "id": "美学纲领与交互范式", "name": "美学纲领与交互范式", "depends_on": [] },
+        {
+          "id": "美学纲领与交互范式·改",
+          "name": "美学纲领与交互范式",
+          "mode": "revise",
+          "revises": "美学纲领与交互范式",
+          "depends_on": ["美学纲领与交互范式"]
+        },
+        { "id": "实现机制", "name": "实现机制", "depends_on": ["美学纲领与交互范式·改"] }
+      ]
+    }`;
+    const merged = mergeCreationFlowPreservingAccepted({
+      prevRaw: prev,
+      nextRaw: rewritten,
+      acceptedStepIds: ["美学纲领与交互范式"],
+    });
+    const flow = parseCreationFlow(merged.raw)!;
+    expect(flow.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "实现机制",
+    ]);
+    expect(flow.steps[1]?.depends_on).toEqual(["美学纲领与交互范式"]);
   });
 
   it("allows duplicate capability names with distinct ids", () => {
@@ -183,6 +234,24 @@ describe("creation-flow", () => {
       `说明如下\n{"steps":[{"name":"美学纲领与交互范式","depends_on":[]}]}\n完`,
     );
     expect(flow?.steps[0]?.name).toBe("美学纲领与交互范式");
+  });
+
+  it("extracts JSON from a code fence", () => {
+    const flow = parseCreationFlow(
+      "```json\n{\"brief\":\"单角代入\",\"steps\":[{\"name\":\"美学纲领与交互范式\",\"depends_on\":[]}]}\n```",
+    );
+    expect(flow?.brief).toBe("单角代入");
+    expect(flow?.steps[0]?.name).toBe("美学纲领与交互范式");
+  });
+
+  it("recognizes a DAG object and ignores brief-only objects", () => {
+    expect(
+      looksLikeCreationFlowDoc({
+        brief: "单角代入",
+        steps: [{ name: "美学纲领与交互范式", depends_on: [] }],
+      }),
+    ).toBe(true);
+    expect(looksLikeCreationFlowDoc({ brief: "单角代入" })).toBe(false);
   });
 
   it("validates deps must appear earlier", () => {
@@ -250,11 +319,91 @@ describe("creation-flow", () => {
       depends_on: [],
       declaration: "站位与体验契约",
     });
-    expect(view.steps[2]?.occurrence).toBe(2);
+    expect(view.steps[2]?.role).toBe("instance");
+    expect(view.steps[2]?.occurrence).toBe(1);
+    expect(view.steps[1]?.role).toBe("prototype");
     expect(view.steps[2]?.repeatable).toBe(true);
-    expect(view.steps[0]?.runState).toBe("current");
+    expect(view.steps[0]?.runState).toBe("pending");
+    expect(view.steps[0]?.layer).toBe(0);
+    expect(view.steps[0]?.ready).toBe(true);
+    expect(view.steps[0]?.selectable).toBe(true);
     expect(view.steps[1]?.runState).toBe("pending");
+    expect(view.steps[1]?.layer).toBe(1);
+    expect(view.steps[1]?.ready).toBe(false);
     expect(view.steps[2]?.runState).toBe("pending");
+  });
+
+  it("shows a short title for 生成规则 / 具体实例 prototypes and instances", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        {
+          "id": "生成规则",
+          "name": "生成规则",
+          "role": "prototype",
+          "suggestion": "幸存者生成规则：锚定出租屋内的女性租客",
+          "depends_on": []
+        },
+        {
+          "id": "生成规则#1",
+          "name": "生成规则",
+          "role": "instance",
+          "from": "生成规则",
+          "depends_on": []
+        },
+        {
+          "id": "具体实例",
+          "name": "具体实例",
+          "role": "prototype",
+          "suggestion": "按幸存者规则生成开局女租客",
+          "depends_on": ["生成规则"]
+        },
+        {
+          "id": "具体实例#1",
+          "name": "具体实例",
+          "role": "instance",
+          "from": "具体实例",
+          "params": { "batch_goal": "开局女租客", "rule_id": "survivors" },
+          "depends_on": ["生成规则#1"]
+        }
+      ]
+    }`)!;
+    const untitled = formatCreationFlowForUser(flow, sampleCatalog);
+    expect(untitled.steps.find((s) => s.id === "生成规则")?.title).toBe(
+      "幸存者生成规则",
+    );
+    expect(untitled.steps.find((s) => s.id === "生成规则#1")?.title).toBe(
+      "幸存者生成规则",
+    );
+    expect(untitled.steps.find((s) => s.id === "具体实例")?.title).toBe(
+      "按幸存者规则生成开局女租客",
+    );
+    expect(untitled.steps.find((s) => s.id === "具体实例#1")?.title).toBe(
+      "开局女租客",
+    );
+
+    const accepted = formatCreationFlowForUser(flow, sampleCatalog, [], [], {
+      "生成规则#1": { summary: "生成规则 · 幸存者 · 预生成并动态" },
+      "具体实例#1": { summary: "具体实例 · 女租客 · 2条" },
+    });
+    expect(accepted.steps.find((s) => s.id === "生成规则#1")?.title).toBe(
+      "幸存者",
+    );
+    expect(accepted.steps.find((s) => s.id === "具体实例#1")?.title).toBe(
+      "女租客",
+    );
+    expect(
+      deriveFlowStepTitle({
+        name: "生成规则",
+        hint: {
+          content: {
+            正文: { 本步参数: { target: "女租客" } },
+          },
+        },
+      }),
+    ).toBe("女租客");
+    expect(titleFromSuggestion("怪物生成规则：按族群抽样")).toBe(
+      "怪物生成规则",
+    );
   });
 
   it("marks accepted steps done and the next pending current", () => {
@@ -272,9 +421,10 @@ describe("creation-flow", () => {
     ]);
     expect(view.steps.map((s) => s.runState)).toEqual([
       "done",
-      "current",
+      "pending",
       "pending",
     ]);
+    expect(view.steps[1]?.selectable).toBe(true);
   });
 
   it("loads world-simulator catalog and formats for agent", async () => {
@@ -317,7 +467,7 @@ describe("creation-flow", () => {
     expect(block).toContain("上下文投影排序〔程序步〕");
     expect(block).toContain("何时用");
     expect(block).toContain("何时不用");
-    expect(block).toContain("规划产物字段");
+    expect(block).toContain("role=prototype");
     expect(block).toContain("编排参数");
     expect(block).not.toContain("设计.美学纲领与交互范式");
   });
@@ -403,6 +553,22 @@ steps:
     ).toBeNull();
   });
 
+  it("creationFlowFromRecipeSeed follows the recipe steps, not a fixed first node", () => {
+    const detail = parseRecipeYaml(
+      `
+when: 其它剧本
+steps:
+  - name: 舞台骨架
+    depends_on: []
+  - name: 实现机制
+    depends_on: ["舞台骨架"]
+`,
+      { id: "other", name: "其它", declaration: "测" },
+    );
+    const seeded = creationFlowFromRecipeSeed(detail);
+    expect(seeded?.steps.map((s) => s.name)).toEqual(["舞台骨架", "实现机制"]);
+  });
+
   it("falls back to legacy hint when methodology absent", () => {
     const detail = parseRecipeYaml(
       `
@@ -478,7 +644,7 @@ recipes:
     expect(loaded.promptBody).toContain("美学纲领与交互范式");
     expect(loaded.promptBody).toContain("已验收");
     expect(loaded.promptBody).toContain("禁止再排新建");
-    expect(loaded.promptBody).toContain("mode=revise");
+    expect(loaded.promptBody).toContain("禁止排 mode=revise");
     expect(loaded.promptBody).toContain("生成规则");
   });
 
@@ -496,7 +662,36 @@ recipes:
     expect(text).toContain("草案已有、尚未验收");
     expect(text).toContain("美学纲领与交互范式");
     expect(text).toContain("不要当作新规划再写一遍");
-    expect(text).toContain("可反复追加：生成规则、具体实例");
+    expect(text).toContain("目录〔可反复〕：生成规则、具体实例");
+  });
+
+  it("tells design-flow to insert nodes before an unaccepted closer", () => {
+    const catalog = parseModuleCatalog(`
+modules:
+  - name: 美学纲领与交互范式
+    declaration: 站位
+    artifact: 设计.美学纲领与交互范式
+  - name: 开场白与开场变量
+    declaration: 收口
+    artifact: 设计.开场白与开场变量
+    closer: true
+`)!;
+    const flow = parseCreationFlow(`{
+      "status": "closed",
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "name": "开场白与开场变量", "depends_on": ["美学纲领与交互范式"] }
+      ]
+    }`)!;
+    const text = formatFlowProgressForAgent({
+      flow,
+      acceptedStepIds: ["美学纲领与交互范式"],
+      catalog,
+    });
+    expect(text).toContain("〔收口〕");
+    expect(text).toContain("开场白与开场变量");
+    expect(text).toContain("插在收口之前");
+    expect(text).toContain("status 改回 open");
   });
 
   it("injects aesthetics-interaction module prompt into design-step", async () => {
@@ -637,7 +832,7 @@ recipes:
     expect(missingView.steps[0]?.paramsMissing).toBeUndefined();
 
     const block = formatModuleCatalogForAgent(catalog!);
-    expect(block).toContain("规划产物字段");
+    expect(block).toContain("role=prototype");
     expect(block).toContain("target");
   });
 
@@ -662,8 +857,7 @@ recipes:
         acceptedStepNames: [],
       },
     );
-    expect(loaded.promptBody).toContain("【规划产物】");
-    expect(loaded.promptBody).not.toContain("勿再问「生成什么");
+    expect(loaded.promptBody).toContain("【本步对象】");
     expect(loaded.promptBody).toContain("target: 怪物");
     expect(loaded.promptBody).toContain("rule_id: monsters");
     expect(loaded.worker.outputTags).toContain("设计.生成规则");
@@ -693,14 +887,22 @@ modules:
       undefined,
       {
         flowRaw: JSON.stringify({
-          steps: [{ id: "生成规则", name: "生成规则", depends_on: [] }],
+          steps: [
+            {
+              id: "生成规则#1",
+              name: "生成规则",
+              role: "instance",
+              from: "生成规则",
+              depends_on: [],
+            },
+          ],
         }),
-        currentStepName: "生成规则",
+        currentStepName: "生成规则#1",
         acceptedStepNames: [],
       },
     );
-    expect(loaded.promptBody).toContain("【规划产物】");
-    expect(loaded.promptBody).toContain("尚未规划本步具体写什么");
+    expect(loaded.promptBody).toContain("【本步对象】");
+    expect(loaded.promptBody).toContain("尚未钉本步具体写什么");
   });
 
   it("nextPendingStep respects deps and accepted by id", () => {
@@ -780,7 +982,7 @@ modules:
     expect(isCreationFlowComplete(legacy, ["美学纲领与交互范式"])).toBe(true);
   });
 
-  it("allows revising a non-repeatable skill and infers revises + id", () => {
+  it("parses legacy revise steps then strips them from the user graph", () => {
     const flow = parseCreationFlow(`{
       "status": "open",
       "steps": [
@@ -795,10 +997,35 @@ modules:
       revises: "实现机制",
     });
     expect(validateCreationFlow(flow, sampleCatalog).ok).toBe(true);
+    const stripped = stripReviseSteps(flow);
+    expect(stripped.steps.map((s) => s.id)).toEqual(["实现机制"]);
     const view = formatCreationFlowForUser(flow, sampleCatalog, ["实现机制"]);
-    expect(view.steps[1]?.mode).toBe("revise");
-    expect(view.steps[1]?.occurrence).toBeUndefined();
-    expect(view.steps[1]?.runState).toBe("current");
+    expect(view.steps).toHaveLength(1);
+    expect(view.steps[0]?.id).toBe("实现机制");
+    expect(view.steps[0]?.runState).toBe("done");
+    expect(view.steps[0]?.mode).toBeUndefined();
+  });
+
+  it("stripReviseSteps remaps dependents back to the origin step", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        { "id": "美学纲领与交互范式", "name": "美学纲领与交互范式", "depends_on": [] },
+        {
+          "id": "美学纲领与交互范式·改",
+          "name": "美学纲领与交互范式",
+          "mode": "revise",
+          "revises": "美学纲领与交互范式",
+          "depends_on": ["美学纲领与交互范式"]
+        },
+        { "id": "正文组成", "name": "实现机制", "depends_on": ["美学纲领与交互范式·改"] }
+      ]
+    }`)!;
+    const stripped = stripReviseSteps(flow);
+    expect(stripped.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "正文组成",
+    ]);
+    expect(stripped.steps[1]?.depends_on).toEqual(["美学纲领与交互范式"]);
   });
 
   it("still rejects two fresh copies of a non-repeatable skill", () => {
@@ -849,7 +1076,7 @@ modules:
     expect(validateCreationFlow(flow, sampleCatalog).ok).toBe(true);
   });
 
-  it("nextPendingStep prefers a ready revise over a later fresh step", () => {
+  it("nextPendingStep ignores orchestrated revise steps", () => {
     const flow = parseCreationFlow(`{
       "status": "open",
       "steps": [
@@ -863,31 +1090,26 @@ modules:
         }
       ]
     }`)!;
-    expect(nextPendingStep(flow, ["美学纲领与交互范式"])?.mode).toBe("revise");
-    expect(nextPendingStep(flow, ["美学纲领与交互范式"])?.id).toBe(
-      "美学纲领与交互范式·改",
-    );
+    expect(nextPendingStep(flow, ["美学纲领与交互范式"])?.mode).toBeUndefined();
+    expect(nextPendingStep(flow, ["美学纲领与交互范式"])?.id).toBe("生成规则");
+    expect(
+      listReadySteps(flow, ["美学纲领与交互范式"]).map((s) => s.id),
+    ).toEqual(["生成规则"]);
   });
 
-  it("injects inherit draft and skips opening on a revise design-step", async () => {
+  it("inherits existing artifact when reentering an accepted step", async () => {
     const flowRaw = JSON.stringify({
       status: "open",
       steps: [
         { id: "美学纲领与交互范式", name: "美学纲领与交互范式", depends_on: [] },
-        {
-          id: "美学纲领与交互范式·改",
-          name: "美学纲领与交互范式",
-          mode: "revise",
-          revises: "美学纲领与交互范式",
-          depends_on: ["美学纲领与交互范式"],
-        },
       ],
     });
     const binding = await resolveDesignStepBinding({
       skillPackRoot: "dialogue/world-simulator",
       flowRaw,
-      currentStepName: "美学纲领与交互范式·改",
+      currentStepName: "美学纲领与交互范式",
       acceptedStepNames: ["美学纲领与交互范式"],
+      inheritExisting: true,
     });
     expect(binding?.opening).toBeNull();
     expect(binding?.inheritTag).toBe("设计.美学纲领与交互范式");
@@ -898,16 +1120,153 @@ modules:
       undefined,
       {
         flowRaw,
-        currentStepName: "美学纲领与交互范式·改",
+        currentStepName: "美学纲领与交互范式",
         acceptedStepNames: ["美学纲领与交互范式"],
+        inheritExisting: true,
       },
     );
     expect(loaded.promptBody).toContain("【回头修改】");
     expect(loaded.promptBody).not.toContain("程序开场");
     expect(loaded.worker.name).toContain("回头修改");
     expect(loaded.worker.inputTags).toContain("设计.美学纲领与交互范式");
+  });
+
+  it("layers follow longest dependency path", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "name": "生成规则", "depends_on": ["美学纲领与交互范式"] },
+        { "name": "具体实例", "depends_on": ["生成规则"] },
+        { "name": "开场白与开场变量", "depends_on": ["美学纲领与交互范式", "具体实例"] }
+      ]
+    }`)!;
+    const layers = computeStepLayers(flow);
+    expect(layers.get("美学纲领与交互范式")).toBe(0);
+    expect(layers.get("生成规则")).toBe(1);
+    expect(layers.get("具体实例")).toBe(2);
+    expect(layers.get("开场白与开场变量")).toBe(3);
+  });
+
+  it("listReadySteps returns every unblocked pending step", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "name": "生成规则", "depends_on": ["美学纲领与交互范式"] },
+        { "id": "实现机制", "name": "实现机制", "depends_on": ["美学纲领与交互范式"] }
+      ]
+    }`)!;
+    expect(listReadySteps(flow, []).map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+    ]);
     expect(
-      loaded.worker.contextSegments?.some((s) => s.id === "inherit-existing"),
+      listReadySteps(flow, ["美学纲领与交互范式"]).map((s) => s.id),
+    ).toEqual(["生成规则", "实现机制"]);
+  });
+
+  it("spawns instance from prototype before closer and hangs instance on closer deps", () => {
+    const flow = parseCreationFlow(`{
+      "status": "open",
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "name": "开场白与开场变量", "depends_on": ["美学纲领与交互范式"] }
+      ]
+    }`)!;
+    expect(
+      hasSelectableCreationWork(flow, sampleCatalog, ["美学纲领与交互范式"]),
     ).toBe(true);
+    const spawned = spawnRepeatableCreationStep({
+      flow,
+      catalog: sampleCatalog,
+      moduleName: "生成规则",
+      acceptedStepIds: ["美学纲领与交互范式"],
+    });
+    expect("error" in spawned).toBe(false);
+    if ("error" in spawned) return;
+    expect(spawned.step.id).toBe("生成规则#1");
+    expect(spawned.step.role).toBe("instance");
+    expect(spawned.step.depends_on).toEqual(["美学纲领与交互范式"]);
+    expect(spawned.flow.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "生成规则",
+      "生成规则#1",
+      "开场白与开场变量",
+    ]);
+    expect(
+      spawned.flow.steps.find((s) => s.name === "开场白与开场变量")?.depends_on,
+    ).toEqual(["美学纲领与交互范式", "生成规则#1"]);
+
+    const second = spawnRepeatableCreationStep({
+      flow: spawned.flow,
+      catalog: sampleCatalog,
+      moduleName: "生成规则",
+      acceptedStepIds: ["美学纲领与交互范式"],
+    });
+    expect("error" in second).toBe(false);
+    if ("error" in second) return;
+    expect(second.step.id).toBe("生成规则#2");
+  });
+
+  it("removeUnstartedInstance drops empty spawn and closer dep", () => {
+    const flow = parseCreationFlow(`{
+      "status": "open",
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "id": "生成规则", "name": "生成规则", "role": "prototype", "depends_on": ["美学纲领与交互范式"] },
+        { "id": "生成规则#1", "name": "生成规则", "role": "instance", "from": "生成规则", "depends_on": ["美学纲领与交互范式"] },
+        { "name": "开场白与开场变量", "depends_on": ["美学纲领与交互范式", "生成规则#1"] }
+      ]
+    }`)!;
+    const next = removeUnstartedInstance(flow, "生成规则#1", []);
+    expect(next.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "生成规则",
+      "开场白与开场变量",
+    ]);
+    expect(
+      next.steps.find((s) => s.name === "开场白与开场变量")?.depends_on,
+    ).toEqual(["美学纲领与交互范式"]);
+    const kept = removeUnstartedInstance(next, "美学纲领与交互范式", []);
+    expect(kept.steps.map((s) => s.id)).toEqual(next.steps.map((s) => s.id));
+    const accepted = removeUnstartedInstance(flow, "生成规则#1", ["生成规则#1"]);
+    expect(accepted.steps.some((s) => s.id === "生成规则#1")).toBe(true);
+  });
+
+  it("blocks 具体实例 spawn until a 生成规则 instance is accepted", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        {
+          "id": "生成规则",
+          "name": "生成规则",
+          "role": "prototype",
+          "depends_on": ["美学纲领与交互范式"]
+        }
+      ]
+    }`)!;
+    const blocked = spawnRepeatableCreationStep({
+      flow,
+      catalog: sampleCatalog,
+      moduleName: "具体实例",
+      acceptedStepIds: ["美学纲领与交互范式"],
+    });
+    expect(blocked).toMatchObject({ error: "先完成一条生成规则" });
+    const ruleSpawn = spawnInstanceFromPrototype({
+      flow,
+      catalog: sampleCatalog,
+      prototypeId: "生成规则",
+      acceptedStepIds: ["美学纲领与交互范式"],
+    });
+    expect("error" in ruleSpawn).toBe(false);
+    if ("error" in ruleSpawn) return;
+    const withRule = ruleSpawn.flow;
+    const ok = spawnRepeatableCreationStep({
+      flow: withRule,
+      catalog: sampleCatalog,
+      moduleName: "具体实例",
+      acceptedStepIds: ["美学纲领与交互范式", "生成规则#1"],
+    });
+    expect("error" in ok).toBe(false);
+    if ("error" in ok) return;
+    expect(ok.step.depends_on).toEqual(["生成规则#1"]);
   });
 });

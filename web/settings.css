@@ -432,6 +432,37 @@ code {
   color: var(--st-danger);
 }
 
+.cap-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+.cap-unknown {
+  color: var(--muted, #888);
+}
+.cap-chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #ddd);
+}
+.cap-chip.cap-ok {
+  color: #067647;
+  background: #ecfdf3;
+  border-color: #abefc6;
+}
+.cap-chip.cap-fail {
+  color: #b42318;
+  background: #fef3f2;
+  border-color: #fecdca;
+}
+.cap-chip.cap-unk {
+  color: #667085;
+  background: #f9fafb;
+}
+
 /* —— Toast —— */
 .settings-toast {
   margin: 10px 28px 0;
@@ -1042,7 +1073,8 @@ code {
   font-weight: 500;
 }
 
-.profile-dialog input {
+.profile-dialog input,
+.profile-dialog select {
   padding: 9px 12px;
   border-radius: 6px;
   border: 1px solid var(--st-border-strong);
@@ -1051,10 +1083,23 @@ code {
   font-size: 14px;
 }
 
-.profile-dialog input:focus {
+.profile-dialog select {
+  cursor: pointer;
+}
+
+.profile-dialog input:focus,
+.profile-dialog select:focus {
   outline: none;
   border-color: #93c5fd;
   box-shadow: 0 0 0 3px var(--st-accent-soft);
+}
+
+.profile-dialog .field-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--st-muted);
+  line-height: 1.35;
 }
 
 .dialog-actions {

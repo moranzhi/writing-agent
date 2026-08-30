@@ -94,6 +94,14 @@ export function formatWorkerDisplayTitle(workerId, action = null) {
   return base;
 }
 
+/** 流程编排产物待确认：图上点节点即确认，不走验收双按钮 */
+export function isFlowPlanReview(view) {
+  return (
+    view?.waitingReason?.kind === "review_artifact" &&
+    view?.reviewArtifact?.workerId === "design-flow"
+  );
+}
+
 /**
  * `review_artifact` 底栏 / 工作面文案。流程编排核对工作流计划，不是「验收通过」。
  * 须与 src/server/display-labels.ts `reviewComposerCopy` 保持一致。
@@ -131,8 +139,8 @@ export function reviewComposerCopy(workerId, opts = {}) {
       taskLabel: "开场",
       taskTitle: "选定开场白",
       hint: hasQuestions
-        ? "同意就选定此开场；要改就写意见。下方追问可选答。"
-        : "同意就选定此开场；要改就写意见。",
+        ? "同意就选定此开场；要改开场白就写意见。下方追问可选答。"
+        : "同意就选定此开场；要改开场白就写意见。",
       submitLabel: "按意见修改",
       acceptLabel: "选定此开场",
       placeholder: "修改意见…",

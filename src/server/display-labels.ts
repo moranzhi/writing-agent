@@ -123,6 +123,17 @@ export function formatAgentDisplayTitle(detail?: string): string {
   return "编排器";
 }
 
+/** 流程编排产物待确认：图上点节点即确认，不走验收双按钮 */
+export function isFlowPlanReview(view: {
+  waitingReason?: { kind?: string } | null;
+  reviewArtifact?: { workerId?: string | null } | null;
+} | null | undefined): boolean {
+  return (
+    view?.waitingReason?.kind === "review_artifact" &&
+    view?.reviewArtifact?.workerId === "design-flow"
+  );
+}
+
 /** 底栏双按钮 + 工作面 kicker：随 waiting 产物种类变化 */
 export type ReviewComposerCopy = {
   /** 底栏短芯片 */
@@ -179,8 +190,8 @@ export function reviewComposerCopy(
       taskLabel: "开场",
       taskTitle: "选定开场白",
       hint: hasQuestions
-        ? "同意就选定此开场；要改就写意见。下方追问可选答。"
-        : "同意就选定此开场；要改就写意见。",
+        ? "同意就选定此开场；要改开场白就写意见。下方追问可选答。"
+        : "同意就选定此开场；要改开场白就写意见。",
       submitLabel: "按意见修改",
       acceptLabel: "选定此开场",
       placeholder: "修改意见…",

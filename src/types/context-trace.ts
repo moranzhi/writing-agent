@@ -72,9 +72,16 @@ export function buildContextTrace(params: {
   };
 }
 
+/** 编排检查点：不随「只留最新 N 条」丢掉，否则开场白阶段无法回看/回退到流程编排 */
+export function isPinnedContextTraceCaller(caller: string | undefined): boolean {
+  const id = (caller ?? "").trim();
+  return id === "worker:design-flow" || id.endsWith(":design-flow");
+}
+
 /**
  * 只保留「带 contextTrace 的消息」中最新 keepLatest 条的全文；
  * 更早的消息删除 contextTrace 字段（消息本身保留）。
+ * design-flow 痕迹钉住不删（keep=0 仍全部清除）。
  */
 export function pruneContextTraces<T extends { contextTrace?: LlmContextTrace }>(
   messages: T[],
@@ -88,12 +95,15 @@ export function pruneContextTraces<T extends { contextTrace?: LlmContextTrace }>
       return rest as T;
     });
   }
-  const withTraceIdx: number[] = [];
+  const droppableIdx: number[] = [];
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i].contextTrace) withTraceIdx.push(i);
+    const trace = messages[i].contextTrace;
+    if (!trace) continue;
+    if (isPinnedContextTraceCaller(trace.caller)) continue;
+    droppableIdx.push(i);
   }
-  if (withTraceIdx.length <= keep) return messages;
-  const drop = new Set(withTraceIdx.slice(0, withTraceIdx.length - keep));
+  if (droppableIdx.length <= keep) return messages;
+  const drop = new Set(droppableIdx.slice(0, droppableIdx.length - keep));
   return messages.map((m, i) => {
     if (!drop.has(i) || !m.contextTrace) return m;
     const { contextTrace: _drop, ...rest } = m as T & { contextTrace?: LlmContextTrace };

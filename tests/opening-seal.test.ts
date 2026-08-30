@@ -4,6 +4,7 @@ import {
   isOpeningSealArtifact,
   parseOpeningSealPayload,
   openingVariablesToTableDoc,
+  reopenCreationFlowRaw,
 } from "../src/skills/opening-seal.js";
 
 const fragment = JSON.stringify({
@@ -70,5 +71,15 @@ describe("opening-seal", () => {
     });
     const closed = JSON.parse(closeCreationFlowRaw(raw)!);
     expect(closed.status).toBe("closed");
+  });
+
+  it("reopens a closed creation flow", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      status: "closed",
+      steps: [{ id: "开场白与开场变量", name: "开场白与开场变量", depends_on: [] }],
+    });
+    const opened = JSON.parse(reopenCreationFlowRaw(raw)!);
+    expect(opened.status).toBe("open");
   });
 });

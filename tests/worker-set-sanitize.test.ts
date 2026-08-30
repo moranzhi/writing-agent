@@ -9,6 +9,8 @@ import {
   parseWorkerResponseForTest,
   sanitizeWorkerSetOutputs,
 } from "../src/worker/executor.js";
+import { selectJsonPayload } from "../src/parse/json-doc.js";
+import { parseCreationFlow } from "../src/skills/creation-flow.js";
 
 describe("worker-set prose rejection", () => {
   it("does not YAML-crash on Chinese prose; returns clear parseError", () => {
@@ -155,6 +157,39 @@ describe("sanitizeWorkerSetOutputs", () => {
     expect(result.askUser?.[0]?.prompt).not.toContain("为贴近你要的质感");
   });
 
+  it("keeps nested aesthetics 正文 objects for specialty cards", () => {
+    const frag = {
+      schema: "context-fragment.v1",
+      技能: "美学纲领与交互范式",
+      brief: "孤立免疫",
+      正文: {
+        设定逻辑: {
+          参与方式: {
+            用户与user关系: {
+              结论: "完全代入",
+              完备度: "80%",
+              依据: "用户明确只有我不会被感染",
+            },
+          },
+        },
+        交互范式: { 前置配置: { 人称: "你" } },
+        美学纲领: { 体验内核: "特权与惊惶" },
+      },
+      自评: {
+        维度: [{ 名: "美学纲领", 分数: 8, 说明: "点题" }],
+      },
+    };
+    const result = parseWorkerResponseForTest(JSON.stringify(frag), [
+      "设计.美学纲领与交互范式",
+    ]);
+    const parsed = JSON.parse(result.outputs["设计.美学纲领与交互范式"]!);
+    const body = parsed.正文;
+    expect(typeof body.设定逻辑).toBe("object");
+    expect(body.设定逻辑.参与方式.用户与user关系.结论).toBe("完全代入");
+    expect(body.美学纲领.体验内核).toBe("特权与惊惶");
+    expect(parsed.自评.维度[0].分数).toBe(8);
+  });
+
   it("recovers a root-level context-fragment into the artifact tag", () => {
     const frag = {
       schema: "context-fragment.v1",
@@ -171,6 +206,46 @@ describe("sanitizeWorkerSetOutputs", () => {
     ]);
     expect(result.outputs["设计.美学纲领与交互范式"]).toContain("人人录我");
     expect(result.askUser).toBeUndefined();
+  });
+
+  it("accepts unprefixed outputs keys and JSON sitting after thinking prose", () => {
+    const frag = {
+      schema: "context-fragment.v1",
+      技能: "美学纲领与交互范式",
+      brief: "孤立免疫",
+      正文: { 美学纲领: { 体验内核: "人人录我" } },
+    };
+    const prefixed = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: { "美学纲领与交互范式": frag },
+        summary: "ok",
+      }),
+      ["设计.美学纲领与交互范式"],
+    );
+    expect(prefixed.outputs["设计.美学纲领与交互范式"]).toContain("人人录我");
+
+    const mixed = parseWorkerResponseForTest(
+      `We must output JSON. Example { "foo": 1 }.\n${JSON.stringify(frag)}`,
+      ["设计.美学纲领与交互范式"],
+    );
+    expect(mixed.outputs["设计.美学纲领与交互范式"]).toContain("人人录我");
+  });
+
+  it("uses product JSON in reasoning when content is a closing sentence", () => {
+    const frag = {
+      schema: "context-fragment.v1",
+      技能: "美学纲领与交互范式",
+      brief: "点题",
+      正文: { 美学纲领: { 体验内核: "内核" } },
+    };
+    const payload = selectJsonPayload(
+      "The artifact is ready.",
+      JSON.stringify(frag),
+    );
+    const result = parseWorkerResponseForTest(payload, [
+      "设计.美学纲领与交互范式",
+    ]);
+    expect(result.outputs["设计.美学纲领与交互范式"]).toContain("内核");
   });
 
   it("moves a fragment written to 创作.当前步骤 onto the artifact tag", () => {
@@ -255,6 +330,51 @@ describe("sanitizeWorkerSetOutputs", () => {
     const doc = JSON.parse(result.outputs["设计.上下文投影排序"]!);
     expect(doc.slots[0].ref).toBe("world-simulator");
     expect(doc.play_slots.gm).toBe(true);
+  });
+
+  it("keeps a root-level creation flow DAG on 设计.创作流程", () => {
+    const dag = {
+      brief: "单角代入",
+      status: "open",
+      steps: [
+        { id: "美学纲领与交互范式", name: "美学纲领与交互范式", depends_on: [] },
+        {
+          id: "生成规则",
+          name: "生成规则",
+          role: "prototype",
+          depends_on: ["美学纲领与交互范式"],
+        },
+      ],
+    };
+    const result = parseWorkerResponseForTest(JSON.stringify(dag), [
+      "设计.创作流程",
+    ]);
+    const parsed = parseCreationFlow(result.outputs["设计.创作流程"]);
+    expect(parsed?.brief).toBe("单角代入");
+    expect(parsed?.steps.map((s) => s.name)).toEqual([
+      "美学纲领与交互范式",
+      "生成规则",
+    ]);
+    expect(result.outputs["设计.创作流程"]).not.toContain("context-fragment");
+    expect(result.askUser).toBeUndefined();
+  });
+
+  it("keeps creation flow written under outputs bag", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        outputs: {
+          "设计.创作流程": {
+            status: "open",
+            steps: [{ name: "美学纲领与交互范式", depends_on: [] }],
+          },
+        },
+        summary: "流程 · 1 步 · open",
+      }),
+      ["设计.创作流程"],
+    );
+    expect(parseCreationFlow(result.outputs["设计.创作流程"])?.steps[0]?.name).toBe(
+      "美学纲领与交互范式",
+    );
   });
 
   it("keeps a whole-response truncated JSON as the artifact draft", () => {

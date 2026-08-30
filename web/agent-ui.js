@@ -1,4 +1,5 @@
 import { renderIntakePanel } from "./intake-ui.js";
+import { tryParseJsonDoc } from "./json-doc.js";
 import {
   getActiveQuestions,
   getModuleOpeningPrompt,
@@ -6,7 +7,7 @@ import {
   isQuestionCardDismissed,
   renderQuestionsCard,
 } from "./questions-ui.js";
-import { displayWorkerLabel, formatWorkerDisplayTitle, reviewComposerCopy } from "./display-labels.js";
+import { displayWorkerLabel, formatWorkerDisplayTitle, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
 import {
   PRESENT_SHELL_IDS,
   parsePresentDoc,
@@ -158,6 +159,89 @@ function renderMsgVariantBadge(msg) {
   return renderVariantNavHtml(msg);
 }
 
+function hideFlowNodeMenu() {
+  const menu = document.getElementById("flow-node-menu");
+  if (menu) menu.hidden = true;
+  flowMenuState.stepId = null;
+  flowMenuState.node = null;
+}
+
+const flowMenuState = {
+  stepId: null,
+  name: "",
+  hasArtifact: false,
+  canReenter: false,
+  node: null,
+  handlers: null,
+};
+
+function placeMenu(menu, x, y) {
+  menu.hidden = false;
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
+  }
+}
+
+function showFlowNodeMenu(node, x, y, handlers) {
+  const menu = document.getElementById("flow-node-menu");
+  if (!menu || !node) return;
+  hideMsgMenu();
+  const stepId = node.getAttribute("data-flow-done");
+  if (!stepId) return;
+  flowMenuState.stepId = stepId;
+  flowMenuState.name = node.getAttribute("data-flow-done-name") || "";
+  flowMenuState.hasArtifact = node.getAttribute("data-has-artifact") === "1";
+  flowMenuState.canReenter = node.getAttribute("data-can-reenter") === "1";
+  flowMenuState.node = node;
+  flowMenuState.handlers = handlers;
+  const viewBtn = document.getElementById("flow-menu-view");
+  const reenterBtn = document.getElementById("flow-menu-reenter");
+  if (viewBtn) {
+    viewBtn.disabled = !flowMenuState.hasArtifact;
+    viewBtn.title = flowMenuState.hasArtifact ? "" : "这一步还没有产物";
+  }
+  if (reenterBtn) {
+    reenterBtn.toggleAttribute("hidden", !flowMenuState.canReenter);
+  }
+  placeMenu(menu, x, y);
+}
+
+function wireFlowNodeMenu() {
+  const menu = document.getElementById("flow-node-menu");
+  if (!menu || menu.dataset.wired) return;
+  menu.dataset.wired = "1";
+  menu.addEventListener("click", (e) => {
+    const action = e.target.closest("[data-flow-menu-action]")?.getAttribute("data-flow-menu-action");
+    const stepId = flowMenuState.stepId;
+    const name = flowMenuState.name;
+    const handlers = flowMenuState.handlers;
+    hideFlowNodeMenu();
+    if (!stepId || !action) return;
+    if (action === "view") handlers?.onViewStepArtifact?.(stepId, name);
+    if (action === "reenter") handlers?.onReenterCreationStep?.(stepId);
+  });
+}
+
+export function fillStepArtifactDialog(params) {
+  const dlg = document.getElementById("dialog-step-artifact");
+  const title = document.getElementById("step-artifact-title");
+  const body = document.getElementById("step-artifact-body");
+  if (!dlg || !title || !body) return;
+  title.textContent = params.name ? `产物 · ${params.name}` : "产物";
+  const content = String(params.content || "").trim();
+  body.innerHTML = content
+    ? formatArtifactBodyHtml(content, { defaultOpen: true, flat: true, hideAskSidecar: true })
+    : `<p class="empty-sm">这一步还没有产物。</p>`;
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.setAttribute("open", "");
+}
+
 function hideMsgMenu() {
   const menu = document.getElementById("msg-action-menu");
   if (menu) menu.hidden = true;
@@ -182,6 +266,7 @@ const msgMenuState = {
 function showMsgMenu(card, x, y) {
   const menu = document.getElementById("msg-action-menu");
   if (!menu || !card) return;
+  hideFlowNodeMenu();
   const pack = card.closest(".coord-pack");
   const rollbackHost = pack || card;
   // 上下文按单次请求（这条消息）区分，不能回落到整包里的另一条
@@ -623,6 +708,12 @@ function wireRailChrome() {
   if (toggle && !toggle.dataset.wired) {
     toggle.dataset.wired = "1";
     toggle.addEventListener("click", () => {
+      const inBook = document.body.dataset.navLevel === "book";
+      const collapsed = document.body.classList.contains("rail-collapsed");
+      if (inBook && !collapsed) {
+        window.dispatchEvent(new CustomEvent("wa:nav-root"));
+        return;
+      }
       if (document.body.dataset.railCanCollapse !== "1") {
         railUserExpanded = true;
       } else {
@@ -643,7 +734,11 @@ function hasStartedCreation(view) {
 }
 
 function syncRailCollapse(view) {
-  if (view) {
+  const inBook = document.body.dataset.navLevel === "book";
+  if (!inBook) {
+    document.body.dataset.railCanCollapse = "0";
+    railUserExpanded = true;
+  } else if (view) {
     document.body.dataset.railCanCollapse = hasStartedCreation(view) ? "1" : "0";
   }
   const canCollapse = document.body.dataset.railCanCollapse === "1";
@@ -651,8 +746,15 @@ function syncRailCollapse(view) {
   document.body.classList.toggle("rail-collapsed", collapsed);
   const toggle = document.getElementById("btn-rail-toggle");
   if (toggle) {
-    toggle.title = collapsed ? "展开侧栏" : "收起侧栏";
-    toggle.textContent = collapsed ? "›" : "‹";
+    if (inBook && !collapsed) {
+      toggle.title = "返回作品目录";
+      toggle.setAttribute("aria-label", "返回作品目录");
+      toggle.textContent = "‹";
+    } else {
+      toggle.title = collapsed ? "展开侧栏" : "收起侧栏";
+      toggle.setAttribute("aria-label", collapsed ? "展开侧栏" : "收起侧栏");
+      toggle.textContent = collapsed ? "›" : "‹";
+    }
   }
 }
 
@@ -668,6 +770,7 @@ export function resetRailChrome() {
     rail.dataset.collapsed = "1";
   }
   setRailTab("books");
+  wireRailChrome();
 }
 
 function hasUserMessages(view) {
@@ -721,6 +824,12 @@ function shouldShowInFeed(msg, view) {
 }
 
 function maybeSyncRail(view) {
+  if (document.body.dataset.navLevel !== "book") {
+    railUserExpanded = true;
+    document.body.dataset.railCanCollapse = "0";
+    syncRailCollapse(view);
+    return;
+  }
   const started = hasStartedCreation(view);
   const wasCollapsible = document.body.dataset.railCanCollapse === "1";
   // 刚进入创作：默认缩进；未开写：展开并停在作品
@@ -1212,14 +1321,6 @@ const ARTIFACT_TITLE_KEYS = [
 
 const ARTIFACT_SKIP_KEYS = new Set(["schema", "schema_version"]);
 
-/** 剥 markdown 代码围栏，便于从验收正文里取出 JSON */
-function stripCodeFences(text) {
-  let t = String(text || "").trim();
-  t = t.replace(/^```(?:json|yaml|yml)?\s*\n?/i, "");
-  t = t.replace(/\n?```\s*$/i, "");
-  return t.trim();
-}
-
 /** 验收正文常为 `## tag\\n\\n{json}` 多段拼接 */
 function splitTaggedArtifactSections(text) {
   const trimmed = String(text || "").trim();
@@ -1235,74 +1336,6 @@ function splitTaggedArtifactSections(text) {
     const end = i + 1 < hits.length ? hits[i + 1].index : trimmed.length;
     return { title: h.title, content: trimmed.slice(h.headerEnd, end).trim() };
   });
-}
-
-/** 轻度修复模型常出的尾逗号，便于友好渲染而不是整墙原文 */
-function softenJsonText(s) {
-  return String(s || "")
-    .replace(/^\uFEFF/, "")
-    .replace(/,\s*([\]}])/g, "$1")
-    .replace(/\u2026/g, "")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
-}
-
-function tryParseJsonDoc(text) {
-  const tryParse = (s) => {
-    try {
-      return JSON.parse(s);
-    } catch {
-      return null;
-    }
-  };
-  const cleaned = softenJsonText(stripCodeFences(text));
-  let parsed = tryParse(cleaned);
-  if (parsed != null) return parsed;
-  // 双重编码：整段是 JSON 字符串
-  if (
-    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
-    (cleaned.startsWith("'") && cleaned.endsWith("'"))
-  ) {
-    const inner = tryParse(cleaned);
-    if (typeof inner === "string") {
-      parsed = tryParse(softenJsonText(inner));
-      if (parsed != null) return parsed;
-    }
-  }
-  const objStart = cleaned.indexOf("{");
-  const objEnd = cleaned.lastIndexOf("}");
-  if (objStart >= 0 && objEnd > objStart) {
-    parsed = tryParse(cleaned.slice(objStart, objEnd + 1));
-    if (parsed != null) return parsed;
-    // 截断 JSON：从第一个 { 起尽量补全括号后再试
-    parsed = tryParse(repairTruncatedJsonObject(cleaned.slice(objStart)));
-    if (parsed != null) return parsed;
-  }
-  const arrStart = cleaned.indexOf("[");
-  const arrEnd = cleaned.lastIndexOf("]");
-  if (arrStart >= 0 && arrEnd > arrStart) {
-    parsed = tryParse(cleaned.slice(arrStart, arrEnd + 1));
-    if (parsed != null) return parsed;
-  }
-  return null;
-}
-
-/** 截断的 {… 补齐引号/括号，便于验收卡仍能出 mosaic */
-function repairTruncatedJsonObject(slice) {
-  let s = String(slice || "").trim();
-  if (!s.startsWith("{")) return s;
-  // 去掉末尾半截键值
-  s = s.replace(/,\s*"[^"]*$/u, "");
-  s = s.replace(/,\s*$/u, "");
-  const opens = (s.match(/\{/g) || []).length;
-  const closes = (s.match(/\}/g) || []).length;
-  const openBrackets = (s.match(/\[/g) || []).length;
-  const closeBrackets = (s.match(/\]/g) || []).length;
-  // 未闭合字符串：奇数个未转义引号
-  const quoteCount = (s.match(/(?<!\\)"/g) || []).length;
-  if (quoteCount % 2 === 1) s += '"';
-  if (openBrackets > closeBrackets) s += "]".repeat(openBrackets - closeBrackets);
-  if (opens > closes) s += "}".repeat(opens - closes);
-  return s;
 }
 
 const FRAGMENT_HEADER_KEYS = new Set([
@@ -1465,10 +1498,14 @@ function renderArtifactCompactCard(doc, tagTitle, rawSlice, opts = {}) {
   // 进度指针不是产物：验收区完全隐藏
   if (isMetaPointerTag(tagTitle)) return "";
 
-  const normalized =
+  const prepared =
     doc && typeof doc === "object" && !Array.isArray(doc)
-      ? normalizeContextFragmentDoc(doc)
+      ? prepareArtifactDocForRender(doc)
       : doc;
+  const normalized =
+    prepared && typeof prepared === "object" && !Array.isArray(prepared)
+      ? normalizeContextFragmentDoc(prepared)
+      : prepared;
   const meta = summarizeArtifactDoc(normalized, tagTitle);
   const full =
     renderKnownArtifactHtml(normalized, {
@@ -1602,28 +1639,34 @@ function renderKnownArtifactHtml(doc, opts = {}) {
   if (Array.isArray(doc)) {
     return `<div class="artifact-friendly">${renderStructuredValueHtml(doc, 0)}</div>`;
   }
-  const schema = doc.schema;
-  const presentView = parsePresentDoc(doc);
+  const prepared = prepareArtifactDocForRender(doc);
+  const schema = prepared.schema;
+  const presentView = parsePresentDoc(prepared);
   if (presentView) {
     return renderPresentShellHtml(presentView.packet, esc, {
       tweaks: opts.shellTweaks,
     });
   }
-  if (schema === "settlement.v1" || isSettlementLike(doc)) {
-    return renderSettlementSectionsHtml(doc);
+  if (schema === "settlement.v1" || isSettlementLike(prepared)) {
+    return renderSettlementSectionsHtml(prepared);
   }
-  if (schema === "context-fragment.v1" || isContextFragmentLike(doc)) {
-    return renderContextFragmentHtml(doc, opts);
+  if (
+    schema === "context-fragment.v1" ||
+    schema === "artifact.flat.v1" ||
+    isContextFragmentLike(prepared) ||
+    isFlatArtifactDoc(doc)
+  ) {
+    return renderContextFragmentHtml(prepared, opts);
   }
-  if (schema === "context-order.v1" || Array.isArray(doc.slots) || Array.isArray(doc.agents)) {
-    const orderHtml = renderContextOrderHtml(doc);
+  if (schema === "context-order.v1" || Array.isArray(prepared.slots) || Array.isArray(prepared.agents)) {
+    const orderHtml = renderContextOrderHtml(prepared);
     if (orderHtml) return orderHtml;
   }
-  if (Array.isArray(doc.真值) || Array.isArray(doc.side_effects) || doc.维护语句约定) {
-    return renderVariableDesignHtml(doc);
+  if (Array.isArray(prepared.真值) || Array.isArray(prepared.side_effects) || prepared.维护语句约定) {
+    return renderVariableDesignHtml(prepared);
   }
-  if (doc.play_slots && typeof doc.play_slots === "object") {
-    return renderPlaySlotsHtml(doc);
+  if (prepared.play_slots && typeof prepared.play_slots === "object") {
+    return renderPlaySlotsHtml(prepared);
   }
   return null;
 }
@@ -1669,6 +1712,7 @@ function renderPlaySlotsHtml(doc) {
 function isContextFragmentLike(doc) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
   if (doc.schema === "context-fragment.v1") return true;
+  if (isFlatArtifactDoc(doc)) return true;
   return (
     typeof doc.brief === "string" &&
     (doc.正文 != null ||
@@ -1678,8 +1722,124 @@ function isContextFragmentLike(doc) {
   );
 }
 
+/** artifact.flat.v1 或带 sections[] 的扁形 wire */
+function isFlatArtifactDoc(doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  if (doc.schema === "artifact.flat.v1") return true;
+  return Array.isArray(doc.sections) && (doc.skill != null || doc.技能 != null || doc.brief != null);
+}
+
+/** section 文本：JSON 对象/数组还原，避免专用卡吃到 stringify 整段 */
+function coerceSectionTextValue(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return "";
+  if (
+    (raw.startsWith("{") && raw.endsWith("}")) ||
+    (raw.startsWith("[") && raw.endsWith("]"))
+  ) {
+    const parsed = tryParseJsonDoc(raw);
+    if (parsed != null && typeof parsed === "object") return parsed;
+  }
+  return String(text ?? "");
+}
+
+/** 扁形 → context-fragment 外壳，走现有专用卡 */
+function flatArtifactDocToFragment(doc) {
+  if (!isFlatArtifactDoc(doc)) return null;
+  const 正文 = {};
+  for (const s of doc.sections || []) {
+    if (!s || typeof s !== "object") continue;
+    const key = String(s.id || s.title || "").trim();
+    if (!key) continue;
+    正文[key] = coerceSectionTextValue(s.text);
+  }
+  const questions = Array.isArray(doc.questions) ? doc.questions : [];
+  const openQs = Array.isArray(doc.open_questions)
+    ? doc.open_questions
+    : Array.isArray(doc.开放问题)
+      ? doc.开放问题
+      : [];
+  const stability = doc.stability || doc.稳变 || "";
+  return {
+    schema: "context-fragment.v1",
+    技能: doc.skill || doc.技能 || "",
+    brief: doc.brief || "",
+    mount: Array.isArray(doc.mount) ? doc.mount : [],
+    ...(stability ? { 稳变: stability } : {}),
+    正文,
+    开放问题: openQs,
+    追问: {
+      导语: "",
+      题目: questions.map((q) => ({
+        问: q?.prompt ?? q?.问 ?? "",
+        建议选项: Array.isArray(q?.options)
+          ? q.options
+          : Array.isArray(q?.建议选项)
+            ? q.建议选项
+            : [],
+      })),
+    },
+    ...(doc.summary ? { summary: doc.summary } : {}),
+  };
+}
+
+/** 展示前：扁形转 fragment；正文里 JSON 字符串还原 */
+function prepareArtifactDocForRender(doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return doc;
+  let next = isFlatArtifactDoc(doc) ? flatArtifactDocToFragment(doc) : { ...doc };
+  if (!next) next = { ...doc };
+  next = normalizeContextFragmentDoc(next);
+  const body = next.正文 ?? next.body;
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const fixed = {};
+    for (const [k, v] of Object.entries(body)) {
+      fixed[k] = typeof v === "string" ? coerceSectionTextValue(v) : v;
+    }
+    next = { ...next, 正文: fixed };
+  }
+  return next;
+}
+
+/**
+ * 美学正文对齐：摊平字段收回三柱；JSON 字符串还原；体验内核/呈现要点归入美学纲领。
+ */
+function normalizeAestheticsBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const out = { ...body };
+
+  const revive = (v) => (typeof v === "string" ? coerceSectionTextValue(v) : v);
+  for (const key of ["美学纲领", "交互范式", "设定逻辑"]) {
+    if (out[key] != null) out[key] = revive(out[key]);
+  }
+
+  const topKernel = out.体验内核;
+  const topPresent = out.呈现要点;
+  if (topKernel != null || topPresent != null) {
+    let manifesto = out.美学纲领;
+    if (typeof manifesto === "string" && manifesto.trim()) {
+      manifesto = { 体验内核: manifesto };
+    } else if (!manifesto || typeof manifesto !== "object" || Array.isArray(manifesto)) {
+      manifesto = {};
+    } else {
+      manifesto = { ...manifesto };
+    }
+    if (topKernel != null && manifesto.体验内核 == null) {
+      manifesto.体验内核 = revive(topKernel);
+    }
+    if (topPresent != null && manifesto.呈现要点 == null) {
+      manifesto.呈现要点 = revive(topPresent);
+    }
+    out.美学纲领 = manifesto;
+    delete out.体验内核;
+    delete out.呈现要点;
+  }
+
+  // 美学纲领若仍是散文字符串，保持；渲染器当体验内核
+  return out;
+}
+
 function renderContextFragmentHtml(doc, opts = {}) {
-  const frag = normalizeContextFragmentDoc(doc);
+  const frag = prepareArtifactDocForRender(doc);
   const parts = [];
   // 紧凑卡外层已展示 brief/挂载，展开内不再重复头区
   if (!opts.embed) {
@@ -1897,44 +2057,28 @@ function renderSpecialtyBodyHtml(body, skill) {
     body.设定逻辑 != null ||
     body.交互范式 != null ||
     body.美学纲领 != null ||
+    body.体验内核 != null ||
+    body.呈现要点 != null ||
     skillName.includes("美学");
   if (!looksAesthetics) return "";
 
-  // 左右约定（验收卡通用意向）：
-  //   左 = 最终会插入的游玩契约（美学纲领 + 交互范式）
-  //   右 = 评估/诊断（设定逻辑里的完备度、待探、区域化等）
-  // 注意：当前黑板仍存整份正文；full 投影时右栏也会进模型——布局先对齐「该审什么」。
+  // 左契约 / 右诊断；验收阅读层：无工程说明条、无常驻 hint
+  body = normalizeAestheticsBody(body);
   const productKeys = [
-    {
-      key: "美学纲领",
-      hint: "体验内核与呈现要点",
-      missing: "（未写美学纲领）",
-    },
-    {
-      key: "交互范式",
-      hint: "人称、描写权限、后果与等待",
-      missing: "（未写交互范式）",
-    },
+    { key: "美学纲领", missing: "（未写）" },
+    { key: "交互范式", missing: "（未写）" },
   ];
-  const evalKeys = [
-    {
-      key: "设定逻辑",
-      hint: "变造定位 + 参与/内容维度诊断（完备度、依据、待探）",
-      missing: "（未写设定逻辑）",
-    },
-  ];
+  const evalKeys = [{ key: "设定逻辑", missing: "（未写）" }];
   const used = new Set([...productKeys, ...evalKeys].map((b) => b.key));
 
   const renderBlock = (b, cls) => {
-    const inner =
-      body[b.key] != null
-        ? renderAestheticsNodeHtml(body[b.key], b.key, 0)
-        : `<p class="ws-muted">${esc(b.missing)}</p>`;
-    const ok = body[b.key] != null;
+    const ok = body[b.key] != null && body[b.key] !== "";
+    const inner = ok
+      ? renderAestheticsNodeHtml(body[b.key], b.key, 0)
+      : `<p class="ws-muted">${esc(b.missing)}</p>`;
     return `<section class="af-block ${cls}" data-af-block="${esc(b.key)}">
       <header class="af-block-head">
         <h3 class="af-block-title">${esc(b.key)}${ok ? "" : `<span class="af-block-miss">缺</span>`}</h3>
-        <p class="af-block-hint">${esc(b.hint)}</p>
       </header>
       <div class="af-block-body">${inner}</div>
     </section>`;
@@ -1948,22 +2092,17 @@ function renderSpecialtyBodyHtml(body, skill) {
       ([k, v]) =>
         `<section class="af-block af-block--extra" data-af-block="${esc(k)}">
       <header class="af-block-head"><h3 class="af-block-title">${esc(k)}</h3></header>
-      <div class="af-block-body">${renderStructuredValueHtml(v, 0)}</div>
+      <div class="af-block-body">${renderAestheticsNodeHtml(v, k, 0)}</div>
     </section>`,
     )
     .join("");
 
-  return `<div class="af-split">
-    <div class="af-split-banner" role="note">
-      <span><b>左</b>游玩契约（插入意向）</span>
-      <span><b>右</b>设定诊断 / 评估</span>
-      <span class="af-split-banner-note">存盘仍是整份正文；默认 full 时两侧都会注入</span>
-    </div>
+  return `<div class="af-split af-split--aesthetics">
     <div class="af-split-grid">
       <div class="af-split-product" aria-label="游玩契约">
-        ${productHtml || `<p class="ws-muted">（契约块为空）</p>`}
+        ${productHtml || `<p class="ws-muted">（契约为空）</p>`}
       </div>
-      <aside class="af-split-eval" aria-label="评估诊断">
+      <aside class="af-split-eval" aria-label="设定诊断">
         ${evalHtml}
         ${extra}
       </aside>
@@ -2206,14 +2345,23 @@ function renderGenerationRulesBodyHtml(body) {
   return parts.length ? `<div class="skill-view skill-view-generation-rules">${parts.join("")}</div>` : "";
 }
 
+function generationOnceMode(rule) {
+  if (!rule || typeof rule !== "object") return "";
+  const once = rule.一次生成;
+  if (once && typeof once === "object") return String(once.模式 || "").trim();
+  return typeof once === "string" ? once.trim() : "";
+}
+
 function renderOneGenerationRuleCard(rule, index) {
   if (!rule || typeof rule !== "object") return "";
   const title = rule.对象 || rule.rule_id || `规则 ${index + 1}`;
+  const onceMode = generationOnceMode(rule);
   const head = `<header class="skill-rule-head">
     <div class="skill-rule-title">${esc(String(title))}</div>
     ${skillChipRow([
       rule.rule_id && `id · ${rule.rule_id}`,
       rule.生命周期 && String(rule.生命周期),
+      onceMode && `一次 · ${onceMode}`,
     ])}
   </header>`;
 
@@ -2226,6 +2374,13 @@ function renderOneGenerationRuleCard(rule, index) {
   }
   if (rule.数量 != null) {
     blocks.push(`<div class="skill-sub"><div class="skill-sub-title">数量</div>${skillKvBlock(typeof rule.数量 === "object" ? rule.数量 : { 值: rule.数量 })}</div>`);
+  }
+  if (rule.一次生成 != null) {
+    blocks.push(
+      `<div class="skill-sub"><div class="skill-sub-title">一次生成</div>${skillKvBlock(
+        typeof rule.一次生成 === "object" ? rule.一次生成 : { 模式: rule.一次生成 },
+      )}</div>`,
+    );
   }
   if (rule.生成与描写 && typeof rule.生成与描写 === "object") {
     const g = rule.生成与描写;
@@ -2471,6 +2626,11 @@ function renderMechanismBodyHtml(body) {
   return parts.length ? `<div class="skill-view skill-view-mechanism">${parts.join("")}</div>` : "";
 }
 
+function isIdleProbeText(v) {
+  const s = String(v ?? "").trim();
+  return !s || /^(无|没有|暂无|未定|—|-|n\/a|none)$/i.test(s);
+}
+
 /**
  * 完备度等：0–100 百分制（正文诊断块仍用 %）。
  * 自评维度请用 parseTenScore。
@@ -2595,9 +2755,11 @@ function renderDiagnosticDimHtml(title, value) {
   const skipKey = (k) =>
     isPctFieldKey(k) || /^(完备度|完成度|分数|覆盖度)$/.test(String(k).trim());
   const preferred = ["结论", "依据", "已知", "待探", "焦点位置", "满足来源", "内容维度", "核心感觉"];
-  const keys = Object.keys(value).filter(
-    (k) => !skipKey(k) && value[k] != null && value[k] !== "",
-  );
+  const keys = Object.keys(value).filter((k) => {
+    if (skipKey(k) || value[k] == null || value[k] === "") return false;
+    if (k === "待探" && isIdleProbeText(value[k])) return false;
+    return true;
+  });
   keys.sort((a, b) => {
     const ia = preferred.indexOf(a);
     const ib = preferred.indexOf(b);
@@ -2613,7 +2775,8 @@ function renderDiagnosticDimHtml(title, value) {
           : renderAestheticsNodeHtml(v, k, 2)
       }</div></div>`;
     }
-    return `<div class="af-dim-row"><span class="af-dim-k">${esc(k)}</span><span class="af-dim-v">${esc(String(v))}</span></div>`;
+    const pending = k === "待探";
+    return `<div class="af-dim-row${pending ? " is-pending" : ""}"><span class="af-dim-k">${esc(k)}</span><span class="af-dim-v">${esc(String(v))}</span></div>`;
   });
   return `<section class="af-dim">${head}${rows.length ? `<div class="af-dim-body">${rows.join("")}</div>` : ""}</section>`;
 }
@@ -3206,17 +3369,104 @@ function highlightJson(pretty) {
     .join("\n");
 }
 
-function renderCreationFlowView(flowView) {
+function flowParamStr(params, key) {
+  const v = params?.[key];
+  if (v == null) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
+function flowSuggestionRemainder(suggestion, title) {
+  const text = typeof suggestion === "string" ? suggestion.trim() : "";
+  const head = typeof title === "string" ? title.trim() : "";
+  if (!text) return "";
+  if (!head) return text;
+  if (text === head) return "";
+  const prefixes = [`${head}：`, `${head}:`, `${head} `];
+  for (const p of prefixes) {
+    if (text.startsWith(p)) return text.slice(p.length).trim();
+  }
+  return text;
+}
+
+function flowInstanceTitle(s) {
+  if (s.title) return s.title;
+  const target = flowParamStr(s.params, "target");
+  if (target) return target;
+  const batch = flowParamStr(s.params, "batch_goal");
+  if (batch) return batch.length > 28 ? `${batch.slice(0, 27)}…` : batch;
+  const ruleId = flowParamStr(s.params, "rule_id");
+  if (ruleId) return ruleId;
+  if (s.id && s.id !== s.name) {
+    const stripped = s.id.startsWith(s.name)
+      ? s.id.slice(s.name.length).replace(/^[\s#·]+/, "")
+      : "";
+    if (stripped && !/^\d+$/.test(stripped)) return stripped;
+  }
+  return s.name;
+}
+
+/** 具体实例 → 产出它的那条生成规则（文案 + id，供从属标记 / 连线） */
+function flowInstanceOrigin(s, steps) {
+  if (s.name !== "具体实例") return null;
+  const list = Array.isArray(steps) ? steps : [];
+  const byId = new Map(list.map((x) => [x.id, x]));
+  const ruleId = flowParamStr(s.params, "rule_id");
+  let rule = null;
+  for (const dep of s.depends_on || []) {
+    const st = byId.get(dep);
+    if (st?.name === "生成规则") {
+      rule = st;
+      break;
+    }
+  }
+  if (!rule && ruleId) {
+    rule =
+      list.find(
+        (x) =>
+          x.name === "生成规则" &&
+          x.role === "instance" &&
+          flowParamStr(x.params, "rule_id") === ruleId,
+      ) || null;
+  }
+  if (!rule && !ruleId) return null;
+  const label = rule
+    ? rule.title ||
+      flowParamStr(rule.params, "target") ||
+      flowParamStr(rule.params, "rule_id") ||
+      rule.id
+    : ruleId;
+  return { label, fromId: rule?.id || "" };
+}
+
+function groupFlowFamilies(steps) {
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const childrenOf = new Map();
+  const nested = new Set();
+  for (const s of steps) {
+    if (s.role !== "instance" || !s.from || s.mode === "revise") continue;
+    const proto = byId.get(s.from);
+    if (!proto || proto.role !== "prototype") continue;
+    nested.add(s.id);
+    if (!childrenOf.has(s.from)) childrenOf.set(s.from, []);
+    childrenOf.get(s.from).push(s);
+  }
+  return { childrenOf, nested };
+}
+
+function renderCreationFlowView(flowView, opts = {}) {
   if (!flowView) return "";
   if (flowView.parseError) {
     return `<div class="review-parse-error" role="alert">
       <div class="review-parse-error-title">流程无法解析</div>
       <p>${esc(flowView.parseError)}</p>
-      <p class="review-parse-error-hint">需要 JSON：steps 数组，每步含 name（与可选 id）、depends_on、可选 params；可含 status=open|closed。回头修改用 mode=revise 与 revises。</p>
+      <p class="review-parse-error-hint">需要 JSON：steps 数组，每步含 name（与可选 id）、depends_on、可选 params；可含 status=open|closed。</p>
     </div>`;
   }
   if (!flowView.steps?.length) return "";
 
+  const interactive = Boolean(opts.interactive);
   const brief = flowView.brief
     ? `<p class="flow-brief">${esc(flowView.brief)}</p>`
     : "";
@@ -3229,52 +3479,351 @@ function renderCreationFlowView(flowView) {
   const statusHtml = statusLabel
     ? `<p class="flow-status">${esc(statusLabel)}</p>`
     : "";
-  const rows = flowView.steps
-    .map((s) => {
-      const deps =
-        s.depends_on?.length > 0
-          ? s.depends_on.map((d) => esc(d)).join("、")
-          : "无";
-      const occ =
-        s.mode === "revise"
-          ? `<span class="flow-occ flow-occ-revise">回头修改</span>`
-          : s.occurrence && s.occurrence > 1
-          ? `<span class="flow-occ">第 ${esc(String(s.occurrence))} 次</span>`
-          : s.repeatable
-            ? `<span class="flow-occ">可反复</span>`
-            : "";
-      const nameLabel =
-        s.id && s.id !== s.name
-          ? `${esc(s.name)} <span class="flow-id">(${esc(s.id)})</span>`
-          : esc(s.name);
-      const paramsText = formatFlowParams(s.params);
-      const paramsMissing =
-        s.paramsMissing?.length > 0
-          ? `<span class="flow-params-missing">缺参：${esc(s.paramsMissing.join("、"))}</span>`
-          : "";
-      const paramsHtml = paramsText
-        ? `<span class="flow-params">${esc(paramsText)}</span>`
-        : "";
-      const runState = s.runState === "done" || s.runState === "current" ? s.runState : "pending";
-      const runLabel =
-        runState === "done" ? "已执行" : runState === "current" ? "将要执行" : "未执行";
-      const currentAttr = runState === "current" ? ' aria-current="step"' : "";
-      return `<li class="flow-step" data-run="${esc(runState)}"${currentAttr}>
-        <span class="flow-order">${esc(String(s.order))}</span>
-        <span class="flow-run">${esc(runLabel)}</span>
-        <span class="flow-name">${nameLabel}${occ}</span>
-        ${paramsHtml}
-        ${paramsMissing}
-        <span class="flow-deps">依赖：${deps}</span>
-      </li>`;
+
+  const allSteps = flowView.steps;
+  const { childrenOf, nested } = groupFlowFamilies(allSteps);
+  const layers = new Map();
+  for (const s of allSteps) {
+    if (nested.has(s.id)) continue;
+    const layer = Number.isFinite(s.layer) ? s.layer : 0;
+    if (!layers.has(layer)) layers.set(layer, []);
+    layers.get(layer).push(s);
+  }
+  const layerKeys = [...layers.keys()].sort((a, b) => a - b);
+  const rows = layerKeys
+    .map((layer) => {
+      const nodes = layers
+        .get(layer)
+        .map((s) => {
+          if (s.role === "prototype") {
+            return renderFlowFamily(
+              s,
+              childrenOf.get(s.id) || [],
+              interactive,
+              allSteps,
+            );
+          }
+          return renderFlowGraphNode(s, interactive, { allSteps });
+        })
+        .join("");
+      return `<div class="flow-dag-row" data-layer="${esc(String(layer))}">
+        <div class="flow-dag-row-label">第 ${esc(String(layer + 1))} 层</div>
+        <div class="flow-dag-row-nodes">${nodes}</div>
+      </div>`;
     })
     .join("");
 
-  return `<section class="ws-section ws-creation-flow">
+  const suggestions = Array.isArray(flowView.suggestions)
+    ? flowView.suggestions
+    : [];
+  const suggestionHtml = suggestions.length
+    ? `<div class="flow-suggestions" aria-label="建议追加的原型">
+        <div class="flow-suggestions-title">建议追加的原型</div>
+        ${suggestions
+          .map(
+            (sg) =>
+              `<div class="flow-suggestion"><span class="flow-suggestion-name">${esc(sg.name)}</span><span class="flow-suggestion-text">${esc(sg.suggestion)}</span></div>`,
+          )
+          .join("")}
+      </div>`
+    : "";
+
+  return `<section class="ws-section ws-creation-flow flow-graph${
+    interactive ? " flow-graph--interactive" : ""
+  }">
     ${brief}
     ${statusHtml}
-    <ol class="flow-steps">${rows}</ol>
+    <div class="flow-dag" data-flow-dag>
+      <svg class="flow-dag-edges" aria-hidden="true"></svg>
+      <div class="flow-dag-rows">${rows}</div>
+    </div>
+    ${suggestionHtml}
   </section>`;
+}
+
+function renderFlowFamily(proto, children, interactive, allSteps) {
+  const head = renderFlowGraphNode(proto, interactive, {
+    allSteps,
+    spawnCount: children.length,
+  });
+  if (!children.length) return head;
+  const spawns = children
+    .map(
+      (c) =>
+        `<li class="flow-family-spawn">${renderFlowGraphNode(c, interactive, {
+          compact: true,
+          allSteps,
+        })}</li>`,
+    )
+    .join("");
+  return `<div class="flow-family" data-flow-family="${escAttr(proto.id)}">
+    ${head}
+    <ul class="flow-family-spawns" aria-label="${esc(proto.name)}的产物">${spawns}</ul>
+  </div>`;
+}
+
+function renderFlowGraphNode(s, interactive, opts = {}) {
+  const compact = Boolean(opts.compact);
+  const allSteps = opts.allSteps || [];
+  const spawnCount = Number(opts.spawnCount) || 0;
+  const isProto = s.role === "prototype";
+  const origin =
+    s.role === "instance" && s.name === "具体实例"
+      ? flowInstanceOrigin(s, allSteps)
+      : null;
+  const occ = compact
+    ? ""
+    : s.mode === "revise"
+      ? `<span class="flow-occ flow-occ-revise">回头修改</span>`
+      : isProto
+        ? `<span class="flow-occ flow-occ-prototype">原型</span>`
+        : s.occurrence && s.occurrence > 1
+          ? `<span class="flow-occ">第 ${esc(String(s.occurrence))} 次</span>`
+          : s.role === "instance"
+            ? `<span class="flow-occ">实例</span>`
+            : s.closer
+              ? `<span class="flow-occ">收口</span>`
+              : "";
+  const nameLabel = compact
+    ? esc(flowInstanceTitle(s))
+    : s.id && s.id !== s.name
+      ? `${esc(s.name)} <span class="flow-id">(${esc(s.id)})</span>`
+      : esc(s.name);
+  const titleHtml =
+    !compact && s.title
+      ? `<span class="flow-title">${esc(s.title)}</span>`
+      : "";
+  const suggestionText = flowSuggestionRemainder(s.suggestion, s.title);
+  const usedParamKeys = compact
+    ? [
+        "target",
+        s.name === "具体实例" ? "rule_id" : "",
+        s.name === "具体实例" ? "batch_goal" : "",
+      ].filter(Boolean)
+    : [];
+  const paramsText = !isProto
+    ? compact
+      ? formatFlowParamsCompact(s.params, usedParamKeys)
+      : formatFlowParams(s.params)
+    : "";
+  const paramsMissing =
+    s.paramsMissing?.length > 0
+      ? `<span class="flow-params-missing">缺参：${esc(s.paramsMissing.join("、"))}</span>`
+      : "";
+  const paramsHtml = paramsText
+    ? `<span class="flow-params">${esc(paramsText)}</span>`
+    : "";
+  const suggestionHtml =
+    isProto && suggestionText
+      ? `<span class="flow-suggestion-inline">${esc(suggestionText)}</span>`
+      : "";
+  const originHtml =
+    origin?.label
+      ? `<span class="flow-origin">来自 <span class="flow-origin-rule">${esc(origin.label)}</span></span>`
+      : "";
+  const spawnCountHtml =
+    isProto && spawnCount > 0
+      ? `<span class="flow-spawn-count">已有 ${esc(String(spawnCount))} 条产物</span>`
+      : "";
+  const runState =
+    s.runState === "done" || s.runState === "current" ? s.runState : "pending";
+  const selectable = Boolean(s.selectable) && interactive;
+  const doneMenu = !isProto && runState === "done";
+  const canReenter = doneMenu && interactive;
+  const runLabel = isProto
+    ? selectable
+      ? "可增殖"
+      : "待前置"
+    : s.runState === "done"
+      ? "已完成"
+      : selectable
+        ? "可进入"
+        : s.blockedBy?.length
+          ? "待前置"
+          : "未执行";
+  const actionLabel = selectable
+    ? isProto
+      ? "增殖"
+      : "进入"
+    : "";
+  const actionHtml = actionLabel
+    ? `<span class="flow-action">${esc(actionLabel)}</span>`
+    : "";
+  const doneMenuBtn = doneMenu
+    ? `<span class="flow-node-menu-btn" data-flow-menu-trigger aria-hidden="true">⋯</span>`
+    : "";
+  const blocked =
+    !selectable && !doneMenu && s.blockedBy?.length
+      ? ` title="还差：${esc(s.blockedBy.join("、"))}"`
+      : isProto && selectable
+        ? ` title="确认当前编排，点一下新开一条产物再进入"`
+        : selectable
+          ? ` title="确认当前编排并进入"`
+          : doneMenu
+            ? ` title="查看产物或重新进入修改"`
+            : "";
+  const currentAttr = runState === "current" ? ' aria-current="step"' : "";
+  const clickable = selectable || doneMenu;
+  const tag = clickable ? "button" : "div";
+  const typeAttr = clickable ? ' type="button"' : "";
+  const pickAttr = selectable ? ` data-flow-pick="${esc(s.id)}"` : "";
+  const doneAttr = doneMenu
+    ? ` data-flow-done="${esc(s.id)}" data-flow-done-name="${escAttr(s.name)}" data-has-artifact="${s.hasArtifact ? "1" : "0"}" data-can-reenter="${canReenter ? "1" : "0"}" aria-haspopup="menu" aria-label="已完成：${escAttr(s.title || s.name)}"`
+    : "";
+  const clickableClass = selectable
+    ? " is-selectable"
+    : doneMenu
+      ? " is-done-menu"
+      : "";
+  const protoClass = isProto ? " flow-node--prototype" : "";
+  const spawnClass = compact ? " flow-node--spawn" : "";
+  const lockedClass =
+    !selectable && !doneMenu && s.blockedBy?.length ? " is-locked" : "";
+  const depsJson = escAttr(JSON.stringify(s.depends_on ?? []));
+  const fromAttr = s.from ? ` data-flow-from="${escAttr(s.from)}"` : "";
+  const originAttr =
+    origin?.fromId ? ` data-flow-origin="${escAttr(origin.fromId)}"` : "";
+  const metaHtml = compact
+    ? `<span class="flow-spawn-meta">${actionHtml || doneMenuBtn || `<span class="flow-run">${esc(runLabel)}</span>`}</span>`
+    : `${actionHtml}${doneMenuBtn}`;
+  return `<${tag} class="flow-node${protoClass}${spawnClass}${clickableClass}${lockedClass}" data-flow-id="${escAttr(s.id)}" data-flow-name="${escAttr(s.name)}" data-flow-deps="${depsJson}" data-run="${escAttr(runState)}"${fromAttr}${originAttr}${currentAttr}${typeAttr}${pickAttr}${doneAttr}${blocked}>
+    <span class="flow-node-main">
+      ${compact ? "" : `<span class="flow-run">${esc(runLabel)}</span>`}
+      <span class="flow-name">${nameLabel}${occ}</span>
+      ${titleHtml}
+      ${suggestionHtml}
+      ${spawnCountHtml}
+      ${originHtml}
+      ${paramsHtml}
+      ${paramsMissing}
+    </span>
+    ${metaHtml}
+  </${tag}>`;
+}
+
+function paintFlowDagEdges(dag) {
+  if (!dag) return;
+  const svg = dag.querySelector(".flow-dag-edges");
+  if (!svg) return;
+  const nodes = [...dag.querySelectorAll("[data-flow-id]")];
+  if (!nodes.length) {
+    svg.replaceChildren();
+    return;
+  }
+  const byId = new Map();
+  const byName = new Map();
+  for (const el of nodes) {
+    const id = el.getAttribute("data-flow-id");
+    const name = el.getAttribute("data-flow-name");
+    if (id) byId.set(id, el);
+    if (name && !byName.has(name)) byName.set(name, el);
+  }
+  const findNode = (ref) => byId.get(ref) || byName.get(ref) || null;
+  const dagRect = dag.getBoundingClientRect();
+  const w = Math.max(dag.scrollWidth, dag.clientWidth, 1);
+  const h = Math.max(dag.scrollHeight, dag.clientHeight, 1);
+  svg.setAttribute("width", String(w));
+  svg.setAttribute("height", String(h));
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+
+  const paths = [];
+  for (const el of nodes) {
+    let deps = [];
+    try {
+      deps = JSON.parse(el.getAttribute("data-flow-deps") || "[]");
+    } catch {
+      deps = [];
+    }
+    if (!Array.isArray(deps) || !deps.length) continue;
+    const toRect = el.getBoundingClientRect();
+    const x2 = toRect.left - dagRect.left + toRect.width / 2 + dag.scrollLeft;
+    const y2 = toRect.top - dagRect.top + dag.scrollTop;
+    for (const ref of deps) {
+      const from = findNode(String(ref));
+      if (!from || from === el) continue;
+      const fromId = from.getAttribute("data-flow-id") || "";
+      if (el.getAttribute("data-flow-from") === fromId) continue;
+      const fromRect = from.getBoundingClientRect();
+      const x1 =
+        fromRect.left - dagRect.left + fromRect.width / 2 + dag.scrollLeft;
+      const y1 = fromRect.bottom - dagRect.top + dag.scrollTop;
+      const dy = Math.max(24, (y2 - y1) * 0.45);
+      const d = `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${x1.toFixed(1)} ${(y1 + dy).toFixed(1)}, ${x2.toFixed(1)} ${(y2 - dy).toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+      const belong = el.getAttribute("data-flow-origin") === fromId;
+      const active =
+        from.classList.contains("is-selectable") ||
+        el.classList.contains("is-selectable") ||
+        from.getAttribute("data-run") === "done";
+      const cls = `flow-dag-edge${active ? " is-lit" : ""}${belong ? " flow-dag-edge--belong" : ""}`;
+      const marker = belong
+        ? "url(#flow-dag-arrow-belong)"
+        : "url(#flow-dag-arrow)";
+      paths.push(
+        `<path class="${cls}" d="${d}" fill="none" marker-end="${marker}" />`,
+      );
+    }
+  }
+  svg.innerHTML = `<defs>
+    <marker id="flow-dag-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" class="flow-dag-arrowhead" />
+    </marker>
+    <marker id="flow-dag-arrow-belong" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" class="flow-dag-arrowhead flow-dag-arrowhead--belong" />
+    </marker>
+  </defs>${paths.join("")}`;
+}
+
+function wireCreationFlowGraph(root, handlers) {
+  if (!root) return;
+  wireFlowNodeMenu();
+  root.querySelectorAll("[data-flow-pick]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const stepId = el.getAttribute("data-flow-pick");
+      if (stepId) handlers.onPickCreationStep?.(stepId);
+    });
+  });
+  root.querySelectorAll("[data-flow-done]").forEach((el) => {
+    const openMenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showFlowNodeMenu(el, e.clientX, e.clientY, handlers);
+    };
+    el.addEventListener("click", openMenu);
+    el.addEventListener("contextmenu", openMenu);
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " " && e.key !== "ContextMenu") return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      showFlowNodeMenu(el, rect.left, rect.bottom + 4, handlers);
+    });
+  });
+  root.querySelectorAll("[data-flow-spawn]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const name = el.getAttribute("data-flow-spawn");
+      if (name) handlers.onSpawnCreationStep?.(name);
+    });
+  });
+
+  root.querySelectorAll("[data-flow-dag]").forEach((dag) => {
+    const paint = () => {
+      if (!document.contains(dag)) return;
+      paintFlowDagEdges(dag);
+    };
+    paint();
+    requestAnimationFrame(paint);
+    if (dag.dataset.flowEdgesWired === "1") return;
+    dag.dataset.flowEdgesWired = "1";
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => paint());
+      ro.observe(dag);
+      dag.querySelectorAll("[data-flow-id]").forEach((n) => ro.observe(n));
+      dag.querySelectorAll(".flow-family").forEach((n) => ro.observe(n));
+    }
+    window.addEventListener("resize", paint, { passive: true });
+  });
 }
 
 function formatFlowParams(params) {
@@ -3283,6 +3832,20 @@ function formatFlowParams(params) {
     .filter(([, v]) => v != null && String(v).trim() !== "")
     .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
   return parts.length ? parts.join(" · ") : "";
+}
+
+function formatFlowParamsCompact(params, usedKeys = []) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return "";
+  const skip = new Set(usedKeys);
+  const parts = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (skip.has(k) || v == null) continue;
+    const text = typeof v === "string" ? v.trim() : JSON.stringify(v);
+    if (!text) continue;
+    parts.push(`${k}=${text.length > 24 ? `${text.slice(0, 23)}…` : text}`);
+    if (parts.length >= 2) break;
+  }
+  return parts.join(" · ");
 }
 
 function wireContextOrderEditor(root, sessionId) {
@@ -3658,6 +4221,7 @@ function resolveDesignSurface(view, loading) {
   const busy = Boolean(loading || (view.phase === "running" && !view.waitingReason));
   if (busy) return "busy";
   if (view.phase === "error") return "speak";
+  if (isFlowPlanReview(view)) return "speak";
   if (view.waitingReason?.kind === "review_artifact" && view.reviewArtifact) {
     return "review";
   }
@@ -3686,6 +4250,24 @@ function ensureQuestionsHostIn(parent) {
   if (!host || !parent) return host;
   if (host.parentElement !== parent) parent.appendChild(host);
   return host;
+}
+
+function hasLeaveStepAction(view) {
+  return (view?.actions ?? []).some((a) => a.type === "leave_step");
+}
+
+function leaveStepControlHtml(view) {
+  if (!hasLeaveStepAction(view)) return "";
+  const label =
+    view.actions.find((a) => a.type === "leave_step")?.label || "返回节点";
+  return `<button type="button" class="workspace-leave-step" data-act="leave-step" title="先不写这一步，回到节点选择">${esc(label)}</button>`;
+}
+
+function wireLeaveStepControl(root, handlers) {
+  if (!root || !handlers?.onLeaveCreationStep) return;
+  root.querySelectorAll("[data-act=leave-step]").forEach((btn) => {
+    btn.addEventListener("click", () => handlers.onLeaveCreationStep());
+  });
 }
 
 function proposedOutputCopy(proposed) {
@@ -3721,13 +4303,19 @@ function renderSpeakWorkspace(view) {
         view.lifecycleStage !== "play"
       ? String(guide.text).trim()
       : "";
-  const showOpening = Boolean(openingText);
+  const showOpening =
+    Boolean(openingText) &&
+    wr?.kind !== "pick_creation_step" &&
+    !isFlowPlanReview(view);
 
   let title = "继续说";
   let hint = "在底栏输入你的想法。";
   let guideHtml = "";
 
-  if (showOpening) {
+  if (wr?.kind === "pick_creation_step" || isFlowPlanReview(view)) {
+    title = "选要做的节点";
+    hint = "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发。";
+  } else if (showOpening) {
     title = guide?.stepName || (moduleOpening ? "按引导先说几句" : "开局");
     hint = moduleOpening
       ? "按下面几点先说几句即可，不必整齐；写完发送后继续产出。"
@@ -3781,21 +4369,34 @@ function renderSpeakWorkspace(view) {
     wr?.kind === "intake" && view.intake?.fields?.length && hasUserMessages(view)
       ? `<div class="intake-panel">${renderIntakePanel(view.intake, { variant: "feed" })}</div>`
       : "";
+  const flowInteractive =
+    wr?.kind === "pick_creation_step" || isFlowPlanReview(view);
+  const flowHtml =
+    (flowInteractive || wr?.kind === "approve_step") && view.creationFlowView
+      ? renderCreationFlowView(view.creationFlowView, {
+          interactive: flowInteractive,
+        })
+      : "";
   return `<section class="workspace-intent">
-    <span class="workspace-surface-kicker">说话</span>
+    <div class="workspace-intent-head">
+      <span class="workspace-surface-kicker">${flowInteractive ? "流程" : "说话"}</span>
+      ${leaveStepControlHtml(view)}
+    </div>
     <h2 class="workspace-intent-title">${esc(title)}</h2>
     <p class="workspace-intent-hint">${esc(hint)}</p>
     ${recipe}
     ${guideHtml}
     ${intake}
+    ${flowHtml}
   </section>`;
 }
 
-function renderAnswerWorkspaceShell() {
+function renderAnswerWorkspaceShell(view) {
   return `<section class="workspace-answer" id="workspace-answer-slot">
     <header class="workspace-answer-head workspace-answer-head--slim">
       <span class="workspace-surface-kicker">答题</span>
       <p class="workspace-answer-hint">点字母选中，文案可改；点卡片展开，点顶条收起。</p>
+      ${leaveStepControlHtml(view)}
     </header>
   </section>`;
 }
@@ -3861,6 +4462,7 @@ function mountReviewWorkspace(stage, view, handlers, opts = {}) {
     }) + askSlot;
   wireMessageFeedActions(stage, handlers);
   wireMessageContextMenu(stage, handlers);
+  wireCreationFlowGraph(stage, handlers);
   wireOpeningPicker();
   if (opts.mountAskCard) {
     const askHost = document.getElementById("workspace-review-ask");
@@ -3886,7 +4488,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   const reviewingNow =
     !isPlayView(view) &&
     view.waitingReason?.kind === "review_artifact" &&
-    Boolean(view.reviewArtifact);
+    Boolean(view.reviewArtifact) &&
+    !isFlowPlanReview(view);
 
   document.body.classList.toggle("is-reviewing", reviewingNow);
   document.body.classList.toggle("design-workspace", designWorkspace);
@@ -3971,7 +4574,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
 
     if (surface === "answer") {
       stage.hidden = false;
-      stage.innerHTML = renderAnswerWorkspaceShell();
+      stage.innerHTML = renderAnswerWorkspaceShell(view);
+      wireLeaveStepControl(stage, handlers);
       const slot = document.getElementById("workspace-answer-slot");
       if (slot) ensureQuestionsHostIn(slot);
       return;
@@ -3980,6 +4584,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     // speak（含 approve / intake / revision / error）
     stage.hidden = false;
     stage.innerHTML = renderSpeakWorkspace(view);
+    wireCreationFlowGraph(stage, handlers);
+    wireLeaveStepControl(stage, handlers);
     if (panelFeed) ensureQuestionsHostIn(panelFeed);
     return;
   }
@@ -4112,7 +4718,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   if (stage && !stage.hidden) stage.scrollTop = 0;
 }
 
-/** 轮询时仅更新流式 pending 卡片，避免整页重绘 */
+/** 轮询时仅更新流式 pending 卡片，避免整页重绘；不自动滚到底，保持用户当前阅读位置 */
 export function updateLiveStreamPanel(view) {
   const pending = document.getElementById("msg-live-pending");
   if (!pending) return;
@@ -4124,13 +4730,22 @@ export function updateLiveStreamPanel(view) {
   const next = renderLiveStreamBody(live, view);
   const hadThinking = Boolean(body.querySelector(".msg-live-pre"));
   if (next.includes("msg-live-empty") && hadThinking) return;
+
+  const scrollPres = [...body.querySelectorAll(".msg-live-pre")].map((el) => ({
+    top: el.scrollTop,
+  }));
+  const bodyScrollTop = body.scrollTop;
+  const stage = pending.closest(".workspace-stage, #workspace-stage") || pending.parentElement;
+  const stageScrollTop = stage?.scrollTop ?? 0;
+
   body.innerHTML = next;
-  const pre = body.querySelector(".msg-live-pre:last-of-type");
-  if (pre) pre.scrollTop = pre.scrollHeight;
-  const feed = document.getElementById("message-feed");
-  if (feed && !document.body.classList.contains("design-workspace")) {
-    feed.scrollTop = feed.scrollHeight;
-  }
+
+  const newPres = body.querySelectorAll(".msg-live-pre");
+  newPres.forEach((el, i) => {
+    if (scrollPres[i]) el.scrollTop = scrollPres[i].top;
+  });
+  body.scrollTop = bodyScrollTop;
+  if (stage) stage.scrollTop = stageScrollTop;
 }
 
 export function renderBoardPanel(view) {
@@ -4222,8 +4837,17 @@ export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
 
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#msg-action-menu")) hideMsgMenu();
+  if (!e.target.closest("#flow-node-menu") && !e.target.closest("[data-flow-done]")) {
+    hideFlowNodeMenu();
+  }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") hideMsgMenu();
+  if (e.key === "Escape") {
+    hideMsgMenu();
+    hideFlowNodeMenu();
+  }
 });
-document.addEventListener("scroll", hideMsgMenu, true);
+document.addEventListener("scroll", () => {
+  hideMsgMenu();
+  hideFlowNodeMenu();
+}, true);

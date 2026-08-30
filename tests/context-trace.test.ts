@@ -48,6 +48,29 @@ describe("pruneContextTraces", () => {
     expect(pruned.map((m) => m.id)).toEqual(["a", "b"]);
   });
 
+  it("pins design-flow traces while pruning others", () => {
+    const messages = [
+      {
+        id: "flow",
+        contextTrace: buildContextTrace({
+          caller: "worker:design-flow",
+          messages: [{ role: "user", content: "plan" }],
+        }),
+      },
+      msg("1", true),
+      msg("2", true),
+      msg("3", true),
+    ];
+    const pruned = pruneContextTraces(messages, 1);
+    expect(pruned[0]?.contextTrace?.caller).toBe("worker:design-flow");
+    expect(pruned.map((m) => Boolean(m.contextTrace))).toEqual([
+      true,
+      false,
+      false,
+      true,
+    ]);
+  });
+
   it("is a no-op when under the limit", () => {
     const messages = [msg("1", true), msg("2", true)];
     const pruned = pruneContextTraces(messages, 5);

@@ -150,6 +150,31 @@ function activateButtonHtml(active, id, action) {
   return `<button type="button" class="btn-activate" data-action="${action}" data-id="${id}">选用并生效</button>`;
 }
 
+function capabilityBadge(caps) {
+  if (!caps || !caps.testedAt) {
+    return `<div class="config-card-meta cap-unknown">能力：未探测（选用前建议点「探测」）</div>`;
+  }
+  const bit = (label, status) => {
+    const cls =
+      status === "ok" ? "cap-ok" : status === "fail" ? "cap-fail" : "cap-unk";
+    return `<span class="cap-chip ${cls}">${escapeHtml(label)}:${escapeHtml(status)}</span>`;
+  };
+  const mode =
+    caps.jsonSchema === "ok"
+      ? "JSON Schema"
+      : caps.forcedTool === "ok"
+        ? "强制 Tool"
+        : caps.jsonObject === "ok"
+          ? "JSON Object"
+          : "纯文本";
+  return `<div class="config-card-meta cap-row">
+    投递：<strong>${escapeHtml(mode)}</strong>
+    ${bit("schema", caps.jsonSchema)}
+    ${bit("tool", caps.forcedTool)}
+    ${bit("json", caps.jsonObject)}
+  </div>`;
+}
+
 function renderProfiles() {
   profilesListEl.innerHTML = "";
   if (!state.profiles.length) {
@@ -171,13 +196,18 @@ function renderProfiles() {
             ${active ? '<span class="badge">当前</span>' : ""}
           </div>
           <div class="config-card-meta">${escapeHtml(p.model)} · ${escapeHtml(p.baseUrl)}</div>
-          <div class="config-card-meta">Key: ${escapeHtml(maskKey(p.apiKey))}</div>
+          <div class="config-card-meta">Key: ${escapeHtml(maskKey(p.apiKey))}${
+            p.reasoningEffort
+              ? ` · 思考: ${escapeHtml(p.reasoningEffort)}`
+              : ""
+          }</div>
+          ${capabilityBadge(p.capabilities)}
         </div>
       </div>
       <div class="config-card-actions">
         ${activateButtonHtml(active, p.id, "activate-profile")}
         <button type="button" data-action="edit-profile" data-id="${p.id}">编辑</button>
-        <button type="button" data-action="test-profile" data-id="${p.id}">测试连接</button>
+        <button type="button" data-action="probe-capabilities" data-id="${p.id}">探测</button>
         <button type="button" class="btn-danger" data-action="delete-profile" data-id="${p.id}">删除</button>
       </div>
       <div class="test-result" id="test-${p.id}"></div>`;
@@ -367,6 +397,7 @@ function openProfileDialog(profile = null) {
   profileForm.baseUrl.value = profile?.baseUrl ?? "https://api.deepseek.com";
   profileForm.apiKey.value = profile?.apiKey ?? "";
   profileForm.model.value = profile?.model ?? "deepseek-v4-pro";
+  profileForm.reasoningEffort.value = profile?.reasoningEffort ?? "";
   profileDialog.showModal();
 }
 
@@ -375,6 +406,7 @@ async function saveProfile(activate) {
     name: profileForm.name.value,
     baseUrl: profileForm.baseUrl.value,
     model: profileForm.model.value,
+    reasoningEffort: profileForm.reasoningEffort.value,
     activate,
   };
   const apiKey = profileForm.apiKey.value.trim();
@@ -457,13 +489,27 @@ profilesListEl.addEventListener("click", async (e) => {
       await activateProfile(id);
     } else if (action === "edit-profile") {
       openProfileDialog(state.profiles.find((p) => p.id === id));
-    } else if (action === "test-profile") {
+    } else if (action === "probe-capabilities") {
       const el = document.getElementById(`test-${id}`);
-      el.textContent = "测试中…";
+      el.textContent = "探测中（含连通性，会打几次短请求）…";
       el.className = "test-result";
-      const result = await api(`/api/profiles/${id}/test`, { method: "POST" });
-      el.textContent = result.message;
-      el.className = `test-result ${result.ok ? "ok" : "fail"}`;
+      const result = await api(`/api/profiles/${id}/probe-capabilities`, {
+        method: "POST",
+      });
+      await loadAll();
+      const caps = result.profile?.capabilities;
+      const chatOk = caps?.chat === "ok";
+      const note = !chatOk
+        ? `连接失败${caps?.notes?.[0] ? `：${caps.notes[0]}` : ""}`
+        : result.deliveryModeLabel
+          ? `连接正常 · 投递将用：${result.deliveryModeLabel}`
+          : "探测完成";
+      const refreshed = document.getElementById(`test-${id}`);
+      if (refreshed) {
+        refreshed.textContent = note;
+        refreshed.className = `test-result ${chatOk ? "ok" : "fail"}`;
+      }
+      showToast(note, !chatOk);
     } else if (action === "delete-profile") {
       if (!confirm("确定删除此 API 配置？")) return;
       await api(`/api/profiles/${id}`, { method: "DELETE" });

@@ -475,6 +475,8 @@ export async function loadWorkerSkillWithContext(
     selectedRecipeRef?: string | null;
     /** 黑板已有产物 tag，供编排器判断哪些技能已经做过 */
     filledArtifactTags?: readonly string[];
+    /** 用户点已完成节点重进 */
+    inheritExisting?: boolean;
   },
 ): Promise<{ worker: ParsedWorkerSkill; sharedContext: string | null; promptBody: string }> {
   const worker = await loadWorkerSkill(skillIdOrName, workerId, skillsRoot);
@@ -526,6 +528,7 @@ export async function loadWorkerSkillWithContext(
       currentStepName: opts?.currentStepName,
       acceptedStepNames: opts?.acceptedStepNames,
       skillsRoot,
+      inheritExisting: opts?.inheritExisting,
     });
     if (binding) {
       const inheritTag = binding.inheritTag?.trim() || "";
@@ -536,8 +539,11 @@ export async function loadWorkerSkillWithContext(
         ? `\n\n【程序开场】若黑板有「${CREATION_MODULE_OPENING_TAG}」，该默认问题已由程序发给用户（不经 LLM）；用户首答在「用户.worker答复」。勿重复同一开场白，在其答复与提示词基础上继续追问或产出。`
         : "";
       const paramsBlock = isPriorArtifactModule(binding.module)
-        ? formatPriorArtifactContext(binding.step.params)
-        : `## 【本步参数】（编排期已钉；直接按此执行，勿再问「生成什么 / 调用哪个规则」）\n\n${formatStepParamsForPrompt(binding.step.params)}`;
+        ? formatPriorArtifactContext(
+            binding.step.params,
+            binding.prototypeSuggestion,
+          )
+        : `## 【本步参数】（编排期已钉；直接按此执行，勿再问编排层已定的参数）\n\n${formatStepParamsForPrompt(binding.step.params)}`;
       let rosterBlock = "";
       const depProjection =
         binding.module.id === "context-order" ? "index" : undefined;

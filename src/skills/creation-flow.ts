@@ -10,11 +10,14 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { tryParseJsonDoc } from "../parse/json-doc.js";
 
 export const CREATION_FLOW_TAG = "设计.创作流程";
 export const CREATION_CURRENT_STEP_TAG = "创作.当前步骤";
 /** 确认开干前：待确认的下一步快照（JSON） */
 export const CREATION_PROPOSED_STEP_TAG = "创作.待确认步骤";
+/** 用户点已完成节点重进：本步继承既有产物（"1"） */
+export const CREATION_INHERIT_EXISTING_TAG = "创作.继承修改";
 /** 用户手动选定的初始配方（存 recipe id，或 JSON {id,name}） */
 export const CREATION_SELECTED_RECIPE_TAG = "创作.选用配方";
 
@@ -22,6 +25,7 @@ export const CREATION_SELECTED_RECIPE_TAG = "创作.选用配方";
 export const PROGRESS_POINTER_TAGS = new Set<string>([
   CREATION_CURRENT_STEP_TAG,
   CREATION_PROPOSED_STEP_TAG,
+  CREATION_INHERIT_EXISTING_TAG,
   CREATION_SELECTED_RECIPE_TAG,
   "创作.当前单位",
   "创作.已验收单位",
@@ -53,8 +57,19 @@ const DEFAULT_SKILLS_ROOT = path.resolve(
   "../../skills",
 );
 
-/** 步骤调用参数。普通节点：编排期钉死、执行只读。〔先验产物〕：编排器规划的产物内容（可空），执行时注入为【规划产物】。 */
+/** 步骤调用参数。普通节点：编排期钉死、执行只读。〔先验产物〕实例步：步内钉「写什么」，执行期写入 params。 */
 export type CreationFlowStepParams = Record<string, unknown>;
+
+/** 原型 = 图上可增殖槽位；实例 = 点原型或历史 spawn 出的可执行步。 */
+export type CreationFlowStepRole = "prototype" | "instance";
+
+/** 规划层建议追加的原型节点（尚未编入 steps 时展示在图上）。 */
+export type CreationFlowPrototypeSuggestion = {
+  name: string;
+  /** 建议生成什么 / 为何需要此原型 */
+  suggestion: string;
+  depends_on?: string[];
+};
 
 /**
  * 节点特性。缺省 = 普通执行步。后续会加更多 kind。
@@ -99,9 +114,18 @@ export type CreationFlowStep = {
   /** 依赖的其它步骤 id（旧稿若 name 唯一也可写 name） */
   depends_on: string[];
   /**
+   * prototype = 科技树槽位，点进去增殖实例；instance = 可执行步。
+   * 缺省 = 普通一次性节点。
+   */
+  role?: CreationFlowStepRole;
+  /** role=instance：从哪个原型增殖出来 */
+  from?: string;
+  /** role=prototype：规划层对本槽位「建议生成什么」的短提示（执行时在步内钉细） */
+  suggestion?: string;
+  /**
    * 本步调用参数。
    * 普通节点：有必填声明时须在进执行前钉齐。
-   * 〔先验产物〕：编排器规划的产物内容（可空）；执行注入【规划产物】，步内可修订。
+   * 〔先验产物〕实例：步内钉「写什么」，不写回原型。
    */
   params?: CreationFlowStepParams;
   /** 缺省 fresh。revise = 继承旧产物修改，不是再生成一条。 */
@@ -121,6 +145,8 @@ export type CreationFlow = {
    * closed = 不再扩步（可走收成）。缺省按 closed（兼容旧固定 DAG）。
    */
   status?: CreationFlowStatus;
+  /** 规划层建议追加、尚未编入 steps 的原型节点 */
+  suggestions?: CreationFlowPrototypeSuggestion[];
   steps: CreationFlowStep[];
 };
 
@@ -149,7 +175,8 @@ export type ModuleCatalogEntry = {
    */
   repeatable?: boolean;
   /**
-   * 可选：创作终节点。选定后程序收口并保存，其后不要再追加步骤。
+   * 可选：创作终节点。选定后程序收口并保存。
+   * 尚未选定前，用户要补前序节点时应插在本步之前，不要当成「已经不能再编排」。
    */
   closer?: boolean;
   /**
@@ -235,14 +262,28 @@ export type CreationFlowValidation = {
 /** 工作流计划节点相对执行进度（给人看的三态） */
 export type FlowStepRunState = "done" | "current" | "pending";
 
+/** 可反复能力在图上的「再开一条」入口 */
+export type CreationFlowSpawnView = {
+  name: string;
+  ready: boolean;
+  blockedReason?: string;
+};
+
 export type CreationFlowUserView = {
   brief?: string;
   status?: CreationFlowStatus;
+  /** 规划层建议追加的原型（尚未在 steps 里） */
+  suggestions?: CreationFlowPrototypeSuggestion[];
   steps: Array<{
     order: number;
     id: string;
     name: string;
     depends_on: string[];
+    role?: CreationFlowStepRole;
+    from?: string;
+    suggestion?: string;
+    /** 图上短标题：增殖的是哪条规则 / 哪批实例（不等于技能名） */
+    title?: string;
     /** 同能力第几次（>1 时 UI 可标「再来」；回头修改不计入「第 N 次新建」） */
     occurrence?: number;
     /** fresh=从零新建；revise=回头修改 */
@@ -252,35 +293,133 @@ export type CreationFlowUserView = {
     /** 目录里的短声明（有则展示） */
     declaration?: string;
     repeatable?: boolean;
+    /** 收口节点（开场白）：点进去做这一条，不增殖 */
+    closer?: boolean;
     /** 本步调用参数（普通节点编排钉死；先验产物=规划内容） */
     params?: CreationFlowStepParams;
     /** 参数缺必填项时的提示（给人看）；先验产物不拦执行，不出现此项 */
     paramsMissing?: string[];
     /** 节点特性（如先验产物） */
     kind?: ModuleNodeKind;
+    /** 依赖层级（0 = 无前置）；图按列/行排 */
+    layer: number;
+    /** 未验收且 depends_on 均已验收 */
+    ready: boolean;
+    /** 图上可点进去做这一条（ready 且未完成） */
+    selectable: boolean;
+    /** 挡住本步的未完成依赖 id */
+    blockedBy?: string[];
     /** 已执行 / 将要执行 / 未执行 */
     runState: FlowStepRunState;
+    /** 本步产物 tag（已完成节点菜单「查看产物」用） */
+    artifactTag?: string;
+    /** 黑板已有该步产物 */
+    hasArtifact?: boolean;
   }>;
   parseError?: string;
 };
 
+export function parseCreationFlowStepRole(
+  raw: unknown,
+): CreationFlowStepRole | undefined {
+  if (raw === "prototype" || raw === "instance") return raw;
+  return undefined;
+}
+
+export function isPrototypeStep(
+  step: Pick<CreationFlowStep, "role"> | null | undefined,
+): boolean {
+  return step?.role === "prototype";
+}
+
+export function isInstanceStep(
+  step: Pick<CreationFlowStep, "role"> | null | undefined,
+): boolean {
+  return step?.role === "instance";
+}
+
+/** 图上可点进去跑 design-step 的步（非原型槽位） */
+export function isExecutableStep(step: CreationFlowStep): boolean {
+  return !isPrototypeStep(step);
+}
+
+function parsePrototypeSuggestions(raw: unknown): CreationFlowPrototypeSuggestion[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: CreationFlowPrototypeSuggestion[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    const suggestion =
+      typeof row.suggestion === "string"
+        ? row.suggestion.trim()
+        : typeof row.hint === "string"
+          ? row.hint.trim()
+          : "";
+    if (!name || !suggestion) continue;
+    const depsRaw = row.depends_on ?? row.dependsOn ?? [];
+    const depends_on = Array.isArray(depsRaw)
+      ? depsRaw.map((d) => String(d).trim()).filter(Boolean)
+      : undefined;
+    out.push({
+      name,
+      suggestion,
+      ...(depends_on?.length ? { depends_on } : {}),
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/** 依赖是否满足：指向原型 = 至少有一条已验收实例；否则 = 该步已验收。 */
+export function isCreationDependencySatisfied(
+  flow: CreationFlow,
+  depRef: string,
+  acceptedStepIds: readonly string[],
+): boolean {
+  const depStep = findStepByRef(flow, depRef);
+  if (!depStep) return false;
+  if (isPrototypeStep(depStep)) {
+    return flow.steps.some(
+      (s) =>
+        isInstanceStep(s) &&
+        s.from === depStep.id &&
+        isStepAccepted(s, acceptedStepIds),
+    );
+  }
+  return isStepAccepted(depStep, acceptedStepIds);
+}
+
+export function isPrototypeSelectable(
+  flow: CreationFlow,
+  step: CreationFlowStep,
+  acceptedStepIds: readonly string[],
+): boolean {
+  if (!isPrototypeStep(step)) return false;
+  return step.depends_on.every((dep) =>
+    isCreationDependencySatisfied(flow, dep, acceptedStepIds),
+  );
+}
+
+/** 根对象是创作流程 DAG（有 steps，且至少一步带 name） */
+export function looksLikeCreationFlowDoc(doc: unknown): boolean {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  const steps = (doc as { steps?: unknown }).steps;
+  if (!Array.isArray(steps) || steps.length === 0) return false;
+  return steps.some(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      typeof (item as { name?: unknown }).name === "string" &&
+      String((item as { name: string }).name).trim().length > 0,
+  );
+}
+
 /** 从任意正文抽取 JSON 对象 */
 export function extractJsonObject(raw: string): unknown | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    /* try slice */
-  }
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(trimmed.slice(start, end + 1));
-    } catch {
-      return null;
-    }
+  const parsed = tryParseJsonDoc(raw);
+  if (parsed != null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed;
   }
   return null;
 }
@@ -338,18 +477,22 @@ export function formatStepParamsForPrompt(
 }
 
 const PRIOR_ARTIFACT_CONTEXT_TITLE =
-  "## 【规划产物】编排器预先为本步规划的产物内容（先验；缺则步内钉；步内可修订）";
+  "## 【本步对象】须在本步与用户钉「写什么」再产出（不依赖编排层预填）";
 
-/** 〔先验产物〕注入块：规划可空，身份写在片段自身。 */
+/** 〔先验产物〕实例步注入块：params 仅来自本步已钉内容；原型 suggestion 作参考。 */
 export function formatPriorArtifactContext(
   params: CreationFlowStepParams | null | undefined,
+  prototypeSuggestion?: string | null,
 ): string {
   const body = formatStepParamsForPrompt(params);
+  const hint = prototypeSuggestion?.trim()
+    ? `\n\n【原型建议】${prototypeSuggestion.trim()}（规划层提示，可在步内修订或忽略）`
+    : "";
   const note =
     !params || Object.keys(params).length === 0
-      ? "编排器尚未规划本步具体写什么。先在本步与用户钉「写什么」，再填产物。"
-      : "以上为先验规划，不是锁死合同。用户改对象或范围时，以本步最新认定为准，并重钉对应英文 id。";
-  return `${PRIOR_ARTIFACT_CONTEXT_TITLE}\n\n${body}\n\n${note}`;
+      ? "尚未钉本步具体写什么。先与用户确认对象/范围，再填产物。"
+      : "以上为本步已钉对象。用户改对象或范围时，以本步最新认定为准，并重钉对应英文 id。";
+  return `${PRIOR_ARTIFACT_CONTEXT_TITLE}\n\n${body}\n\n${note}${hint}`;
 }
 
 const REVISE_MODE_ALIASES = new Set([
@@ -389,6 +532,65 @@ export function isReviseStep(
   return step?.mode === "revise";
 }
 
+export function isInheritExistingFlag(raw: unknown): boolean {
+  if (raw === true) return true;
+  if (typeof raw !== "string") return false;
+  const key = raw.trim().toLowerCase();
+  return key === "1" || key === "true" || key === "revise" || key === "回头修改";
+}
+
+/**
+ * 回头修改不是 DAG 节点：丢掉 mode=revise 步，并把依赖改回原稿 id。
+ * 旧会话里编排器排过的修订步靠这一层从执行图上拿掉。
+ */
+export function stripReviseSteps(flow: CreationFlow): CreationFlow {
+  const idMap = new Map<string, string>();
+  for (const step of flow.steps) {
+    if (!isReviseStep(step)) continue;
+    const origin = step.revises
+      ? flow.steps.find((s) => s.id === step.revises || s.name === step.revises)
+      : undefined;
+    idMap.set(step.id, origin?.id || step.revises || step.name);
+  }
+  if (idMap.size === 0) return flow;
+
+  const resolve = (ref: string): string => {
+    let cur = ref.trim();
+    const seen = new Set<string>();
+    while (idMap.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = idMap.get(cur)!;
+    }
+    return cur;
+  };
+
+  const steps = flow.steps
+    .filter((s) => !isReviseStep(s))
+    .map((s) => {
+      const depends_on = [...new Set(s.depends_on.map(resolve))].filter(
+        (d) => d && d !== s.id,
+      );
+      if (
+        depends_on.length === s.depends_on.length &&
+        depends_on.every((d, i) => d === s.depends_on[i])
+      ) {
+        return s;
+      }
+      return { ...s, depends_on };
+    });
+
+  const suggestions = flow.suggestions?.map((sg) => {
+    if (!sg.depends_on?.length) return sg;
+    return { ...sg, depends_on: [...new Set(sg.depends_on.map(resolve))] };
+  });
+
+  return {
+    ...flow,
+    steps,
+    ...(suggestions ? { suggestions } : {}),
+  };
+}
+
 function parseStepRevisesRef(raw: Record<string, unknown>): string | undefined {
   for (const key of ["revises", "revise_of", "revises_id"] as const) {
     const v = raw[key];
@@ -401,6 +603,9 @@ type DraftCreationFlowStep = {
   id?: string;
   name: string;
   depends_on: string[];
+  role?: CreationFlowStepRole;
+  from?: string;
+  suggestion?: string;
   params?: CreationFlowStepParams;
   mode?: CreationFlowStepMode;
   revises?: string;
@@ -485,11 +690,74 @@ export function ensureCreationFlowStepIds(
       id,
       name,
       depends_on: raw.depends_on.map((d) => d.trim()).filter(Boolean),
+      ...(raw.role ? { role: raw.role } : {}),
+      ...(raw.from ? { from: raw.from } : {}),
+      ...(raw.suggestion ? { suggestion: raw.suggestion } : {}),
       ...(raw.params ? { params: raw.params } : {}),
       ...withStepModeFields(raw),
     });
   }
   return normalizeReviseSteps(out);
+}
+
+/**
+ * 补齐 / 规范化原型与实例角色（旧稿 repeatable 无 role → 升为 prototype + instances）。
+ */
+export function normalizeFlowStepRoles(
+  steps: CreationFlowStep[],
+  catalog: ModuleCatalog | null | undefined,
+): CreationFlowStep[] {
+  const repeatableNames = new Set(
+    (catalog?.modules ?? [])
+      .filter((m) => m.repeatable === true)
+      .map((m) => m.name),
+  );
+  const prototypeIdByName = new Map<string, string>();
+  for (const step of steps) {
+    if (isPrototypeStep(step)) prototypeIdByName.set(step.name, step.id);
+  }
+
+  const out: CreationFlowStep[] = [];
+  for (const step of steps) {
+    if (step.role) {
+      if (isPrototypeStep(step)) {
+        const { params: _drop, ...rest } = step;
+        out.push(rest);
+      } else {
+        out.push(step);
+      }
+      continue;
+    }
+    if (!repeatableNames.has(step.name) || isReviseStep(step)) {
+      out.push(step);
+      continue;
+    }
+    if (!prototypeIdByName.has(step.name)) {
+      prototypeIdByName.set(step.name, step.id);
+      const hint =
+        step.params && Object.keys(step.params).length
+          ? Object.entries(step.params)
+              .map(
+                ([k, v]) =>
+                  `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`,
+              )
+              .join("；")
+          : undefined;
+      const { params: _drop, ...rest } = step;
+      out.push({
+        ...rest,
+        role: "prototype",
+        ...(hint && !step.suggestion ? { suggestion: hint } : {}),
+      });
+    } else {
+      out.push({
+        ...step,
+        role: "instance",
+        from: prototypeIdByName.get(step.name)!,
+      });
+    }
+  }
+  return out;
 }
 
 /** 按 id 或（唯一）name 解析步骤引用 */
@@ -569,10 +837,20 @@ export function parseCreationFlow(raw: string | undefined | null): CreationFlow 
     const mode =
       parseCreationFlowStepMode(s.mode) ?? parseCreationFlowStepMode(s.intent);
     const revises = parseStepRevisesRef(s);
+    const role = parseCreationFlowStepRole(s.role);
+    const from =
+      typeof s.from === "string" && s.from.trim() ? s.from.trim() : undefined;
+    const suggestion =
+      typeof s.suggestion === "string" && s.suggestion.trim()
+        ? s.suggestion.trim()
+        : undefined;
     drafted.push({
       id,
       name,
       depends_on,
+      ...(role ? { role } : {}),
+      ...(from ? { from } : {}),
+      ...(suggestion ? { suggestion } : {}),
       ...(params ? { params } : {}),
       ...(mode ? { mode } : {}),
       ...(revises ? { revises } : {}),
@@ -586,8 +864,9 @@ export function parseCreationFlow(raw: string | undefined | null): CreationFlow 
   const statusRaw = typeof row.status === "string" ? row.status.trim() : "";
   const status: CreationFlowStatus | undefined =
     statusRaw === "open" || statusRaw === "closed" ? statusRaw : undefined;
+  const suggestions = parsePrototypeSuggestions(row.suggestions);
 
-  return { version: 1, brief, status, steps };
+  return { version: 1, brief, status, ...(suggestions ? { suggestions } : {}), steps };
 }
 
 export function parseModuleCatalog(raw: string): ModuleCatalog | null {
@@ -855,6 +1134,7 @@ export function stringifyCreationFlow(flow: CreationFlow): string {
     version: 1,
     ...(flow.brief ? { brief: flow.brief } : {}),
     ...(flow.status ? { status: flow.status } : {}),
+    ...(flow.suggestions?.length ? { suggestions: flow.suggestions } : {}),
     steps: flow.steps,
   });
 }
@@ -868,12 +1148,20 @@ export function mergeCreationFlowPreservingAccepted(params: {
   nextRaw: string;
   acceptedStepIds: readonly string[];
 }): { raw: string; restored: string[] } {
-  const next = parseCreationFlow(params.nextRaw);
+  const nextParsed = parseCreationFlow(params.nextRaw);
   const prev = parseCreationFlow(params.prevRaw);
-  if (!next || !prev) return { raw: params.nextRaw, restored: [] };
+  if (!nextParsed) return { raw: params.nextRaw, restored: [] };
+  const next = stripReviseSteps(nextParsed);
+  if (!prev) {
+    return { raw: stringifyCreationFlow(next), restored: [] };
+  }
 
-  const accepted = prev.steps.filter((s) => isStepAccepted(s, params.acceptedStepIds));
-  if (accepted.length === 0) return { raw: params.nextRaw, restored: [] };
+  const accepted = prev.steps.filter(
+    (s) => isStepAccepted(s, params.acceptedStepIds) && !isReviseStep(s),
+  );
+  if (accepted.length === 0) {
+    return { raw: stringifyCreationFlow(next), restored: [] };
+  }
 
   const restored: string[] = [];
   const steps = [...next.steps];
@@ -891,21 +1179,26 @@ export function mergeCreationFlowPreservingAccepted(params: {
       JSON.stringify(current.depends_on) !== JSON.stringify(frozen.depends_on) ||
       JSON.stringify(current.params ?? null) !== JSON.stringify(frozen.params ?? null) ||
       (current.mode ?? "fresh") !== (frozen.mode ?? "fresh") ||
-      (current.revises ?? "") !== (frozen.revises ?? "");
+      (current.revises ?? "") !== (frozen.revises ?? "") ||
+      (current.role ?? "") !== (frozen.role ?? "") ||
+      (current.from ?? "") !== (frozen.from ?? "") ||
+      (current.suggestion ?? "") !== (frozen.suggestion ?? "");
     if (changed) {
       steps[at] = frozen;
       restored.push(frozen.id);
     }
   }
-  if (restored.length === 0) return { raw: params.nextRaw, restored: [] };
   return {
-    raw: stringifyCreationFlow({ ...next, version: 1, steps }),
+    raw: stringifyCreationFlow(
+      stripReviseSteps({ ...next, version: 1, steps }),
+    ),
     restored,
   };
 }
 
 /**
  * 配方近期起点 → 可写入黑板的开局 DAG。
+ * 开局节点跟剧本（配方 seed.steps）走，不在运行时写死某一步。
  * steps 为空则返回 null（仍只当选型参考，不预置流程）。
  */
 export function creationFlowFromRecipeSeed(
@@ -1022,11 +1315,11 @@ export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
   });
   return [
     "【能力 · 可选工序】",
-    "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入；标〔收口〕的是终节点：选定后结束创作并保存，排在细化终稿之后，其后不要再追加步骤；标〔程序步〕的确认编排后直接执行（不抛默认问题、不经同意并开始），产物仍验收。",
-    "标〔先验产物〕的步骤（如生成规则、具体实例）：须先定「写什么」。编排器可以提前规划多条并写入 params——这是正确的；执行时程序注入【规划产物】。规划可空，「生成什么」在步内钉。禁止为钉对象而 askUser 拦在确认开干前。规划或修订对象时同步改 rule_id（英文 kebab-case）与步骤 id（如 生成规则·{对象}），禁止只改中文沿用旧后台 id。",
+    "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入；标〔收口〕的是终节点：排在细化终稿之后作最后一步；尚未选定开场前，用户要补前序节点（如 NPC）时插在收口之前，勿以「收口已排入」拒绝追加；选定后才结束创作并保存；标〔程序步〕的确认编排后直接执行（不抛默认问题、不经同意并开始），产物仍验收。",
+    "标〔先验产物〕（生成规则、具体实例）：编排层只排 role=prototype 槽位 + suggestion；禁止在原型写 params、禁止预排 instance。「写什么」在用户点原型增殖后的实例步内钉。",
     "其它有「编排参数」的步骤：确认开干前写齐必填 params；缺参时用 askUser 选项+其它。",
     "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）。",
-    "两种「再来一次」必须分开：〔可反复〕再编入新 id（mode 缺省/fresh）= 彻底新建一条；回头修改已完成节点 = mode=revise + revises=原步 id，继承旧产物继续改。禁止把回头修改写成又一条 fresh。",
+    "〔可反复〕再编入新 id = 彻底新建一条。已完成节点要改：禁止排 mode=revise 新步；用户会在图上点该节点重进。禁止把改旧稿写成又一条 fresh。",
     "不要把能力执行全文塞进本步；执行由 design-step 注入。",
     lines.join("\n"),
   ].join("\n");
@@ -1342,7 +1635,7 @@ export function formatFlowProgressForAgent(params: {
   const accepted = (params.acceptedStepIds ?? []).filter(
     (id) => Boolean(id?.trim()) && id.trim() !== "flow",
   );
-  const flow = params.flow ?? null;
+  const flow = params.flow ? stripReviseSteps(params.flow) : null;
   const catalog = params.catalog ?? null;
   const filled = new Set(params.filledArtifactTags ?? []);
   const repeatableNames = new Set(
@@ -1362,8 +1655,8 @@ export function formatFlowProgressForAgent(params: {
     repeatable: boolean,
   ) => {
     const flag = repeatable
-      ? "〔可反复：mode=fresh 再追加 = 彻底新建；要改旧条用 mode=revise〕"
-      : "〔不可反复：禁止再排新建；要改已完成节点用 mode=revise 回头修改〕";
+      ? "〔可反复：mode=fresh 再追加 = 彻底新建〕"
+      : "〔不可反复：禁止再排新建，也禁止排 mode=revise〕";
     const idBit = id ? `（id: ${id}）` : "";
     doneLines.push(`- ${name}${idBit} · ${why} ${flag}`);
     doneNames.add(name);
@@ -1372,6 +1665,7 @@ export function formatFlowProgressForAgent(params: {
 
   if (flow) {
     for (const step of flow.steps) {
+      if (isPrototypeStep(step)) continue;
       const acceptedHere = isStepAccepted(step, accepted);
       const art = catalog ? artifactTagForStep(step.name, catalog) : null;
       const hasArtifact = Boolean(art && filled.has(art));
@@ -1405,12 +1699,10 @@ export function formatFlowProgressForAgent(params: {
   const draftLines: string[] = [];
   if (flow) {
     for (const step of flow.steps) {
+      if (isPrototypeStep(step)) continue;
       if (doneIds.has(step.id) || isStepAccepted(step, accepted)) continue;
-      const reviseBit = isReviseStep(step)
-        ? ` · 回头修改${step.revises ? `（revises: ${step.revises}）` : ""}`
-        : "";
       draftLines.push(
-        `- ${step.name}（id: ${step.id}）${reviseBit} · 已在草案，保留原 id；不要当作新规划再写一遍`,
+        `- ${step.name}（id: ${step.id}） · 已在草案，保留原 id；不要当作新规划再写一遍`,
       );
     }
   }
@@ -1419,13 +1711,45 @@ export function formatFlowProgressForAgent(params: {
     .filter((m) => m.repeatable === true)
     .map((m) => m.name);
 
+  const prototypeLines: string[] = [];
+  if (flow) {
+    for (const step of flow.steps) {
+      if (!isPrototypeStep(step)) continue;
+      const sug = step.suggestion?.trim()
+        ? ` · 建议：${step.suggestion.trim()}`
+        : "";
+      prototypeLines.push(
+        `- ${step.name}（id: ${step.id}，role=prototype）${sug} · 保留；用户在图上点增殖，禁止预排实例或写 params`,
+      );
+    }
+  }
+  const suggestionLines = (flow?.suggestions ?? []).map(
+    (s) =>
+      `- ${s.name} · ${s.suggestion}${s.depends_on?.length ? ` · 依赖 ${s.depends_on.join("、")}` : ""}`,
+  );
+
   const lines = [
     "【流程进度】（程序钉死，必须遵守）",
-    "你的任务是追加缺口，不是从头规划。",
-    "已完成的非反复技能：禁止再排一次「新建」（mode=fresh）。用户要改已完成节点 → 追加新 id，mode=revise，revises=原步 id；程序会继承既有产物。",
-    "〔可反复〕再编入新 id 且 mode 缺省/fresh = 彻底新建一条（新对象/新批次），不是改旧的。要改已有那一条 → 同样用 mode=revise。",
-    "草案里已有的步骤：原样保留，不要重排一遍开局。回头修改步插在最近已验收步之后、尚未执行的步之前。",
+    "你只排 DAG 骨架：节点 + depends_on +（repeatable 能力）原型槽位 + suggestions。不决定用户先跑哪个。",
+    "〔可反复〕须写 role=prototype，可带 suggestion（建议生成什么）；禁止预排 instance、禁止在原型上写 params。「写什么」在实例步 design-step 里钉。",
+    "已完成的非反复技能：禁止再排新建，禁止排 mode=revise。改已完成节点由用户在图上点选重进，不要在 DAG 里加修订步。",
+    "要改已有实例：用户点该实例重进。点原型增殖 = 全新 instance（role=instance，from=原型 id）。",
+    "草案里已有的步骤：原样保留，不要重排一遍开局。",
   ];
+  const closerPending =
+    catalog && flow
+      ? flow.steps.filter((step) => {
+          const mod = catalog.modules.find((m) => m.name === step.name);
+          return Boolean(mod?.closer) && !isStepAccepted(step, accepted);
+        })
+      : [];
+  if (closerPending.length) {
+    lines.push(
+      `草案已有〔收口〕${closerPending
+        .map((s) => `「${s.name}」`)
+        .join("、")}但尚未选定。用户要求补节点（如 NPC、生成规则、具体实例）时：把新步插在收口之前，保持收口为最后一步，并将 status 改回 open。禁止以「收口已排入」为由拒绝追加。`,
+    );
+  }
   if (doneLines.length) {
     lines.push("", "已完成：", ...doneLines);
   } else {
@@ -1437,11 +1761,21 @@ export function formatFlowProgressForAgent(params: {
   if (draftLines.length) {
     lines.push("", "草案已有、尚未验收（保留，勿重排）：", ...draftLines);
   }
+  if (prototypeLines.length) {
+    lines.push("", "原型槽位（保留，勿改成 instance）：", ...prototypeLines);
+  }
+  if (suggestionLines.length) {
+    lines.push(
+      "",
+      "建议追加的原型（可编入 steps 为 role=prototype）：",
+      ...suggestionLines,
+    );
+  }
   lines.push(
     "",
     repeatableList.length
-      ? `可反复追加：${repeatableList.join("、")}`
-      : "可反复追加：以能力目录〔可反复〕为准。",
+      ? `目录〔可反复〕：${repeatableList.join("、")}（排骨架时用 role=prototype）`
+      : "目录〔可反复〕：以能力目录为准。",
   );
   return lines.join("\n");
 }
@@ -1511,7 +1845,13 @@ export function validateCreationFlow(
           }
         }
       }
-    } else if (
+    } else if (isPrototypeStep(step)) {
+      if (step.params && Object.keys(step.params).length) {
+        errors.push(`原型「${step.id}」不应带 params（「写什么」在实例步内钉）`);
+      }
+      continue;
+    }
+    if (
       catalog &&
       mod &&
       mod.repeatable !== true &&
@@ -1521,7 +1861,7 @@ export function validateCreationFlow(
     ) {
       reportedFreshDup.add(step.name);
       errors.push(
-        `「${step.name}」出现多次新建，但目录未标 repeatable（非反复技能要改旧稿请用 mode=revise）`,
+        `「${step.name}」出现多次新建，但目录未标 repeatable（非反复技能请点已完成节点重进，不要再排新建）`,
       );
     }
 
@@ -1593,47 +1933,234 @@ export function artifactTagForStep(
   return catalog?.modules.find((m) => m.name === name)?.artifact ?? null;
 }
 
+export function finalizeCreationFlow(
+  flow: CreationFlow,
+  catalog: ModuleCatalog | null | undefined,
+): CreationFlow {
+  const stripped = stripReviseSteps(flow);
+  return {
+    ...stripped,
+    steps: normalizeFlowStepRoles(stripped.steps, catalog),
+  };
+}
+
+const FLOW_TITLE_MAX = 28;
+
+function flowParamText(
+  params: CreationFlowStepParams | undefined,
+  key: string,
+): string {
+  const v = params?.[key];
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
+function firstFlowTitle(...vals: Array<string | undefined>): string | undefined {
+  for (const v of vals) {
+    const t = v?.trim();
+    if (t) return t;
+  }
+  return undefined;
+}
+
+function clampFlowTitle(raw: string, max = FLOW_TITLE_MAX): string {
+  const t = raw.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1)}…`;
+}
+
+function asTitleRecord(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  return v as Record<string, unknown>;
+}
+
+/** 建议文案的短标题：冒号前；无冒号且足够短则整句。 */
+export function titleFromSuggestion(suggestion?: string): string | undefined {
+  const t = suggestion?.trim();
+  if (!t) return undefined;
+  const colon = t.search(/[：:]/);
+  if (colon > 0 && colon <= FLOW_TITLE_MAX) {
+    const head = t.slice(0, colon).trim();
+    const rest = t.slice(colon + 1).trim();
+    if (head && rest) return head;
+  }
+  if (t.length <= FLOW_TITLE_MAX) return t;
+  return undefined;
+}
+
+function titleFromStepParams(
+  params: CreationFlowStepParams | undefined,
+): string | undefined {
+  const target =
+    flowParamText(params, "target") ||
+    flowParamText(params, "object") ||
+    flowParamText(params, "对象") ||
+    flowParamText(params, "生成对象");
+  if (target) return clampFlowTitle(target);
+  const batch = flowParamText(params, "batch_goal");
+  if (batch) return clampFlowTitle(batch);
+  const ruleId = flowParamText(params, "rule_id");
+  if (ruleId) return clampFlowTitle(ruleId);
+  return undefined;
+}
+
+function titleFromAcceptedSummary(
+  summary: string | undefined,
+  skillName: string,
+): string | undefined {
+  const t = summary?.trim();
+  if (!t) return undefined;
+  const parts = t
+    .split(/\s*·\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length >= 2 && (parts[0] === skillName || parts[0] === "生成规则" || parts[0] === "具体实例")) {
+    return clampFlowTitle(parts[1]!);
+  }
+  if (t.length <= FLOW_TITLE_MAX) return t;
+  return undefined;
+}
+
+function titleFromAcceptedContent(content: unknown): string | undefined {
+  const row = asTitleRecord(content);
+  if (!row) return undefined;
+  const body = asTitleRecord(row.正文) ?? row;
+  const pinned = asTitleRecord(body.本步参数);
+  if (typeof pinned?.target === "string" && pinned.target.trim()) {
+    return clampFlowTitle(pinned.target);
+  }
+  const nec = asTitleRecord(body.必要性判断);
+  if (typeof nec?.生成对象 === "string" && nec.生成对象.trim()) {
+    return clampFlowTitle(nec.生成对象);
+  }
+  const rules = Array.isArray(body.rules) ? body.rules : [];
+  for (const item of rules) {
+    const rec = asTitleRecord(item);
+    if (typeof rec?.对象 === "string" && rec.对象.trim()) {
+      return clampFlowTitle(rec.对象);
+    }
+  }
+  if (typeof row.brief === "string" && row.brief.trim() && row.brief.trim().length <= FLOW_TITLE_MAX) {
+    return row.brief.trim();
+  }
+  return undefined;
+}
+
+export type FlowStepTitleHint = {
+  summary?: string;
+  content?: unknown;
+};
+
+/** 图上「增殖的是啥」短标题：验收内容 > 规划参数 > 建议文案。 */
+export function deriveFlowStepTitle(params: {
+  name: string;
+  stepParams?: CreationFlowStepParams;
+  suggestion?: string;
+  prototypeSuggestion?: string;
+  hint?: FlowStepTitleHint;
+}): string | undefined {
+  const raw = firstFlowTitle(
+    titleFromAcceptedContent(params.hint?.content),
+    titleFromAcceptedSummary(params.hint?.summary, params.name),
+    titleFromStepParams(params.stepParams),
+    titleFromSuggestion(params.suggestion),
+    titleFromSuggestion(params.prototypeSuggestion),
+  );
+  if (!raw || raw === params.name) return undefined;
+  return raw;
+}
+
 export function formatCreationFlowForUser(
   flow: CreationFlow,
   catalog?: ModuleCatalog | null,
   acceptedStepIds: readonly string[] = [],
+  filledArtifactTags: readonly string[] = [],
+  titleHints: Readonly<Record<string, FlowStepTitleHint>> = {},
 ): CreationFlowUserView {
+  const normalized = finalizeCreationFlow(flow, catalog ?? null);
   const decl = new Map(
     (catalog?.modules ?? []).map((m) => [m.name, m] as const),
   );
-  const seenFreshName = new Map<string, number>();
-  const next = nextPendingStep(flow, acceptedStepIds);
+  const seenInstanceName = new Map<string, number>();
+  const layers = computeStepLayers(normalized);
+  const prototypeNames = new Set(
+    normalized.steps.filter(isPrototypeStep).map((s) => s.name),
+  );
+  const pendingSuggestions = (normalized.suggestions ?? []).filter(
+    (s) => !prototypeNames.has(s.name),
+  );
+  const filled = new Set(filledArtifactTags);
+  const byId = new Map(normalized.steps.map((s) => [s.id, s] as const));
   return {
-    brief: flow.brief,
-    status: flow.status,
-    steps: flow.steps.map((s, i) => {
+    brief: normalized.brief,
+    status: normalized.status,
+    ...(pendingSuggestions.length ? { suggestions: pendingSuggestions } : {}),
+    steps: normalized.steps.map((s, i) => {
       const revise = isReviseStep(s);
+      const proto = isPrototypeStep(s);
       let occurrence: number | undefined;
-      if (!revise) {
-        const n = (seenFreshName.get(s.name) ?? 0) + 1;
-        seenFreshName.set(s.name, n);
+      if (!revise && isInstanceStep(s)) {
+        const n = (seenInstanceName.get(s.name) ?? 0) + 1;
+        seenInstanceName.set(s.name, n);
         occurrence = n;
       }
       const mod = decl.get(s.name);
-      const paramsMissing = missingRequiredStepParams(s, mod);
-      const runState: FlowStepRunState = isStepAccepted(s, acceptedStepIds)
-        ? "done"
-        : next && next.id === s.id
-          ? "current"
+      const paramsMissing = proto
+        ? []
+        : missingRequiredStepParams(s, mod);
+      const accepted = isStepAccepted(s, acceptedStepIds);
+      const ready = proto
+        ? isPrototypeSelectable(normalized, s, acceptedStepIds)
+        : isStepReady(normalized, s, acceptedStepIds);
+      const blockedBy =
+        accepted || ready
+          ? undefined
+          : s.depends_on.filter(
+              (dep) =>
+                !isCreationDependencySatisfied(
+                  normalized,
+                  dep,
+                  acceptedStepIds,
+                ),
+            );
+      const runState: FlowStepRunState = proto
+        ? "pending"
+        : accepted
+          ? "done"
           : "pending";
+      const parent = s.from ? byId.get(s.from) : undefined;
+      const title = deriveFlowStepTitle({
+        name: s.name,
+        stepParams: s.params,
+        suggestion: s.suggestion,
+        prototypeSuggestion: parent?.suggestion,
+        hint: titleHints[s.id],
+      });
       return {
         order: i + 1,
         id: s.id,
         name: s.name,
         depends_on: s.depends_on,
+        ...(s.role ? { role: s.role } : {}),
+        ...(s.from ? { from: s.from } : {}),
+        ...(s.suggestion ? { suggestion: s.suggestion } : {}),
+        ...(title ? { title } : {}),
         occurrence,
         ...(revise ? { mode: "revise" as const } : {}),
         ...(s.revises ? { revises: s.revises } : {}),
         declaration: mod?.declaration,
         repeatable: mod?.repeatable,
+        ...(isCloserModule(mod, s.name) ? { closer: true } : {}),
         ...(mod?.kind ? { kind: mod.kind } : {}),
+        layer: layers.get(s.id) ?? 0,
+        ready,
+        selectable: ready,
+        ...(blockedBy?.length ? { blockedBy } : {}),
         runState,
-        ...(s.params ? { params: s.params } : {}),
+        ...(mod?.artifact ? { artifactTag: mod.artifact } : {}),
+        ...(mod?.artifact && filled.has(mod.artifact) ? { hasArtifact: true } : {}),
+        ...(!proto && s.params ? { params: s.params } : {}),
         ...(paramsMissing.length > 0 ? { paramsMissing } : {}),
       };
     }),
@@ -1682,6 +2209,46 @@ export function isStepAccepted(
   return false;
 }
 
+/** 未验收且 depends_on 均已满足（原型步不可执行，恒 false） */
+export function isStepReady(
+  flow: CreationFlow,
+  step: CreationFlowStep,
+  acceptedStepIds: readonly string[],
+): boolean {
+  if (isPrototypeStep(step)) return false;
+  if (isStepAccepted(step, acceptedStepIds)) return false;
+  return step.depends_on.every((dep) =>
+    isCreationDependencySatisfied(flow, dep, acceptedStepIds),
+  );
+}
+
+/**
+ * 当前所有可点进去的步骤（依赖已齐、尚未验收）。
+ * 编排器排出的回头修改步不进入可执行队列。
+ */
+export function listReadySteps(
+  flow: CreationFlow | null,
+  acceptedStepIds: readonly string[],
+): CreationFlowStep[] {
+  if (!flow?.steps.length) return [];
+  return flow.steps.filter(
+    (step) =>
+      isExecutableStep(step) &&
+      !isReviseStep(step) &&
+      isStepReady(flow, step, acceptedStepIds),
+  );
+}
+
+export function listSelectablePrototypes(
+  flow: CreationFlow | null,
+  acceptedStepIds: readonly string[],
+): CreationFlowStep[] {
+  if (!flow?.steps.length) return [];
+  return flow.steps.filter((step) =>
+    isPrototypeSelectable(flow, step, acceptedStepIds),
+  );
+}
+
 /**
  * 流程中下一个待做步骤：未验收，且 depends_on 均已验收。
  */
@@ -1689,18 +2256,390 @@ export function nextPendingStep(
   flow: CreationFlow | null,
   acceptedStepIds: readonly string[],
 ): CreationFlowStep | null {
-  if (!flow?.steps.length) return null;
-  const ready: CreationFlowStep[] = [];
-  for (const step of flow.steps) {
-    if (isStepAccepted(step, acceptedStepIds)) continue;
-    const depsOk = step.depends_on.every((dep) => {
+  const ready = listReadySteps(flow, acceptedStepIds);
+  return ready[0] ?? null;
+}
+
+/** 依赖层级：根=0，某步 = max(依赖层级)+1。环则记 0。 */
+export function computeStepLayers(flow: CreationFlow): Map<string, number> {
+  const memo = new Map<string, number>();
+  const visiting = new Set<string>();
+  const layerOf = (stepId: string): number => {
+    if (memo.has(stepId)) return memo.get(stepId)!;
+    if (visiting.has(stepId)) return 0;
+    const step = findStepByRef(flow, stepId);
+    if (!step || step.depends_on.length === 0) {
+      memo.set(stepId, 0);
+      return 0;
+    }
+    visiting.add(stepId);
+    let max = 0;
+    for (const dep of step.depends_on) {
       const depStep = findStepByRef(flow, dep);
-      if (!depStep) return false;
-      return isStepAccepted(depStep, acceptedStepIds);
-    });
-    if (depsOk) ready.push(step);
+      if (!depStep) continue;
+      max = Math.max(max, layerOf(depStep.id) + 1);
+    }
+    visiting.delete(stepId);
+    memo.set(stepId, max);
+    return max;
+  };
+  for (const step of flow.steps) layerOf(step.id);
+  return memo;
+}
+
+export function isCloserModule(
+  module: { closer?: boolean } | null | undefined,
+  name?: string,
+): boolean {
+  if (module?.closer === true) return true;
+  return (name ?? "").trim() === "开场白与开场变量";
+}
+
+export function findCloserStepIndex(
+  flow: CreationFlow,
+  catalog?: ModuleCatalog | null,
+): number {
+  return flow.steps.findIndex((s) =>
+    isCloserModule(findModuleByName(catalog, s.name), s.name),
+  );
+}
+
+/** 同能力新 id：name / name#n */
+export function allocateCreationStepId(
+  existingIds: Iterable<string>,
+  name: string,
+): string {
+  const used = new Set(
+    [...existingIds].map((id) => id.trim()).filter(Boolean),
+  );
+  const base = name.trim();
+  if (!base) return "步骤";
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base}#${n}`)) n += 1;
+  return `${base}#${n}`;
+}
+
+const CONCRETE_INSTANCE_NAME = "具体实例";
+const GENERATION_RULE_NAME = "生成规则";
+
+function lastAcceptedNonCloser(
+  flow: CreationFlow,
+  catalog: ModuleCatalog | null | undefined,
+  acceptedStepIds: readonly string[],
+): CreationFlowStep | null {
+  for (let i = flow.steps.length - 1; i >= 0; i--) {
+    const step = flow.steps[i]!;
+    if (!isStepAccepted(step, acceptedStepIds)) continue;
+    if (isCloserModule(findModuleByName(catalog, step.name), step.name)) {
+      continue;
+    }
+    return step;
   }
-  return ready.find((s) => isReviseStep(s)) ?? ready[0] ?? null;
+  return null;
+}
+
+/** 新开一条可反复能力时钉的 depends_on（优先跟原型步） */
+export function spawnDependsOn(
+  flow: CreationFlow,
+  catalog: ModuleCatalog | null | undefined,
+  moduleName: string,
+  acceptedStepIds: readonly string[],
+): string[] {
+  const prototype = flow.steps.find(
+    (s) => s.name === moduleName && isPrototypeStep(s),
+  );
+  if (prototype?.depends_on.length) {
+    return prototype.depends_on.filter((dep) =>
+      Boolean(findStepByRef(flow, dep)),
+    );
+  }
+  const existing = flow.steps.find(
+    (s) => s.name === moduleName && !isReviseStep(s) && !isPrototypeStep(s),
+  );
+  if (existing?.depends_on.length) {
+    return existing.depends_on.filter((dep) => Boolean(findStepByRef(flow, dep)));
+  }
+  if (moduleName === CONCRETE_INSTANCE_NAME) {
+    const rules = flow.steps.filter(
+      (s) =>
+        s.name === GENERATION_RULE_NAME &&
+        isInstanceStep(s) &&
+        isStepAccepted(s, acceptedStepIds),
+    );
+    if (rules.length) return [rules[rules.length - 1]!.id];
+  }
+  const last = lastAcceptedNonCloser(flow, catalog, acceptedStepIds);
+  return last ? [last.id] : [];
+}
+
+export function repeatableSpawnBlockedReason(
+  flow: CreationFlow,
+  catalog: ModuleCatalog | null | undefined,
+  moduleName: string,
+  acceptedStepIds: readonly string[],
+): string | undefined {
+  const mod = findModuleByName(catalog, moduleName);
+  if (!mod?.repeatable) return "不是可反复能力";
+  if (!acceptedStepIds.some((id) => id.trim() && id.trim() !== "flow")) {
+    return "先完成至少一步再追加";
+  }
+  if (moduleName === CONCRETE_INSTANCE_NAME) {
+    const hasRule = flow.steps.some(
+      (s) =>
+        s.name === GENERATION_RULE_NAME &&
+        isInstanceStep(s) &&
+        isStepAccepted(s, acceptedStepIds),
+    );
+    if (!hasRule) return "先完成一条生成规则";
+  }
+  const deps = spawnDependsOn(flow, catalog, moduleName, acceptedStepIds);
+  const blocked = deps.filter(
+    (dep) => !isCreationDependencySatisfied(flow, dep, acceptedStepIds),
+  );
+  if (blocked.length) return `还差：${blocked.join("、")}`;
+  return undefined;
+}
+
+export function listRepeatableSpawns(
+  flow: CreationFlow,
+  catalog: ModuleCatalog,
+  acceptedStepIds: readonly string[],
+): CreationFlowSpawnView[] {
+  return catalog.modules
+    .filter((m) => m.repeatable === true && !m.closer)
+    .filter(
+      (m) => !flow.steps.some((s) => s.name === m.name && isPrototypeStep(s)),
+    )
+    .map((m) => {
+      const blockedReason = repeatableSpawnBlockedReason(
+        flow,
+        catalog,
+        m.name,
+        acceptedStepIds,
+      );
+      return {
+        name: m.name,
+        ready: !blockedReason,
+        ...(blockedReason ? { blockedReason } : {}),
+      };
+    });
+}
+
+export function hasSelectableCreationWork(
+  flow: CreationFlow | null,
+  catalog: ModuleCatalog | null | undefined,
+  acceptedStepIds: readonly string[],
+): boolean {
+  if (listReadySteps(flow, acceptedStepIds).length > 0) return true;
+  if (listSelectablePrototypes(flow, acceptedStepIds).length > 0) return true;
+  if (!flow || !catalog) return false;
+  return listRepeatableSpawns(flow, catalog, acceptedStepIds).some((s) => s.ready);
+}
+
+function allocateInstanceStepId(
+  prototypeId: string,
+  flow: CreationFlow,
+): string {
+  let n = flow.steps.filter((s) => s.from === prototypeId).length + 1;
+  while (flow.steps.some((s) => s.id === `${prototypeId}#${n}`)) n += 1;
+  return `${prototypeId}#${n}`;
+}
+
+/**
+ * 点原型槽位：增殖一条 instance 并写入 DAG（插在收口之前）。
+ */
+export function spawnInstanceFromPrototype(params: {
+  flow: CreationFlow;
+  catalog: ModuleCatalog | null | undefined;
+  prototypeId: string;
+  acceptedStepIds: readonly string[];
+}): { flow: CreationFlow; step: CreationFlowStep } | { error: string } {
+  const prototype = findStepByRef(params.flow, params.prototypeId.trim());
+  if (!prototype || !isPrototypeStep(prototype)) {
+    return { error: `找不到原型节点：${params.prototypeId}` };
+  }
+  if (!isPrototypeSelectable(params.flow, prototype, params.acceptedStepIds)) {
+    const blocked = prototype.depends_on.filter(
+      (dep) =>
+        !isCreationDependencySatisfied(
+          params.flow,
+          dep,
+          params.acceptedStepIds,
+        ),
+    );
+    return {
+      error: blocked.length
+        ? `还差：${blocked.join("、")}`
+        : `「${prototype.name}」暂不可增殖`,
+    };
+  }
+  const mod = findModuleByName(params.catalog, prototype.name);
+  if (!mod) return { error: `未知能力：${prototype.name}` };
+
+  const instanceDeps = resolveInstanceDependsOn({
+    flow: params.flow,
+    catalog: params.catalog,
+    prototype,
+    acceptedStepIds: params.acceptedStepIds,
+  });
+  const id = allocateInstanceStepId(prototype.id, params.flow);
+  const step: CreationFlowStep = {
+    id,
+    name: prototype.name,
+    role: "instance",
+    from: prototype.id,
+    depends_on: instanceDeps,
+    mode: "fresh",
+  };
+
+  const steps = [...params.flow.steps];
+  const protoIndex = steps.findIndex((s) => s.id === prototype.id);
+  if (protoIndex >= 0) {
+    steps.splice(protoIndex + 1, 0, step);
+  } else {
+    const closerAt = findCloserStepIndex(params.flow, params.catalog);
+    if (closerAt >= 0) {
+      steps.splice(closerAt, 0, step);
+    } else {
+      steps.push(step);
+    }
+  }
+  const closerAt = findCloserStepIndex(
+    { ...params.flow, steps },
+    params.catalog,
+  );
+  if (closerAt >= 0) {
+    const closer = steps[closerAt]!;
+    if (!closer.depends_on.includes(id)) {
+      steps[closerAt] = {
+        ...closer,
+        depends_on: [...closer.depends_on, id],
+      };
+    }
+  }
+  return {
+    flow: {
+      ...params.flow,
+      version: 1,
+      status: params.flow.status === "closed" ? "open" : params.flow.status,
+      steps,
+    },
+    step,
+  };
+}
+
+/**
+ * 误点增殖后尚未验收：从图上撤掉这条 instance，并解开其它步对它的依赖。
+ * 普通一次性节点、已验收实例原样返回。
+ */
+export function removeUnstartedInstance(
+  flow: CreationFlow,
+  stepId: string,
+  acceptedStepIds: readonly string[],
+): CreationFlow {
+  const step = findStepByRef(flow, stepId.trim());
+  if (!step || !isInstanceStep(step) || isStepAccepted(step, acceptedStepIds)) {
+    return flow;
+  }
+  return {
+    ...flow,
+    steps: flow.steps
+      .filter((s) => s.id !== step.id)
+      .map((s) => ({
+        ...s,
+        depends_on: s.depends_on.filter((d) => d !== step.id),
+      })),
+  };
+}
+
+/** 实例步 depends_on：具体实例钉最近已验收规则实例；其余跟原型。 */
+function resolveInstanceDependsOn(params: {
+  flow: CreationFlow;
+  catalog: ModuleCatalog | null | undefined;
+  prototype: CreationFlowStep;
+  acceptedStepIds: readonly string[];
+}): string[] {
+  if (params.prototype.name === CONCRETE_INSTANCE_NAME) {
+    const rules = params.flow.steps.filter(
+      (s) =>
+        s.name === GENERATION_RULE_NAME &&
+        isInstanceStep(s) &&
+        isStepAccepted(s, params.acceptedStepIds),
+    );
+    if (rules.length) return [rules[rules.length - 1]!.id];
+  }
+  return params.prototype.depends_on.filter((dep) =>
+    Boolean(findStepByRef(params.flow, dep)),
+  );
+}
+
+/**
+ * 在 DAG 里新编一条可反复能力（兼容：优先找原型增殖，无原型则 legacy 新建）。
+ */
+export function spawnRepeatableCreationStep(params: {
+  flow: CreationFlow;
+  catalog: ModuleCatalog | null | undefined;
+  moduleName: string;
+  acceptedStepIds: readonly string[];
+}): { flow: CreationFlow; step: CreationFlowStep } | { error: string } {
+  const name = params.moduleName.trim();
+  const prototype = params.flow.steps.find(
+    (s) => s.name === name && isPrototypeStep(s),
+  );
+  if (prototype) {
+    return spawnInstanceFromPrototype({
+      flow: params.flow,
+      catalog: params.catalog,
+      prototypeId: prototype.id,
+      acceptedStepIds: params.acceptedStepIds,
+    });
+  }
+
+  const mod = findModuleByName(params.catalog, name);
+  if (!mod) return { error: `未知能力：${name}` };
+  if (mod.repeatable !== true) return { error: `「${name}」不能反复新开` };
+  if (isCloserModule(mod, name)) return { error: `「${name}」是收口，不能增殖` };
+  const blocked = repeatableSpawnBlockedReason(
+    params.flow,
+    params.catalog,
+    name,
+    params.acceptedStepIds,
+  );
+  if (blocked) return { error: blocked };
+
+  const protoId = allocateCreationStepId(
+    params.flow.steps.map((s) => s.id),
+    name,
+  );
+  const protoStep: CreationFlowStep = {
+    id: protoId,
+    name,
+    role: "prototype",
+    depends_on: spawnDependsOn(
+      params.flow,
+      params.catalog,
+      name,
+      params.acceptedStepIds,
+    ),
+  };
+  const steps = [...params.flow.steps];
+  const closerAt = findCloserStepIndex(params.flow, params.catalog);
+  if (closerAt >= 0) {
+    steps.splice(closerAt, 0, protoStep);
+  } else {
+    steps.push(protoStep);
+  }
+  const withProto: CreationFlow = {
+    ...params.flow,
+    steps,
+  };
+  return spawnInstanceFromPrototype({
+    flow: withProto,
+    catalog: params.catalog,
+    prototypeId: protoId,
+    acceptedStepIds: params.acceptedStepIds,
+  });
 }
 
 /** 当前已列出的步骤是否都已验收（不管 status） */
@@ -1784,6 +2723,8 @@ export type DesignStepBinding = {
   opening: string | null;
   /** 回头修改时注入的既有产物 tag */
   inheritTag: string | null;
+  /** 实例步对应原型的规划建议（参考，步内钉） */
+  prototypeSuggestion?: string | null;
 };
 
 /**
@@ -1795,6 +2736,8 @@ export async function resolveDesignStepBinding(params: {
   currentStepName?: string | null;
   acceptedStepNames?: readonly string[];
   skillsRoot?: string;
+  /** 用户点已完成节点重进：注入既有产物，不走开场 */
+  inheritExisting?: boolean;
 }): Promise<DesignStepBinding | null> {
   const skillsRoot = params.skillsRoot ?? DEFAULT_SKILLS_ROOT;
   const catalog = await loadModuleCatalog(params.skillPackRoot, skillsRoot);
@@ -1810,17 +2753,26 @@ export async function resolveDesignStepBinding(params: {
   if (!step) {
     step = nextPendingStep(flow, accepted);
   }
-  if (!step) return null;
+  if (!step || isPrototypeStep(step)) return null;
 
   const module = findModuleByName(catalog, step.name);
   if (!module) return null;
+
+  let prototypeSuggestion: string | null = null;
+  if (step.from) {
+    const proto = findStepByRef(flow, step.from);
+    prototypeSuggestion = proto?.suggestion?.trim() || null;
+  }
 
   const modulePromptRaw =
     (await loadModulePrompt(params.skillPackRoot, module.id, skillsRoot)) ??
     `# ${module.name}\n\n（模块 prompt.md 缺失，请补充 skills/.../modules/${module.id}/prompt.md）`;
 
+  const inherit =
+    Boolean(params.inheritExisting) || isReviseStep(step);
+  const inheritTag = inherit ? module.artifact : null;
   const opening =
-    isReviseStep(step) || module.auto
+    inherit || module.auto
       ? null
       : module.opening?.trim() || extractModuleOpening(modulePromptRaw) || null;
 
@@ -1830,6 +2782,7 @@ export async function resolveDesignStepBinding(params: {
     depTags: dependencyArtifactTags(step, catalog, flow),
     modulePrompt: formatModulePromptForLlm(modulePromptRaw),
     opening,
-    inheritTag: isReviseStep(step) ? module.artifact : null,
+    inheritTag,
+    prototypeSuggestion,
   };
 }

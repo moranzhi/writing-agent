@@ -1,7 +1,7 @@
-import { renderWorkspace, updateLiveStreamPanel, resetRailChrome } from "./agent-ui.js";
+import { renderWorkspace, updateLiveStreamPanel, resetRailChrome, fillStepArtifactDialog } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
-import { displaySkillPackLabel, reviewComposerCopy } from "./display-labels.js";
+import { displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
 import {
   clearQuestionCardState,
   collectQuestionAnswers,
@@ -17,9 +17,11 @@ let books = [];
 let composerForceInput = false;
 let pendingComposerDraft = "";
 let pendingComposerDraftSeq = 0;
+/** 正在提交底栏：重绘时不要把已捕获的正文再塞进 pending */
+let skipComposerStash = false;
+let sidebarNav = { level: "root" };
 let bookSelectMode = false;
 let selectedBookIds = new Set();
-const expandedBookIds = new Set();
 let activePlaySaveId = null;
 const playSavesByBook = new Map();
 const playSavesLoading = new Set();
@@ -94,6 +96,15 @@ function resolveUserTask(view, loading) {
       label: USER_TASK.speak.label,
       title: "继续说",
       hint: "你说一句，世界推进一轮。",
+    };
+  }
+
+  if (isFlowPlanReview(view) || wr?.kind === "pick_creation_step") {
+    return {
+      id: "speak",
+      label: "选节点",
+      title: "选要做的节点",
+      hint: "点可进入的节点即确认并开始；要改排在底栏写意见再发。",
     };
   }
 
@@ -388,6 +399,22 @@ function resolveComposer(view, loading) {
   const send = view.actions?.find((a) => a.type === "send_message");
   const hasQuestionsCard = Boolean(getActiveQuestions(view)?.questions?.length);
 
+  if (
+    (view.waitingReason?.kind === "pick_creation_step" || isFlowPlanReview(view)) &&
+    !composerForceInput
+  ) {
+    return {
+      mode: "pick_step",
+      task,
+      taskTitle: "选要做的节点",
+      taskHint: "点可进入的节点即确认并开始；虚线原型点一下增殖。要改排在底栏写意见再发。",
+      placeholder: send?.placeholder ?? "例如：补舞台骨架、把某步改到开场白之前…",
+      hint: null,
+      submitLabel: "发送",
+      requiresText: true,
+    };
+  }
+
   if (view.waitingReason?.kind === "review_artifact") {
     const parseBroken = Boolean(view.reviewArtifact?.workerSetView?.parseError);
     const copy = reviewCopyFromView(view);
@@ -432,6 +459,7 @@ function resolveComposer(view, loading) {
     view.waitingReason?.kind === "worker_questions" ||
     view.waitingReason?.kind === "revision" ||
     view.waitingReason?.kind === "next_intent" ||
+    view.waitingReason?.kind === "pick_creation_step" ||
     composerForceInput
   ) {
     const wr = view.waitingReason;
@@ -442,7 +470,7 @@ function resolveComposer(view, loading) {
       submitLabel = "继续";
     } else if (wr?.kind === "approve_step" && composerForceInput) {
       placeholder =
-        "例如：改成丧尸怪物规则（后台 id 也换成 zombies）…";
+        "例如：补开局 NPC、改成丧尸怪物规则（后台 id 也换成 zombies）…";
       submitLabel = "发送意见";
     } else if (wr?.kind === "revision") {
       placeholder = "说明要改哪里…";
@@ -507,7 +535,38 @@ function composerInputShell(spec, { textareaHtml, trailing = "" } = {}) {
   </div>`;
 }
 
+function leaveStepButtonHtml(spec) {
+  if (!spec.leaveStep) return "";
+  return `<button type="button" class="btn" data-act="leave_step" title="${esc(
+    spec.leaveStep.title || "先不写这一步，回到节点选择",
+  )}">${esc(spec.leaveStep.label)}</button>`;
+}
+
+function stashComposerDraftFromDom() {
+  if (skipComposerStash) return;
+  const input = $("composer-input");
+  if (!input) return;
+  const v = String(input.value ?? "");
+  if (v) {
+    pendingComposerDraft = v;
+    pendingComposerDraftSeq = 0;
+  }
+}
+
+function keepComposerDraft(text) {
+  const v = String(text ?? "");
+  if (!v) return;
+  pendingComposerDraft = v;
+  pendingComposerDraftSeq = 0;
+}
+
+function dropComposerDraft() {
+  pendingComposerDraft = "";
+  pendingComposerDraftSeq = 0;
+}
+
 function renderComposer(view, loading) {
+  stashComposerDraftFromDom();
   if (pendingComposerDraft) composerForceInput = true;
   const host = $("composer");
   const root = $("composer-main") || host;
@@ -517,6 +576,13 @@ function renderComposer(view, loading) {
     host._enterHandler = null;
   }
   const spec = resolveComposer(view, loading);
+  const leaveAct = view.actions?.find((a) => a.type === "leave_step");
+  if (leaveAct && spec.mode !== "waiting" && spec.mode !== "idle") {
+    spec.leaveStep = {
+      label: leaveAct.label || "返回节点",
+      title: "先不写这一步，回到节点选择",
+    };
+  }
 
   if (spec.mode === "waiting") {
     root.innerHTML = `<div class="composer-waiting">
@@ -556,7 +622,7 @@ function renderComposer(view, loading) {
 
   if (spec.mode === "action") {
     const reject = spec.showReject
-      ? `<button type="button" class="btn" data-act="reject">${spec.primaryType === "approve" ? "暂不" : "不接受"}</button>
+      ? `<button type="button" class="btn" data-act="reject">${spec.primaryType === "approve" ? "返回节点" : "不接受"}</button>
          <button type="button" class="btn" data-act="force-input">说明意见</button>`
       : "";
     const chip = composerModeChip(spec);
@@ -611,6 +677,9 @@ function renderComposer(view, loading) {
               : "具体写什么在步骤内确定。"
           }</p>`
         : "";
+    const closerHint = p.closer
+      ? `<p class="propose-plan-hint">这是收口步。若还没做 NPC 等前序节点，点「改意见」说明要补什么，会回到流程编排。</p>`
+      : "";
     root.innerHTML = `
       <div class="propose-step" id="propose-step" data-step-id="${esc(p.stepId)}">
         <div class="propose-step-head">
@@ -619,11 +688,12 @@ function renderComposer(view, loading) {
         </div>
         <p class="propose-output" data-propose-output>${esc(proposedOutputCopy(p))}</p>
         ${planHint}
+        ${closerHint}
         ${fields ? `<div class="propose-fields">${fields}</div>` : ""}
         ${syncHint}
         <div class="composer-actions">
           <button type="button" class="btn btn-primary" data-act="approve">${esc(spec.primary.label)}</button>
-          <button type="button" class="btn" data-act="reject">暂不</button>
+          <button type="button" class="btn" data-act="reject" title="先不写这一步，回到节点选择">返回节点</button>
           <button type="button" class="btn" data-act="force-input">改意见</button>
         </div>
       </div>`;
@@ -687,6 +757,17 @@ function renderComposer(view, loading) {
     return;
   }
 
+  if (spec.mode === "pick_step") {
+    const shell = composerInputShell(spec, {
+      textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
+      trailing: `<button type="submit" class="btn btn-primary composer-btn" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进入">${esc(spec.submitLabel || "发送")}</button>`,
+    });
+    root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
+    wireComposerForm({ requiresText: true });
+    applyPendingComposerDraft();
+    return;
+  }
+
   const acceptOnEmpty = Boolean(spec.acceptAction);
   const acceptTone = spec.acceptAction?.tone || "accept";
   const acceptBtn = spec.acceptAction
@@ -705,7 +786,7 @@ function renderComposer(view, loading) {
     : spec.placeholder;
   const shell = composerInputShell(spec, {
     textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(placeholder)}"></textarea>`,
-    trailing: `<button type="button" class="btn composer-btn${
+    trailing: `${leaveStepButtonHtml(spec)}<button type="button" class="btn composer-btn${
       sendIsPrimary ? " btn-primary" : ""
     }" data-act="revise" title="${esc(
       acceptOnEmpty
@@ -716,6 +797,7 @@ function renderComposer(view, loading) {
   root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
   wireComposerForm({ acceptOnEmpty });
   root.querySelector("[data-act=accept]")?.addEventListener("click", () => runAction("accept"));
+  root.querySelector("[data-act=leave_step]")?.addEventListener("click", () => runAction("leave_step"));
   applyPendingComposerDraft();
 }
 
@@ -752,6 +834,7 @@ function applyPendingComposerDraft() {
   pendingComposerDraft = "";
   pendingComposerDraftSeq = 0;
   autosizeComposerInput(input);
+  syncPickReplanButton(input);
   input.focus();
   refreshReviewComposerChrome();
 }
@@ -804,10 +887,21 @@ function syncDualComposerPrimary(input, acceptBtn, sendBtn) {
   sendBtn.classList.toggle("btn-primary", revisePrimary);
 }
 
+function syncPickReplanButton(input) {
+  const btn = $("composer-form")?.querySelector("[data-act=pick-replan]");
+  if (!btn) return;
+  const hasText = Boolean(String(input?.value ?? "").trim());
+  btn.disabled = !hasText;
+  btn.title = hasText
+    ? "发送改编排意见"
+    : "写下意见后再发；点图上节点即确认并进入";
+}
+
 function wireComposerForm(opts = {}) {
   const form = $("composer-form");
   const input = $("composer-input");
   const acceptOnEmpty = opts.acceptOnEmpty === true;
+  const requiresText = opts.requiresText === true;
   const sendBtn = form?.querySelector("[data-act=revise]");
   const root = $("composer");
   if (root?._enterHandler) {
@@ -816,12 +910,12 @@ function wireComposerForm(opts = {}) {
   }
   form?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    await submitComposer(input?.value ?? "", { acceptOnEmpty });
+    await submitComposer(input?.value ?? "", { acceptOnEmpty, requiresText });
   });
   input?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      void submitComposer(input?.value ?? "", { acceptOnEmpty });
+      void submitComposer(input?.value ?? "", { acceptOnEmpty, requiresText });
     }
   });
   sendBtn?.addEventListener("click", () => {
@@ -846,6 +940,7 @@ function wireComposerForm(opts = {}) {
   const grow = () => {
     autosizeComposerInput(input);
     if (acceptOnEmpty) refreshReviewComposerChrome();
+    if (requiresText) syncPickReplanButton(input);
   };
   input?.addEventListener("input", grow);
   input?.addEventListener("change", grow);
@@ -866,12 +961,6 @@ function bookPlayReady(bookId) {
   const saves = playSavesByBook.get(bookId);
   if (!Array.isArray(saves)) return false;
   return saves.some((s) => s.kind === "instance" || s.kind === "run");
-}
-
-function bookHasPlayBranch(bookId) {
-  if (bookPlayReady(bookId)) return true;
-  if (playSavesLoading.has(bookId) && !playSavesByBook.has(bookId)) return true;
-  return playRunsForBook(bookId).length > 0;
 }
 
 function formatSaveWhen(createdAt) {
@@ -900,6 +989,7 @@ async function fetchPlaySavesForBook(bookId, force = false) {
 }
 
 function setBookSelectMode(on, { keepSelection = false } = {}) {
+  if (on && sidebarNav.level === "book") return;
   bookSelectMode = on;
   if (!on) selectedBookIds = new Set();
   else if (!keepSelection) selectedBookIds = new Set();
@@ -962,8 +1052,50 @@ function showBookMenu(bookId, x, y) {
   }
 }
 
-function expandBook(bookId) {
-  if (bookId) expandedBookIds.add(bookId);
+function isCatalogNav() {
+  return sidebarNav.level !== "book";
+}
+
+function getNavBook() {
+  if (sidebarNav.level !== "book") return null;
+  return books.find((b) => b.id === sidebarNav.bookId) ?? null;
+}
+
+function syncRailContext() {
+  const el = $("rail-context");
+  if (!el) return;
+  const book = getNavBook();
+  if (sidebarNav.level === "book" && book) {
+    el.textContent = book.title;
+    el.title = book.title;
+  } else {
+    el.textContent = "作品";
+    el.removeAttribute("title");
+  }
+  $("rail-tabs")?.toggleAttribute("hidden", sidebarNav.level !== "book");
+}
+
+function navigateToBook(bookId) {
+  if (!bookId) return;
+  sidebarNav = { level: "book", bookId };
+  document.body.dataset.navLevel = "book";
+  bookSelectMode = false;
+  selectedBookIds = new Set();
+  syncRailContext();
+  renderBookList();
+  void fetchPlaySavesForBook(bookId);
+}
+
+function showCatalog() {
+  beginUiRequest();
+  stopLivePoll();
+  sidebarNav = { level: "root" };
+  document.body.dataset.navLevel = "root";
+  bookSelectMode = false;
+  selectedBookIds = new Set();
+  closeWorkspace();
+  syncRailContext();
+  renderBookList();
 }
 
 function renderExplorerRow({
@@ -1025,7 +1157,7 @@ function renderExplorerRow({
   return row;
 }
 
-function renderBookBranch(book, list) {
+function renderBookBranch(book, list, { nested = false } = {}) {
   const loading = playSavesLoading.has(book.id);
   const saves = playSavesByBook.get(book.id);
   const ready = bookPlayReady(book.id);
@@ -1045,7 +1177,7 @@ function renderBookBranch(book, list) {
         name: "当前",
         meta: playHere && !activePlaySaveId ? "进行中" : "工作副本",
         active: playHere && !activePlaySaveId,
-        child: true,
+        child: nested,
         onClick: () => void openCurrentPlay(book.id),
       }),
     );
@@ -1058,7 +1190,7 @@ function renderBookBranch(book, list) {
         name: s.label,
         meta: when ? `游玩 · ${when}` : "游玩进度",
         active: playHere && activePlaySaveId === s.id,
-        child: true,
+        child: nested,
         actionClass: "explorer-file",
         onClick: () => void loadPlaySave(book.id, s.id),
         onDelete: () => void deletePlaySave(book.id, s.id, s.label),
@@ -1071,16 +1203,30 @@ function renderBookBranch(book, list) {
       renderExplorerRow({
         name: "+ 新开一局",
         actionClass: "explorer-action",
-        child: true,
+        child: nested,
         onClick: () => void startNewPlayForBook(book.id),
       }),
     );
   }
 }
 
+function renderBookContents(book, list) {
+  const skill = book.activeSkillName ?? book.activeSkillId ?? book.orchestratorName ?? "实例设计";
+  list.appendChild(
+    renderExplorerRow({
+      name: "创作",
+      meta: skill,
+      active: book.id === activeBookId && !isPlayNow(),
+      onClick: () => void openBookDesign(book.id),
+    }),
+  );
+  renderBookBranch(book, list, { nested: false });
+}
+
 function renderBookList() {
   const list = $("book-list");
   if (!list) return;
+  syncRailContext();
   if (!books.length) {
     list.innerHTML = `<p class="sidebar-empty">暂无作品<br><button type="button" class="btn-sm" id="btn-new-inline">+ 新建</button></p>`;
     $("btn-new-inline")?.addEventListener("click", openNewBookDialog);
@@ -1088,39 +1234,36 @@ function renderBookList() {
   }
   list.innerHTML = "";
 
+  if (sidebarNav.level === "book") {
+    const book = getNavBook();
+    if (book) {
+      renderBookContents(book, list);
+      return;
+    }
+    sidebarNav = { level: "root" };
+    document.body.dataset.navLevel = "root";
+    syncRailContext();
+  }
+
   for (const book of books) {
     const skill = book.activeSkillName ?? book.activeSkillId ?? book.orchestratorName ?? "实例设计";
     const selected = selectedBookIds.has(book.id);
-    const expanded = expandedBookIds.has(book.id);
-    const hasBranch = bookHasPlayBranch(book.id);
-    const bookActive = book.id === activeBookId && !isPlayNow() && !selected;
     list.appendChild(
       renderExplorerRow({
         name: book.title,
         meta: skill,
-        active: bookActive,
         selected,
         bookId: book.id,
         actionClass: "explorer-folder",
-        twistie: hasBranch,
-        expanded,
-        onTwistie: () => {
-          if (expandedBookIds.has(book.id)) expandedBookIds.delete(book.id);
-          else expandedBookIds.add(book.id);
-          renderBookList();
-          if (!expandedBookIds.has(book.id)) return;
-          void fetchPlaySavesForBook(book.id);
-        },
         onClick: () => {
           if (bookSelectMode) {
             toggleBookSelection(book.id);
             return;
           }
-          void openBookDesign(book.id);
+          void openBook(book.id);
         },
       }),
     );
-    if (expanded && hasBranch) renderBookBranch(book, list);
   }
 }
 
@@ -1200,7 +1343,7 @@ async function deleteSelectedBooks() {
     books = books.filter((b) => !deleted.has(b.id));
     setBookSelectMode(false);
     if (activeBookId && deleted.has(activeBookId)) {
-      if (books.length) await openBook(books[0].id);
+      if (books.length) showCatalog();
       else renderEmpty();
     } else {
       renderBookList();
@@ -1229,9 +1372,9 @@ function setupBookBoxSelect() {
   };
 
   list.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
+    if (sidebarNav.level !== "root" || e.button !== 0) return;
     if (e.target.closest("#book-action-menu")) return;
-    if (e.target.closest(".explorer-row.child")) return;
+    if (e.target.closest(".explorer-row")) return;
     dragging = true;
     start = { x: e.clientX, y: e.clientY };
     overlay.hidden = true;
@@ -1282,8 +1425,8 @@ function setupBookBoxSelect() {
 
 async function loadPlaySave(bookId, saveId) {
   try {
-    expandBook(bookId);
-    if (lastView) renderSession(lastView, true);
+    navigateToBook(bookId);
+    if (lastView?.bookId === bookId) renderSession(lastView, true);
     const data = await api(
       `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}/load`,
       { method: "POST" },
@@ -1316,8 +1459,8 @@ async function startNewPlayForBook(bookId) {
     return;
   }
   try {
-    expandBook(bookId);
-    if (lastView) renderSession(lastView, true);
+    navigateToBook(bookId);
+    if (lastView?.bookId === bookId) renderSession(lastView, true);
     const data = await api(`/api/books/${encodeURIComponent(bookId)}/play/new`, { method: "POST" });
     activePlaySaveId = null;
     renderSession(data.session, false);
@@ -1328,7 +1471,7 @@ async function startNewPlayForBook(bookId) {
 }
 
 async function openBookDesign(bookId) {
-  expandBook(bookId);
+  navigateToBook(bookId);
   activePlaySaveId = null;
   if (activeBookId !== bookId || !sessionId) {
     await openBook(bookId);
@@ -1341,7 +1484,7 @@ async function openBookDesign(bookId) {
 }
 
 async function openCurrentPlay(bookId) {
-  expandBook(bookId);
+  navigateToBook(bookId);
   const alreadyHere =
     activeBookId === bookId &&
     isPlayNow() &&
@@ -1390,12 +1533,12 @@ function renderHeader(view, loading) {
   if (btnExport) btnExport.disabled = !(view.messages?.length);
 }
 
-function renderEmpty() {
+function closeWorkspace({ emptyCopy = "" } = {}) {
+  stopLivePoll();
   sessionId = null;
   lastView = null;
   activeBookId = null;
   activePlaySaveId = null;
-  setBookSelectMode(false);
   composerForceInput = false;
   document.title = "Writing Agent";
   $("status-dot").className = "status-dot";
@@ -1406,7 +1549,7 @@ function renderEmpty() {
   if (btnInst) btnInst.hidden = true;
   const btnExport = $("btn-export");
   if (btnExport) btnExport.disabled = true;
-  $("message-feed").innerHTML = `<p class="empty">点击左侧 + 新建作品</p>`;
+  $("message-feed").innerHTML = emptyCopy ? `<p class="empty">${emptyCopy}</p>` : "";
   const stage = $("workspace-stage");
   if (stage) {
     stage.hidden = true;
@@ -1439,6 +1582,14 @@ function renderEmpty() {
   document.body.dataset.lifecycle = "design";
   const composerMain = $("composer-main");
   if (composerMain) composerMain.innerHTML = `<div class="composer-idle">暂无打开的作品</div>`;
+}
+
+function renderEmpty() {
+  sidebarNav = { level: "root" };
+  document.body.dataset.navLevel = "root";
+  bookSelectMode = false;
+  selectedBookIds = new Set();
+  closeWorkspace({ emptyCopy: "点击左侧 + 新建作品" });
   renderBookList();
 }
 
@@ -1490,12 +1641,14 @@ function startLivePoll() {
 }
 
 function renderSession(view, loading = false) {
+  if (isCatalogNav()) return;
   lastView = view;
   sessionId = view.id;
   activeBookId = view.bookId ?? activeBookId;
   if (
     !loading &&
     view.waitingReason?.kind !== "approve_step" &&
+    view.waitingReason?.kind !== "pick_creation_step" &&
     view.waitingReason?.kind !== "review_artifact" &&
     view.waitingReason?.kind !== "worker_questions" &&
     !(view.waitingReason?.kind === "input" && view.waitingReason?.questions?.length)
@@ -1524,6 +1677,12 @@ function renderSession(view, loading = false) {
     onSwitchVariant: (messageId, direction) =>
       messageAction("variant", messageId, { direction }),
     onRetryRun: () => retryRun(),
+    onPickCreationStep: (stepId) => runAction("pick_step", { stepId }),
+    onReenterCreationStep: (stepId) =>
+      runAction("pick_step", { stepId, reenter: true }),
+    onViewStepArtifact: (stepId, name) => showStepArtifactDialog(stepId, name),
+    onSpawnCreationStep: (moduleName) => runAction("spawn_step", { moduleName }),
+    onLeaveCreationStep: () => runAction("leave_step"),
   });
   renderComposer(view, loading);
   if (loading) startLivePoll();
@@ -1573,8 +1732,12 @@ function selectedQuestionAnswers(view) {
 }
 
 /** 空 Enter＝接受；有字或已选追问则按意见改。点「按意见修改」不走这条。 */
-async function submitComposer(text, { acceptOnEmpty } = {}) {
+async function submitComposer(text, { acceptOnEmpty, requiresText } = {}) {
   const trimmed = String(text ?? "").trim();
+  if (requiresText && !trimmed) {
+    alert("点图上节点即确认并进入；要改编排请先写下意见。");
+    return;
+  }
   if (acceptOnEmpty && !trimmed) {
     const { answered } = selectedQuestionAnswers(lastView);
     if (answered.length === 0) {
@@ -1609,7 +1772,11 @@ async function sendText(text) {
   if (reviewing) {
     const { collected, answered } = selectedQuestionAnswers(lastView);
     if (!trimmed && answered.length === 0) {
-      alert("请选择追问选项或填写修改意见；满意请点「接受」收下产物。");
+      alert(
+        isFlowPlanReview(lastView)
+          ? "点图上节点即确认并进入；要改编排请先写下意见。"
+          : "请选择追问选项或填写修改意见；满意请点「接受」收下产物。",
+      );
       return;
     }
     try {
@@ -1681,6 +1848,13 @@ async function sendText(text) {
   }
 
   if (!trimmed) {
+    if (
+      lastView?.waitingReason?.kind === "pick_creation_step" ||
+      isFlowPlanReview(lastView)
+    ) {
+      alert("点图上节点即确认并进入；要改编排请先写下意见。");
+      return;
+    }
     if (
       lastView?.waitingReason?.kind === "next_intent" ||
       resolveComposer(lastView, false)?.allowEmpty
@@ -1789,7 +1963,6 @@ async function loadBooks() {
   const data = await api("/api/books");
   books = data.books ?? [];
   renderBookList();
-  for (const book of books) void fetchPlaySavesForBook(book.id);
 }
 
 function openNewBookDialog() {
@@ -1865,7 +2038,7 @@ async function createBook() {
     $("dialog-new-book").close();
     if (data.book) books.unshift(data.book);
     activeBookId = data.book?.id;
-    expandBook(data.book.id);
+    navigateToBook(data.book.id);
     renderSession(data.session, false);
   } catch (err) {
     alert(err.message);
@@ -1875,19 +2048,22 @@ async function createBook() {
 }
 
 async function openBook(bookId) {
+  const seq = beginUiRequest();
   activeBookId = bookId;
-  expandBook(bookId);
-  renderBookList();
-  if (lastView) renderSession(lastView, true);
+  navigateToBook(bookId);
+  if (lastView?.bookId === bookId) renderSession(lastView, true);
   try {
     const data = await api(`/api/books/${encodeURIComponent(bookId)}/open`, { method: "POST" });
+    if (isStaleUiRequest(seq)) return;
     if (data.book) {
       const i = books.findIndex((b) => b.id === bookId);
       if (i >= 0) books[i] = { ...books[i], ...data.book };
     }
     renderSession(data.session, false);
   } catch (err) {
-    if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+    if (isStaleUiRequest(seq)) return;
+    if (lastView?.bookId === bookId) renderSession({ ...lastView, hints: [err.message] }, false);
+    else alert(err.message);
   }
 }
 
@@ -1899,16 +2075,13 @@ async function deleteBookById(bookId) {
     await api(`/api/books/${encodeURIComponent(bookId)}`, { method: "DELETE" });
     books = books.filter((b) => b.id !== bookId);
     playSavesByBook.delete(bookId);
-    expandedBookIds.delete(bookId);
     selectedBookIds.delete(bookId);
     if (activeBookId === bookId) activePlaySaveId = null;
     hideBookMenu();
-    if (activeBookId === bookId) {
-      if (books.length) {
-        await openBook(books[0].id);
-      } else {
-        renderEmpty();
-      }
+    const wasHere = activeBookId === bookId || sidebarNav.bookId === bookId;
+    if (wasHere) {
+      if (books.length) showCatalog();
+      else renderEmpty();
     } else {
       renderBookList();
     }
@@ -1949,6 +2122,21 @@ async function saveCurrentInstance() {
     void fetchPlaySavesForBook(activeBookId, true);
   } catch (err) {
     alert(err.message);
+  }
+}
+
+async function showStepArtifactDialog(stepId, name) {
+  if (!sessionId || !stepId) return;
+  try {
+    const data = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/step-artifact?stepId=${encodeURIComponent(stepId)}`,
+    );
+    fillStepArtifactDialog({
+      name: data.name || name,
+      content: data.content,
+    });
+  } catch (err) {
+    alert(err.message || "无法读取产物");
   }
 }
 
@@ -2102,7 +2290,13 @@ $("btn-save-instance")?.addEventListener("click", () => {
 
 window.addEventListener("wa:session-updated", (e) => {
   const view = e.detail;
-  if (view?.id) renderSession(view, false);
+  if (!view?.id || isCatalogNav() || !sessionId) return;
+  if (view.id !== sessionId) return;
+  renderSession(view, false);
+});
+
+window.addEventListener("wa:nav-root", () => {
+  showCatalog();
 });
 
 document.addEventListener("click", (e) => {
@@ -2116,7 +2310,7 @@ async function init() {
     void populateDirectorSelect();
     await loadBooks();
     if (books.length) {
-      await openBook(books[0].id);
+      showCatalog();
     } else {
       renderEmpty();
       openNewBookDialog();

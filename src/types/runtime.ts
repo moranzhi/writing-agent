@@ -60,6 +60,13 @@ export type WaitingReason =
       kind: "next_intent";
       afterWorkerId?: string;
       afterUnitId?: string;
+    }
+  | {
+      /**
+       * DAG 已在：按依赖层级点选节点。依赖未齐的不能点；
+       * 可反复能力以 role=prototype 槽位呈现；点原型增殖 instance 再进去。
+       */
+      kind: "pick_creation_step";
     };
 
 /** 与 src/skills/types 对齐的最小 skill 索引字段，避免 runtime 强依赖 skills 模块 */
@@ -233,6 +240,26 @@ export type RuntimeEvent =
       payload: { decisionId: string; reason?: string };
     }
   | {
+      /** 回到流程编排：在已验收步骤上追加/改排节点（不整局重开） */
+      type: "user_requested_flow_replan";
+      payload: { reason?: string };
+    }
+  | {
+      /** DAG 图上点选一条已就绪的步骤，进入 design-step */
+      type: "user_picked_creation_step";
+      payload: { stepId: string };
+    }
+  | {
+      /** 验收后 / 总管误调 design-step：停在分层图上等用户点选 */
+      type: "creation_step_pick_awaited";
+      payload?: Record<string, never>;
+    }
+  | {
+      /** 离开当前技能步，回到分层图点选（误点增殖节点时用） */
+      type: "user_left_creation_step";
+      payload?: Record<string, never>;
+    }
+  | {
       type: "worker_started";
       payload: {
         workerId: string;
@@ -331,10 +358,12 @@ export type PhaseEffect =
   | { type: "resume_worker" }
   | { type: "run_programmatic_review"; artifactId: string }
   | { type: "emit_message"; message: string }
-  /** 根据流程与用户下一步意向，提案下一节点并进入确认 */
+  /** 根据流程与用户下一步意向，提案下一节点或停在分层图上等点选 */
   | { type: "propose_next_creation_step" }
   /** 选定开场白：落库、关 DAG、标记创作收口 */
   | { type: "seal_creation_opening" }
+  /** 再编排：解开开场收口、把 DAG 改回 open */
+  | { type: "unseal_creation_opening" }
   /** 游玩：按运行规格开一轮（旁观 → 主世界层 → 转述） */
   | { type: "run_play_turn" }
   /** 游玩：跑管线里的下一个执行单元；队空则等下一条用户输入 */

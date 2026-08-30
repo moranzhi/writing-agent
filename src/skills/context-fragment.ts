@@ -2,7 +2,7 @@
  * 上下文片段产物（context-fragment.v1）解析与展示辅助。
  * 规范：docs/context-fragment-design.md
  */
-import { extractJsonObjectText } from "./worker-set-parse.js";
+import { tryParseJsonDoc } from "../parse/json-doc.js";
 import {
   normalizeQuestions,
   type QuestionItem,
@@ -75,14 +75,9 @@ function normalizeStability(v: unknown): ContextFragmentStability | undefined {
 export function parseContextFragment(raw: unknown): ContextFragment | undefined {
   let row: Record<string, unknown> | null = null;
   if (typeof raw === "string") {
-    const text = extractJsonObjectText(raw) ?? raw.trim();
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        row = parsed as Record<string, unknown>;
-      }
-    } catch {
-      return undefined;
+    const parsed = tryParseJsonDoc(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      row = parsed as Record<string, unknown>;
     }
   } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     row = raw as Record<string, unknown>;
@@ -278,14 +273,9 @@ export function extractFragmentAskSidecar(raw: unknown): {
 } {
   let row: Record<string, unknown> | null = null;
   if (typeof raw === "string") {
-    const text = extractJsonObjectText(raw) ?? raw.trim();
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        row = parsed as Record<string, unknown>;
-      }
-    } catch {
-      return { questions: [], assessment: "" };
+    const parsed = tryParseJsonDoc(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      row = parsed as Record<string, unknown>;
     }
   } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     row = raw as Record<string, unknown>;

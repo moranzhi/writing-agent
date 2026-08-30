@@ -42,17 +42,12 @@ function buildToolLoopSystemPrompt(
       ? workers.map((w) => `- ${w.id}：${w.description}`).join("\n")
       : "- （当前 skill 未加载 worker 列表）";
 
-  return `你是创作节点路由器。只根据「设计.创作流程」DAG 选择下一个创作节点。
-
-1. 用 read_blackboard 读取「设计.创作流程」及其进度 tag。
-2. 没有 DAG 或 DAG 需要追加节点时，run_worker(design-flow)。
-3. DAG 已给出下一个可执行节点时，run_worker(design-step)。
-4. 不创作正文，不改写 DAG，不处理运行状态或游玩流程。
+  return `你是创作节点路由器。当前没有「设计.创作流程」。本轮调用 run_worker：workerId 为 design-flow，排出近期起点。
 
 当前 skill 可用 worker：
 ${workerLines}
 
-选定节点后立即调用 run_worker。`;
+结束本轮必须调用 run_worker(design-flow)。reason 用一句话说明根据用户需求开始编排；requiresApproval 为 false。`;
 }
 
 function executeLoopTool(

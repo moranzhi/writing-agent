@@ -44,7 +44,8 @@ type WorkerTemplateDoc = {
 
 /**
  * 解析本次 worker 的验收模式（创作 / run 共用入口）。
- * - design-* / opening-generator 磁盘创作 worker → 始终 user_confirmed
+ * - design-flow → no_confirmation（图上点节点即确认；底栏输入即改编排）
+ * - design-step / opening-generator 磁盘创作 worker → 始终 user_confirmed
  * - 游玩回合：一律 no_confirmation（一句输入连跑，不穿插验收）
  * - Worker 集 acceptance: review → user_confirmed；continue → no_confirmation
  * - 未声明 acceptance：创作默认确认
@@ -55,6 +56,7 @@ export function resolveAcceptanceModeForWorker(params: {
   workerId: string;
 }): AcceptanceMode {
   const workerId = params.workerId.trim();
+  if (workerId === "design-flow") return "no_confirmation";
   if (isDesignDiskWorker(workerId) || workerId === "opening-generator") {
     return "user_confirmed";
   }
@@ -95,7 +97,7 @@ export async function resolveRunnableWorker(params: {
     const acceptedRaw =
       params.session.slots?.creationAcceptedUnits ??
       params.blackboard.getContentByTag("创作.已验收单位");
-    const { parseAcceptedSteps } = await import("./creation-flow.js");
+    const { parseAcceptedSteps, isInheritExistingFlag } = await import("./creation-flow.js");
     const withCtx = await loadWorkerSkillWithContext(
       params.skillPackName,
       params.workerId,
@@ -106,6 +108,9 @@ export async function resolveRunnableWorker(params: {
         acceptedStepNames: parseAcceptedSteps(acceptedRaw),
         selectedRecipeRef,
         filledArtifactTags: params.blackboard.listTagIndex().map((item) => item.tag),
+        inheritExisting: isInheritExistingFlag(
+          params.blackboard.getContentByTag("创作.继承修改"),
+        ),
       },
     );
     return {

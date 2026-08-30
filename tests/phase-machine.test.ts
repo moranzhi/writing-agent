@@ -541,4 +541,160 @@ describe("phase machine", () => {
       false,
     );
   });
+
+  it("rejecting the next step goes back to design-flow instead of the main agent", () => {
+    let session = createSession("default");
+    const decision = {
+      id: "d1",
+      action: "run_worker" as const,
+      reason: "下一步开场白",
+      workerId: "design-step",
+      requiresApproval: true,
+      statePatchAllowed: false as const,
+    };
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "approve_step", decisionId: decision.id },
+      pendingDecision: decision,
+    };
+
+    const rejected = applyEvent(session, {
+      type: "user_rejected_next_step",
+      payload: { decisionId: decision.id, reason: "还没做 NPC" },
+    });
+    expect(rejected.session.phase).toBe("running");
+    expect(rejected.session.slots["用户.下一步意向"]).toBe("还没做 NPC");
+    expect(rejected.session.pendingDecision).toBeUndefined();
+    expect(rejected.effects).toEqual([
+      { type: "unseal_creation_opening" },
+      { type: "run_worker", workerId: "design-flow" },
+    ]);
+    expect(rejected.effects.some((e) => e.type === "invoke_main_agent")).toBe(
+      false,
+    );
+  });
+
+  it("replan from opening review runs design-flow without revising the opening", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "design-step",
+      stepId: "开场白与开场变量",
+      outputTags: ["设计.开场白与开场变量"],
+    });
+    session = {
+      ...session,
+      artifacts: [artifact],
+      pendingArtifactId: artifact.id,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+      slots: { creationSealedByOpening: true },
+    };
+
+    const replanned = applyEvent(session, {
+      type: "user_requested_flow_replan",
+      payload: { reason: "漏了开局 NPC" },
+    });
+    expect(replanned.session.phase).toBe("running");
+    expect(replanned.session.pendingArtifactId).toBeUndefined();
+    expect(replanned.session.slots.creationSealedByOpening).toBeUndefined();
+    expect(replanned.session.artifacts[0]?.status).toBe("rejected");
+    expect(replanned.session.slots["用户.修订说明"]).toBe("漏了开局 NPC");
+    expect(replanned.effects).toEqual([
+      { type: "unseal_creation_opening" },
+      { type: "run_worker", workerId: "design-flow" },
+    ]);
+  });
+
+  it("awaits pick on the layered graph and starts the clicked step", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "running",
+    };
+    const awaited = applyEvent(session, {
+      type: "creation_step_pick_awaited",
+      payload: {},
+    });
+    expect(awaited.session.phase).toBe("waiting_user");
+    expect(awaited.session.waitingReason?.kind).toBe("pick_creation_step");
+    expect(awaited.session.currentWorkerId).toBeUndefined();
+
+    const picked = applyEvent(awaited.session, {
+      type: "user_picked_creation_step",
+      payload: { stepId: "生成规则" },
+    });
+    expect(picked.session.phase).toBe("running");
+    expect(picked.session.currentWorkerId).toBe("design-step");
+    expect(picked.effects).toEqual([
+      { type: "run_worker", workerId: "design-step" },
+    ]);
+  });
+
+  it("leaving a creation step returns to the pick graph", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: {
+        kind: "worker_questions",
+        workerId: "design-step",
+        questions: [{ id: "module-opening", prompt: "引导" }],
+      },
+      currentWorkerId: "design-step",
+      currentStepId: "生成规则#1",
+    };
+    const left = applyEvent(session, {
+      type: "user_left_creation_step",
+      payload: {},
+    });
+    expect(left.session.phase).toBe("waiting_user");
+    expect(left.session.waitingReason?.kind).toBe("pick_creation_step");
+    expect(left.session.currentWorkerId).toBeUndefined();
+    expect(left.session.currentStepId).toBeUndefined();
+    expect(left.session.resumeContext).toBeUndefined();
+    expect(left.effects).toEqual([]);
+  });
+
+  it("replan from the pick graph runs design-flow", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "pick_creation_step" },
+    };
+    const replanned = applyEvent(session, {
+      type: "user_requested_flow_replan",
+      payload: { reason: "补舞台骨架" },
+    });
+    expect(replanned.session.phase).toBe("running");
+    expect(replanned.session.slots["用户.下一步意向"]).toBe("补舞台骨架");
+    expect(replanned.effects).toEqual([
+      { type: "unseal_creation_opening" },
+      { type: "run_worker", workerId: "design-flow" },
+    ]);
+  });
+
+  it("design-flow without confirmation proposes the pick graph", () => {
+    let session = createSession("default");
+    session = {
+      ...session,
+      phase: "running",
+      acceptanceMode: "no_confirmation",
+    };
+    const artifact = createArtifact({
+      workerId: "design-flow",
+      outputTags: ["设计.创作流程"],
+    });
+    session = { ...session, artifacts: [artifact] };
+    const completed = applyEvent(session, {
+      type: "worker_completed",
+      payload: { artifactId: artifact.id },
+    });
+    expect(completed.session.artifacts[0]?.status).toBe("accepted");
+    expect(completed.session.pendingArtifactId).toBeUndefined();
+    expect(completed.effects).toEqual([
+      { type: "propose_next_creation_step" },
+    ]);
+  });
 });

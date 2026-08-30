@@ -123,6 +123,18 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "GET" && sub === "/step-artifact") {
+        try {
+          const stepId = url.searchParams.get("stepId") ?? "";
+          const data = await sessionManager.getStepArtifact(sessionId, stepId);
+          json(res, 200, data);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "读取失败";
+          json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+        }
+        return;
+      }
+
       if (req.method === "POST" && sub === "/messages") {
         const body = JSON.parse(await readBody(req)) as {
           text?: string;
@@ -445,6 +457,10 @@ const server = createServer(async (req, res) => {
           action?: string;
           stepParams?: Record<string, unknown>;
           openingIndex?: number;
+          reason?: string;
+          stepId?: string;
+          moduleName?: string;
+          reenter?: boolean;
         };
         let view;
         try {
@@ -473,6 +489,31 @@ const server = createServer(async (req, res) => {
             break;
           case "reject":
             view = await sessionManager.reject(sessionId);
+            break;
+          case "replan":
+            view = await sessionManager.replan(
+              sessionId,
+              typeof body.reason === "string" ? body.reason : undefined,
+            );
+            break;
+          case "leave_step":
+            view = await sessionManager.leaveStep(sessionId);
+            break;
+          case "pick_step":
+            view = await sessionManager.pickStep(
+              sessionId,
+              typeof body.stepId === "string" ? body.stepId : "",
+              body.stepParams && typeof body.stepParams === "object"
+                ? body.stepParams
+                : undefined,
+              body.reenter === true,
+            );
+            break;
+          case "spawn_step":
+            view = await sessionManager.spawnStep(
+              sessionId,
+              typeof body.moduleName === "string" ? body.moduleName : "",
+            );
             break;
           case "run_outline":
             view = await sessionManager.runOutline(sessionId);

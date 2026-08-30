@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import {
+  normalizeCapabilities,
+  probeProfileCapabilities,
+  type ProfileCapabilities,
+} from "../llm/capabilities.js";
+import { sanitizeReasoningEffort } from "../llm/generation-compat.js";
 import type { LlmConfig } from "./env.js";
 import { loadLlmConfigOptional } from "./env.js";
 import { ensureUserDataDirs, getUserDataDir } from "./user-data-dir.js";
@@ -11,8 +17,15 @@ export type ApiProfile = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * 该配置默认思考强度（写入请求的 reasoning_effort）。
+   * 省略 / auto = 不发送；探测永远用 low，不受此项影响。
+   */
+  reasoningEffort?: string;
   createdAt: string;
   updatedAt: string;
+  /** 能力探测结果；改 baseUrl/model 后应重测 */
+  capabilities?: ProfileCapabilities;
 };
 
 type ApiProfilesFile = {
@@ -43,6 +56,16 @@ function readFile(): ApiProfilesFile {
 function writeFile(data: ApiProfilesFile): void {
   ensureUserDataDirs();
   writeFileSync(profilesPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+/** 存盘值：合法档位原样保留；空 / auto / 非法 → undefined（不发送） */
+export function normalizeProfileReasoningEffort(
+  value: unknown,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "auto") return undefined;
+  return sanitizeReasoningEffort(trimmed);
 }
 
 function seedFromEnvIfEmpty(data: ApiProfilesFile): ApiProfilesFile {
@@ -79,15 +102,18 @@ export function createApiProfile(input: {
   baseUrl: string;
   apiKey: string;
   model: string;
+  reasoningEffort?: string;
 }): ApiProfile {
   const data = readFile();
   const now = new Date().toISOString();
+  const reasoningEffort = normalizeProfileReasoningEffort(input.reasoningEffort);
   const profile: ApiProfile = {
     id: randomUUID(),
     name: input.name.trim() || "未命名",
     baseUrl: input.baseUrl.trim() || "https://api.deepseek.com",
     apiKey: input.apiKey.trim(),
     model: input.model.trim() || "deepseek-v4-pro",
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -98,25 +124,71 @@ export function createApiProfile(input: {
 
 export function updateApiProfile(
   id: string,
-  input: Partial<Pick<ApiProfile, "name" | "baseUrl" | "apiKey" | "model">>,
+  input: Partial<
+    Pick<ApiProfile, "name" | "baseUrl" | "apiKey" | "model" | "reasoningEffort">
+  >,
 ): ApiProfile {
   const data = readFile();
   const index = data.profiles.findIndex((p) => p.id === id);
   if (index < 0) throw new Error("API 配置不存在");
   const current = data.profiles[index];
+  const nextBase = input.baseUrl?.trim() || current.baseUrl;
+  const nextModel = input.model?.trim() || current.model;
+  const endpointChanged =
+    nextBase !== current.baseUrl || nextModel !== current.model;
+  const reasoningEffort =
+    input.reasoningEffort !== undefined
+      ? normalizeProfileReasoningEffort(input.reasoningEffort)
+      : current.reasoningEffort;
   const updated: ApiProfile = {
     ...current,
     name: input.name?.trim() || current.name,
-    baseUrl: input.baseUrl?.trim() || current.baseUrl,
+    baseUrl: nextBase,
     apiKey: input.apiKey !== undefined && input.apiKey.trim() !== ""
       ? input.apiKey.trim()
       : current.apiKey,
-    model: input.model?.trim() || current.model,
+    model: nextModel,
+    updatedAt: new Date().toISOString(),
+    // 端点或模型变了，旧探测作废
+    ...(endpointChanged ? { capabilities: undefined } : {}),
+  };
+  if (reasoningEffort) updated.reasoningEffort = reasoningEffort;
+  else delete updated.reasoningEffort;
+  data.profiles[index] = updated;
+  writeFile(data);
+  return updated;
+}
+
+export function saveProfileCapabilities(
+  id: string,
+  capabilities: ProfileCapabilities,
+): ApiProfile {
+  const data = readFile();
+  const index = data.profiles.findIndex((p) => p.id === id);
+  if (index < 0) throw new Error("API 配置不存在");
+  const current = data.profiles[index]!;
+  const updated: ApiProfile = {
+    ...current,
+    capabilities: normalizeCapabilities(capabilities) ?? capabilities,
     updatedAt: new Date().toISOString(),
   };
   data.profiles[index] = updated;
   writeFile(data);
   return updated;
+}
+
+/** 探测并持久化；返回更新后的 profile */
+export async function probeAndSaveProfileCapabilities(
+  id: string,
+): Promise<ApiProfile> {
+  const profile = getApiProfile(id);
+  if (!profile) throw new Error("API 配置不存在");
+  const capabilities = await probeProfileCapabilities({
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    model: profile.model,
+  });
+  return saveProfileCapabilities(id, capabilities);
 }
 
 export function deleteApiProfile(id: string): void {
@@ -130,30 +202,9 @@ export function profileToLlmConfig(profile: ApiProfile): LlmConfig {
     baseUrl: profile.baseUrl,
     apiKey: profile.apiKey,
     model: profile.model,
+    ...(profile.reasoningEffort
+      ? { reasoningEffort: profile.reasoningEffort }
+      : {}),
+    capabilities: normalizeCapabilities(profile.capabilities),
   };
-}
-
-export async function testApiProfile(profile: ApiProfile): Promise<{
-  ok: boolean;
-  message: string;
-}> {
-  const url = `${profile.baseUrl.replace(/\/$/, "")}/models`;
-  try {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${profile.apiKey}` },
-    });
-    if (response.ok) {
-      return { ok: true, message: "连接成功" };
-    }
-    const body = await response.text();
-    return {
-      ok: false,
-      message: `HTTP ${response.status}: ${body.slice(0, 200)}`,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : "连接失败",
-    };
-  }
 }

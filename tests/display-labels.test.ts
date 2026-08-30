@@ -3,6 +3,7 @@ import {
   displayStageLabel,
   displayWorkerLabel,
   formatWorkerDisplayTitle,
+  isFlowPlanReview,
   reviewComposerCopy,
 } from "../src/server/display-labels.js";
 
@@ -51,5 +52,26 @@ describe("display-labels", () => {
     });
     expect(setup.acceptLabel).toBe("选定此开场");
     expect(setup.kind).toBe("opening");
+  });
+
+  it("treats design-flow review as the pick-node surface", () => {
+    expect(
+      isFlowPlanReview({
+        waitingReason: { kind: "review_artifact" },
+        reviewArtifact: { workerId: "design-flow" },
+      }),
+    ).toBe(true);
+    expect(
+      isFlowPlanReview({
+        waitingReason: { kind: "review_artifact" },
+        reviewArtifact: { workerId: "design-step" },
+      }),
+    ).toBe(false);
+    expect(
+      isFlowPlanReview({
+        waitingReason: { kind: "pick_creation_step" },
+        reviewArtifact: { workerId: "design-flow" },
+      }),
+    ).toBe(false);
   });
 });

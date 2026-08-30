@@ -435,6 +435,15 @@ export function buildFocus(
     };
   }
 
+  if (reason?.kind === "pick_creation_step") {
+    return {
+      actorType: "user",
+      actorLabel: "你",
+      action: "点选要做的节点",
+      detail: "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发",
+    };
+  }
+
   if (reason?.kind === "next_intent") {
     return {
       actorType: "user",
@@ -471,6 +480,14 @@ export function buildFocus(
 
   if (reason?.kind === "review_artifact") {
     const art = session.artifacts.find((a) => a.id === session.pendingArtifactId);
+    if (art?.workerId === "design-flow") {
+      return {
+        actorType: "user",
+        actorLabel: "你",
+        action: "点选要做的节点",
+        detail: "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发",
+      };
+    }
     const copy = reviewComposerCopy(art?.workerId, {
       hasQuestions: Boolean(reason.questions?.length),
       outputTags: art?.outputTags,

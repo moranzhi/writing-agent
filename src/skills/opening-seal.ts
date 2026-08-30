@@ -198,3 +198,11 @@ export function closeCreationFlowRaw(raw: string | null | undefined): string | n
   if (flow.status === "closed") return stringifyCreationFlow(flow);
   return stringifyCreationFlow({ ...flow, status: "closed" });
 }
+
+/** 再编排：收口前补节点时把 DAG 改回 open。 */
+export function reopenCreationFlowRaw(raw: string | null | undefined): string | null {
+  const flow = parseCreationFlow(raw);
+  if (!flow) return raw?.trim() ? raw : null;
+  if (flow.status !== "closed") return stringifyCreationFlow(flow);
+  return stringifyCreationFlow({ ...flow, status: "open" });
+}

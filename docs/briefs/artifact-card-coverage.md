@@ -4,7 +4,7 @@
 
 | 产物/技能 | 美化程度 | 渲染入口 |
 |-----------|----------|----------|
-| 美学纲领与交互范式 | **左右分栏**：左契约（美学纲领+交互范式）/ 右诊断（设定逻辑） | `renderSpecialtyBodyHtml` → aesthetics |
+| 美学纲领与交互范式 | **左右分栏**（左契约可读 / 右诊断密）；无工程 banner | `af-split--aesthetics` + `renderAestheticsNodeHtml` |
 | 实现机制 | **专用卡**（支撑点） | `renderMechanismBodyHtml` |
 | 舞台骨架 | **专用卡** | `renderWorldBlueprintBodyHtml` |
 | 生成规则 | **专用卡** | `renderGenerationRulesBodyHtml` |

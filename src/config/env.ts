@@ -1,10 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import type { ProfileCapabilities } from "../llm/capabilities.js";
+
 export type LlmConfig = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * API 配置上的默认思考强度；generation 未指定时写入 reasoning_effort。
+   * 空 / auto = 不发送，走供应商默认。
+   */
+  reasoningEffort?: string;
+  /** 来自 API profile 探测结果；决定 structured 投递选路 */
+  capabilities?: ProfileCapabilities;
 };
 
 export function loadLlmConfig(): LlmConfig {

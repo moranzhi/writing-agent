@@ -4,6 +4,7 @@ import {
   createMockToolCall,
   MockLlmProvider,
 } from "../src/llm/client.js";
+import { isUnusableMainAgentOutput } from "../src/main-agent/main-agent.js";
 import { runMainAgentToolLoop } from "../src/main-agent/tool-loop.js";
 import { MAIN_AGENT_TOOL_DEFINITIONS } from "../src/main-agent/tools.js";
 import { toolCallToDecision } from "../src/runtime/tool-registry.js";
@@ -27,6 +28,15 @@ describe("main agent tool loop", () => {
     expect(
       MAIN_AGENT_TOOL_DEFINITIONS.map((tool) => tool.function.name),
     ).toEqual(["read_blackboard", "run_worker"]);
+  });
+
+  it("detects unusable main agent output", () => {
+    expect(
+      isUnusableMainAgentOutput(
+        new Error("Main Agent returned invalid JSON: Let me analyze"),
+      ),
+    ).toBe(true);
+    expect(isUnusableMainAgentOutput(new Error("fetch failed"))).toBe(false);
   });
 
   it("runs loop tools then returns terminal decision", async () => {

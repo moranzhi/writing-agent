@@ -1,10 +1,17 @@
 import type { LlmConfig } from "../config/env.js";
 import type { GenerationParameters } from "../types/preset.js";
+import {
+  applyOpenAiGeneration,
+  fetchWithGenerationCompat,
+  sanitizeReasoningEffort,
+} from "./generation-compat.js";
 import { consumeOpenAiToolStream } from "./stream-complete.js";
 import {
   currentAbortSignal,
   throwIfAborted,
 } from "./run-abort.js";
+
+export { sanitizeReasoningEffort };
 
 export type ToolCallPayload = {
   id: string;
@@ -30,6 +37,8 @@ export type ToolDefinition = {
     name: string;
     description: string;
     parameters: Record<string, unknown>;
+    /** 部分供应商支持的严格参数约束 */
+    strict?: boolean;
   };
 };
 
@@ -57,8 +66,16 @@ export type CompleteResult = {
   model?: string;
 };
 
+export type JsonSchemaFormat = {
+  name: string;
+  strict?: boolean;
+  schema: Record<string, unknown>;
+};
+
 export type CompleteOptions = {
-  responseFormat?: "json_object" | "text";
+  responseFormat?: "json_object" | "json_schema" | "text";
+  /** responseFormat=json_schema 时使用 */
+  jsonSchema?: JsonSchemaFormat;
   generation?: GenerationParameters;
   /** 统计用途，如 main_agent / worker:write-rules */
   caller?: string;
@@ -66,8 +83,15 @@ export type CompleteOptions = {
   signal?: AbortSignal;
 };
 
+export type ToolChoice =
+  | "auto"
+  | "required"
+  | "none"
+  | { type: "function"; function: { name: string } };
+
 export type CompleteWithToolsOptions = CompleteOptions & {
   tools: ToolDefinition[];
+  toolChoice?: ToolChoice;
 };
 
 export type CompleteWithToolsResult = {
@@ -104,12 +128,11 @@ export type LlmProvider = {
   ): Promise<CompleteWithToolsResult>;
 };
 
-function buildRequestBody(
+export function buildRequestBody(
   config: LlmConfig,
   messages: ChatMessage[],
   options?: CompleteOptions & { tools?: ToolDefinition[]; stream?: boolean },
 ): Record<string, unknown> {
-  const gen = options?.generation ?? {};
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
@@ -117,34 +140,28 @@ function buildRequestBody(
 
   if (options?.tools?.length) {
     body.tools = options.tools;
-    body.tool_choice = "auto";
+    body.tool_choice =
+      (options as CompleteWithToolsOptions).toolChoice ?? "auto";
   }
 
-  if (gen.temperature !== undefined) body.temperature = gen.temperature;
-  else body.temperature = 0.2;
-
-  if (gen.topP !== undefined) body.top_p = gen.topP;
-  if (gen.topK !== undefined) body.top_k = gen.topK;
-  if (gen.minP !== undefined) body.min_p = gen.minP;
-  if (gen.frequencyPenalty !== undefined) {
-    body.frequency_penalty = gen.frequencyPenalty;
-  }
-  if (gen.presencePenalty !== undefined) {
-    body.presence_penalty = gen.presencePenalty;
-  }
-  if (gen.repetitionPenalty !== undefined) {
-    body.repetition_penalty = gen.repetitionPenalty;
-  }
-  if (gen.maxOutputTokens !== undefined) {
-    body.max_tokens = gen.maxOutputTokens;
-  }
-  if (gen.seed !== undefined) body.seed = gen.seed;
-  if (gen.reasoningEffort !== undefined) {
-    body.reasoning_effort = gen.reasoningEffort;
-  }
+  applyOpenAiGeneration(body, options?.generation ?? {}, config.model, {
+    reasoningEffort: config.reasoningEffort,
+  });
 
   if (options?.responseFormat === "json_object") {
     body.response_format = { type: "json_object" };
+  } else if (
+    options?.responseFormat === "json_schema" &&
+    options.jsonSchema
+  ) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: options.jsonSchema.name,
+        strict: options.jsonSchema.strict ?? true,
+        schema: options.jsonSchema.schema,
+      },
+    };
   }
 
   if (options?.stream) {
@@ -246,19 +263,21 @@ function extractMessageParts(message: Record<string, unknown> | undefined): {
 async function llmFetch(
   url: string,
   apiKey: string,
-  body: unknown,
+  body: Record<string, unknown>,
   options?: CompleteOptions,
 ): Promise<Response> {
-  throwIfAborted(options?.signal);
-  return fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: options?.signal ?? currentAbortSignal(),
-  });
+  return fetchWithGenerationCompat(async (payload) => {
+    throwIfAborted(options?.signal);
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: options?.signal ?? currentAbortSignal(),
+    });
+  }, body);
 }
 
 export class OpenAiCompatibleProvider implements LlmProvider {

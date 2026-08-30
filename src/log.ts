@@ -46,6 +46,7 @@ const WAIT_LABEL: Record<WaitingReason["kind"], string> = {
   worker_questions: "执行单元提问",
   revision: "修订",
   next_intent: "下一步意向",
+  pick_creation_step: "点选节点",
 };
 
 const EVENT_LABEL: Record<RuntimeEvent["type"], string> = {
@@ -56,9 +57,14 @@ const EVENT_LABEL: Record<RuntimeEvent["type"], string> = {
   main_agent_decision_created: "总管决策",
   user_approved_next_step: "确认下一步",
   user_rejected_next_step: "拒绝下一步",
+  user_requested_flow_replan: "再编排",
+  user_picked_creation_step: "点选节点",
+  creation_step_pick_awaited: "等待点选节点",
+  user_left_creation_step: "返回节点选择",
   worker_started: "执行单元开始",
   worker_completed: "执行单元完成",
   worker_needs_input: "执行单元提问",
+  worker_revision_produced_nothing: "修订无新产物",
   user_resolved_sidecar_questions: "回答挂载追问",
   user_accepted_artifact: "验收通过",
   user_rejected_artifact: "打回产物",
@@ -78,6 +84,7 @@ const EFFECT_LABEL: Record<string, string> = {
   emit_message: "发消息",
   propose_next_creation_step: "提案下一步",
   seal_creation_opening: "收口开场白",
+  unseal_creation_opening: "解开开场收口",
   run_play_turn: "开游玩回合",
   continue_play_turn: "续游玩管线",
 };

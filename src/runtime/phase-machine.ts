@@ -35,6 +35,11 @@ import {
   SLOT_CREATION_SEALED_BY_OPENING,
   isOpeningSealArtifact,
 } from "../skills/opening-seal.js";
+import {
+  CREATION_PROPOSED_STEP_TAG,
+  DESIGN_FLOW_WORKER_ID,
+  DESIGN_STEP_WORKER_ID,
+} from "../skills/creation-flow.js";
 import { inferLifecycleStage } from "../skills/worker-declaration.js";
 import type { QuestionItem } from "../types/questions.js";
 
@@ -144,6 +149,54 @@ function waiting(session: RuntimeSession, reason: WaitingReason): RuntimeSession
 /** 进入 running，清除 waitingReason */
 function running(session: RuntimeSession): RuntimeSession {
   return touch({ ...session, phase: "running", waitingReason: undefined });
+}
+
+/** 回到流程编排：保留已验收步骤，让 design-flow 追加/改排节点 */
+function applyFlowReplan(
+  session: RuntimeSession,
+  event: RuntimeEvent,
+  reason?: string,
+): ApplyEventResult {
+  const slots = { ...session.slots };
+  const note = reason?.trim() ?? "";
+  if (note) {
+    slots["用户.下一步意向"] = note;
+    slots["用户.修订说明"] = note;
+  }
+  delete slots[CREATION_PROPOSED_STEP_TAG];
+  delete slots[SLOT_CREATION_SEALED_BY_OPENING];
+
+  let artifacts = session.artifacts;
+  if (session.pendingArtifactId) {
+    artifacts = session.artifacts.map((a) =>
+      a.id === session.pendingArtifactId
+        ? { ...a, status: "rejected" as const, updatedAt: nowIso() }
+        : a,
+    );
+  }
+
+  return {
+    session: touch(
+      running(
+        appendHistory(
+          {
+            ...session,
+            slots,
+            artifacts,
+            pendingDecision: undefined,
+            pendingArtifactId: undefined,
+            currentWorkerId: undefined,
+            resumeContext: undefined,
+          },
+          event,
+        ),
+      ),
+    ),
+    effects: [
+      { type: "unseal_creation_opening" },
+      { type: "run_worker", workerId: DESIGN_FLOW_WORKER_ID },
+    ],
+  };
 }
 
 /** 游玩连跑下一执行单元；创作则交总管 */
@@ -286,6 +339,7 @@ export function getAllowedEvents(
     case "running":
       return [
         "main_agent_decision_created",
+        "creation_step_pick_awaited",
         "worker_started",
         "worker_completed",
         "worker_needs_input",
@@ -303,6 +357,9 @@ export function getAllowedEvents(
         "user_confirmed_intake",
         "user_approved_next_step",
         "user_rejected_next_step",
+        "user_requested_flow_replan",
+        "user_picked_creation_step",
+        "user_left_creation_step",
         "user_accepted_artifact",
         "user_rejected_artifact",
         "user_requested_revision",
@@ -341,13 +398,34 @@ export function canApplyEvent(
         reason?.kind === "input" ||
         reason?.kind === "worker_questions" ||
         reason?.kind === "revision" ||
-        reason?.kind === "next_intent"
+        reason?.kind === "next_intent" ||
+        reason?.kind === "pick_creation_step"
       );
     case "user_confirmed_intake":
       return reason?.kind === "intake";
     case "user_approved_next_step":
     case "user_rejected_next_step":
       return reason?.kind === "approve_step";
+    case "user_requested_flow_replan":
+      return (
+        reason?.kind === "approve_step" ||
+        reason?.kind === "review_artifact" ||
+        reason?.kind === "input" ||
+        reason?.kind === "worker_questions" ||
+        reason?.kind === "revision" ||
+        reason?.kind === "pick_creation_step"
+      );
+    case "user_picked_creation_step":
+      return reason?.kind === "pick_creation_step";
+    case "user_left_creation_step":
+      return (
+        reason?.kind === "approve_step" ||
+        reason?.kind === "worker_questions" ||
+        reason?.kind === "input" ||
+        reason?.kind === "revision"
+      );
+    case "creation_step_pick_awaited":
+      return session.phase === "running";
     case "user_accepted_artifact":
     case "user_rejected_artifact":
       return reason?.kind === "review_artifact";
@@ -361,8 +439,12 @@ export function canApplyEvent(
         reason?.kind === "review_artifact" || reason?.kind === "approve_step"
       );
     case "main_agent_decision_created":
-      // running 时可决策；waiting_user(input) 时允许总管在启动阶段插话
-      return session.phase === "running" || reason?.kind === "input";
+      // running 时可决策；waiting_user(input/pick) 时允许总管在启动阶段插话或点选后补参确认
+      return (
+        session.phase === "running" ||
+        reason?.kind === "input" ||
+        reason?.kind === "pick_creation_step"
+      );
     default:
       return true;
   }
@@ -420,13 +502,20 @@ function handleWorkerCompleted(
 
   if (mode === "no_confirmation") {
     next = updateArtifact(next, artifact.id, { status: "accepted" });
-    return afterPlayOrMainAgent(session, {
+    const cleared = {
       ...next,
       pendingArtifactId: undefined,
       currentWorkerId: undefined,
       pendingDecision: undefined,
       resumeContext: undefined,
-    });
+    };
+    if (artifact.workerId === DESIGN_FLOW_WORKER_ID) {
+      return {
+        session: touch(running(cleared)),
+        effects: [{ type: "propose_next_creation_step" }],
+      };
+    }
+    return afterPlayOrMainAgent(session, cleared);
   }
 
   // programmatic_review
@@ -616,6 +705,10 @@ export function applyEvent(
           session: touch(running(next)),
           effects: [{ type: "propose_next_creation_step" }],
         };
+      }
+
+      if (session.waitingReason?.kind === "pick_creation_step") {
+        return applyFlowReplan(session, event, text);
       }
 
       if (session.waitingReason?.kind === "revision") {
@@ -836,16 +929,81 @@ export function applyEvent(
     }
 
     case "user_rejected_next_step": {
+      return applyFlowReplan(session, event, event.payload.reason);
+    }
+
+    case "user_requested_flow_replan": {
+      return applyFlowReplan(session, event, event.payload.reason);
+    }
+
+    case "creation_step_pick_awaited": {
+      return {
+        session: waiting(
+          touch(
+            appendHistory(
+              {
+                ...session,
+                currentWorkerId: undefined,
+                pendingDecision: undefined,
+              },
+              event,
+            ),
+          ),
+          { kind: "pick_creation_step" },
+        ),
+        effects: [],
+      };
+    }
+
+    case "user_left_creation_step": {
+      const slots = { ...session.slots };
+      delete slots[CREATION_PROPOSED_STEP_TAG];
+      return {
+        session: waiting(
+          touch(
+            appendHistory(
+              {
+                ...session,
+                slots,
+                pendingDecision: undefined,
+                pendingArtifactId: undefined,
+                currentWorkerId: undefined,
+                currentStepId: undefined,
+                resumeContext: undefined,
+              },
+              event,
+            ),
+          ),
+          { kind: "pick_creation_step" },
+        ),
+        effects: [],
+      };
+    }
+
+    case "user_picked_creation_step": {
+      const stepId = event.payload.stepId.trim();
+      if (!stepId) {
+        return fail(session, "pick_creation_step requires stepId");
+      }
       return {
         session: touch(
           running(
             appendHistory(
-              { ...session, pendingDecision: undefined },
+              {
+                ...session,
+                currentWorkerId: DESIGN_STEP_WORKER_ID,
+                pendingDecision: undefined,
+              },
               event,
             ),
           ),
         ),
-        effects: [{ type: "invoke_main_agent" }],
+        effects: [
+          {
+            type: "run_worker",
+            workerId: DESIGN_STEP_WORKER_ID,
+          },
+        ],
       };
     }
 
@@ -1033,9 +1191,8 @@ export function applyEvent(
       if (inferLifecycleStage(session) === "play") {
         return afterPlayOrMainAgent(session, cleared);
       }
-      // 创作步验收后直接提案下一步（有待执行步则确认开干；否则交总管扩步）。
-      // 不再先停在「下一步想写什么」——与「同意并开始」叠成双重确认。
-      // 细化终稿也走提案，而不是 invoke_main_agent（否则容易把刚收下的终稿再跑一遍）。
+      // 创作步验收后停在分层图上等点选（可反复能力可当场新开一条）。
+      // 仅当没有任何可点节点时，propose 才会把控制权交回总管扩步。
       const proposeNext =
         artifact.workerId === "design-step" ||
         artifact.workerId === "design-flow";

@@ -1,4 +1,5 @@
 import { parse as parseYaml } from "yaml";
+import { tryParseJsonDoc } from "../parse/json-doc.js";
 import {
   inferPlaySlotsFromWorkers,
   mergeWorkersWithPlaySlots,
@@ -400,6 +401,10 @@ export function parseWorkerSetYaml(raw: string | undefined): ParsedWorkerSet | n
 
 /** 从纯 JSON、```json 围栏或夹杂说明的文本中抽出对象字面量 */
 export function extractJsonObjectText(raw: string): string | null {
+  const parsed = tryParseJsonDoc(raw);
+  if (parsed != null && typeof parsed === "object") {
+    return JSON.stringify(parsed);
+  }
   const text = raw.trim();
   if (!text) return null;
   if (text.startsWith("{")) {

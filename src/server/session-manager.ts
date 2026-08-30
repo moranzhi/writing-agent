@@ -81,8 +81,10 @@ import { Blackboard } from "../blackboard/blackboard.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
 import { parseShellAdaptationFromReplyFormat } from "../skills/present-packet.js";
 import {
+  CREATION_ACCEPTED_CONTENT_TAG,
   CREATION_ACCEPTED_UNITS_TAG,
   isDesignDiskWorker,
+  parseAcceptedContentStore,
   parseAcceptedUnits,
   SLOT_CREATION_ACCEPTED_UNITS,
 } from "../skills/creation-units.js";
@@ -104,18 +106,26 @@ import {
   CREATION_FLOW_TAG,
   CREATION_PROPOSED_STEP_TAG,
   CREATION_SELECTED_RECIPE_TAG,
+  DESIGN_FLOW_WORKER_ID,
   creationFlowFromRecipeSeed,
   findRecipeCatalogEntry,
   formatCreationFlowForUser,
+  findModuleByName,
+  findStepByRef,
+  type FlowStepTitleHint,
   isProgressPointerTag,
   loadRecipeCatalog,
   loadRecipeDetail,
+  loadModuleCatalog,
   parseCreationFlow,
   parseSelectedRecipeRef,
   resolveDesignStepBinding,
   stepUnitId,
   stringifyCreationFlow,
+  stripReviseSteps,
+  type CreationFlow,
   type CreationFlowUserView,
+  type ModuleCatalog,
   type RecipeCatalogEntry,
 } from "../skills/creation-flow.js";
 import { loadSkill } from "../skills/loader.js";
@@ -260,6 +270,8 @@ export type SessionAction =
   | { type: "approve"; label: string }
   | { type: "accept"; label: string }
   | { type: "reject"; label: string }
+  | { type: "replan"; label: string }
+  | { type: "leave_step"; label: string }
   | { type: "run_outline"; label: string }
   | { type: "finish"; label: string };
 
@@ -297,6 +309,8 @@ export type ProposedNextStepView = {
   /** 步骤怎么跑：revise = 回头修改既有产物 */
   mode?: "fresh" | "revise";
   revises?: string;
+  /** 收口节点（开场白）：确认开干前仍可改编排追加前序节点 */
+  closer?: boolean;
 };
 
 export type ReviewArtifactView = {
@@ -325,6 +339,8 @@ type ManagedSession = {
   branchState: MessageBranchState;
   /** 当前能力包可选初始配方（用户手动选） */
   recipeOptions?: RecipeCatalogEntry[];
+  /** 模块目录（分层图 / 可反复增殖） */
+  moduleCatalog?: ModuleCatalog | null;
   /** 开局模块 opening，缓存给意图页 */
   openingGuide?: { stepId: string; stepName: string; text: string } | null;
   /** 当前 LLM 请求的取消器（停止并重试） */
@@ -540,6 +556,7 @@ export class SessionManager {
     if (bookId) {
       this.activeBookSessions.set(bookId, id);
       appendBookSession(bookId, id);
+      this.persist(managed);
     }
     return this.toView(id);
   }
@@ -557,7 +574,9 @@ export class SessionManager {
   }
 
   get(id: string): SessionView | null {
-    if (!this.sessions.has(id)) return null;
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (s.runtime.recoverOrphanedRun()) this.persist(s);
     return this.toView(id);
   }
 
@@ -825,7 +844,8 @@ export class SessionManager {
       kind !== "review_artifact" &&
       kind !== "approve_step" &&
       kind !== "revision" &&
-      kind !== "next_intent"
+      kind !== "next_intent" &&
+      kind !== "pick_creation_step"
     ) {
       return;
     }
@@ -1079,8 +1099,7 @@ export class SessionManager {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 发送消息失败", detail);
-      s.messages.push(this.msg("system", formatRuntimeError(detail)));
-      if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+      await this.recoverFailedRun(s, detail);
     }
     this.syncCreationDialogue(s);
     this.persist(s);
@@ -1315,8 +1334,7 @@ export class SessionManager {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[会话] 停止并重试失败", detail);
-      s.messages.push(this.msg("system", formatRuntimeError(detail)));
-      if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+      await this.recoverFailedRun(s, detail);
     }
     this.syncCreationDialogue(s);
     this.persist(s);
@@ -1462,7 +1480,7 @@ export class SessionManager {
     try {
       const owned = await this.runExclusive(id, s, async () => {
         if (waiting?.kind === "approve_step") {
-          await s.runtime.rejectStep(reason ?? "用户暂不执行");
+          await s.runtime.leaveCreationStep();
         } else if (waiting?.kind === "review_artifact") {
           await s.runtime.rejectArtifact(reason ?? "用户要求重新来");
         } else {
@@ -1476,7 +1494,172 @@ export class SessionManager {
       s.messages.push(this.msg("system", formatRuntimeError(detail)));
       if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     }
+    this.syncCreationDialogue(s);
+    this.persist(s);
     return this.toView(id);
+  }
+
+  /** 离开当前技能步，回到分层图点选 */
+  async leaveStep(id: string): Promise<SessionView> {
+    const s = this.require(id);
+    try {
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.leaveCreationStep(),
+      );
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 返回节点失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+      if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    }
+    this.syncCreationDialogue(s);
+    this.persist(s);
+    return this.toView(id);
+  }
+
+  /** 开场白等步骤上发现漏了前序节点：再进流程编排，不整局重开 */
+  async replan(id: string, reason?: string): Promise<SessionView> {
+    const s = this.require(id);
+    const note = reason?.trim() || "回到流程编排，追加或改排节点。";
+    this.clearAgentThinking(id);
+    recordPreMessageCheckpoint(
+      s.branchState,
+      s.messages.length,
+      this.captureCheckpoint(s),
+    );
+    s.messages.push(this.msg("user", note));
+    this.syncCreationDialogue(s);
+    if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    try {
+      const owned = await this.runExclusive(id, s, () =>
+        s.runtime.replanCreationFlow(note),
+      );
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 再编排失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+      if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    }
+    this.syncCreationDialogue(s);
+    this.persist(s);
+    return this.toView(id);
+  }
+
+  async pickStep(
+    id: string,
+    stepId: string,
+    stepParams?: Record<string, unknown>,
+    reenter?: boolean,
+  ): Promise<SessionView> {
+    const s = this.require(id);
+    try {
+      const owned = await this.runExclusive(id, s, async () => {
+        await this.confirmPendingFlowPlan(s);
+        const waiting = s.runtime.getSession().waitingReason?.kind;
+        if (waiting !== "pick_creation_step") {
+          throw new Error("当前不是点选节点的时机");
+        }
+        await s.runtime.pickCreationStep(stepId, stepParams, {
+          reenter: reenter === true,
+        });
+      });
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 点选节点失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+    }
+    this.persist(s);
+    return this.toView(id);
+  }
+
+  async getStepArtifact(
+    id: string,
+    stepId: string,
+  ): Promise<{
+    stepId: string;
+    name: string;
+    tag: string | null;
+    content: string;
+  }> {
+    const s = this.require(id);
+    const catalog = s.moduleCatalog;
+    const flow = parseCreationFlow(
+      s.runtime.getBlackboard().getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (!flow) throw new Error("还没有工作流计划");
+    const cleaned = stripReviseSteps(flow);
+    const step = findStepByRef(cleaned, stepId.trim());
+    if (!step) throw new Error(`找不到节点：${stepId}`);
+    const mod = findModuleByName(catalog, step.name);
+    const tag = mod?.artifact?.trim() || null;
+    const content = tag
+      ? s.runtime.getBlackboard().getContentByTag(tag)?.trim() || ""
+      : "";
+    return { stepId: step.id, name: step.name, tag, content };
+  }
+
+  async spawnStep(id: string, moduleName: string): Promise<SessionView> {
+    const s = this.require(id);
+    try {
+      const owned = await this.runExclusive(id, s, async () => {
+        await this.confirmPendingFlowPlan(s);
+        const waiting = s.runtime.getSession().waitingReason?.kind;
+        if (waiting !== "pick_creation_step") {
+          throw new Error("当前不是追加节点的时机");
+        }
+        await s.runtime.spawnCreationStep(moduleName);
+      });
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 追加节点失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+    }
+    this.persist(s);
+    return this.toView(id);
+  }
+
+  /** 已点进技能步、尚未验收：可退回分层图（误点可增殖节点时用） */
+  private canOfferLeaveCreationStep(
+    s: ManagedSession,
+    reason: WaitingReason | undefined,
+  ): boolean {
+    const session = s.runtime.getSession();
+    if (
+      isPlayLayerActive(session.slots) ||
+      inferLifecycleStage(session) === "play"
+    ) {
+      return false;
+    }
+    const kind = reason?.kind;
+    if (
+      kind !== "worker_questions" &&
+      kind !== "input" &&
+      kind !== "revision"
+    ) {
+      return false;
+    }
+    const stepId =
+      s.runtime.getBlackboard().getContentByTag(CREATION_CURRENT_STEP_TAG)?.trim() ||
+      session.currentStepId?.trim() ||
+      "";
+    return Boolean(stepId);
+  }
+
+  /** 流程编排还停在核对态时，点节点先收下计划再进入 */
+  private async confirmPendingFlowPlan(s: ManagedSession): Promise<void> {
+    const session = s.runtime.getSession();
+    if (session.waitingReason?.kind !== "review_artifact") return;
+    const art = session.pendingArtifactId
+      ? session.artifacts.find((a) => a.id === session.pendingArtifactId)
+      : undefined;
+    if (art?.workerId !== DESIGN_FLOW_WORKER_ID) {
+      throw new Error("当前不是点选节点的时机");
+    }
+    await s.runtime.acceptArtifact();
   }
 
   async runOutline(id: string): Promise<SessionView> {
@@ -1586,6 +1769,7 @@ export class SessionManager {
     this.activeBookSessions.set(params.bookId, params.sessionId);
     appendBookSession(params.bookId, params.sessionId);
     await this.refreshRecipeOptions(managedRef);
+    runtime.recoverOrphanedRun();
     this.persist(managedRef);
     await this.maybeKickAgentAfterDemand(runtime);
 
@@ -1889,6 +2073,20 @@ export class SessionManager {
         s.runAbort = undefined;
       }
     }
+  }
+
+  /** 执行失败后离开 running，避免界面一直转圈。 */
+  private async recoverFailedRun(
+    s: ManagedSession,
+    detail: string,
+  ): Promise<void> {
+    const formatted = formatRuntimeError(detail);
+    if (s.runtime.getSession().phase === "running") {
+      await s.runtime.failRun(formatted);
+    } else {
+      s.messages.push(this.msg("system", formatted));
+    }
+    if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
   }
 
   private enrichDisplayMessages(
@@ -2202,11 +2400,21 @@ export class SessionManager {
       } else {
         actions.push({ type: "approve", label: "确认执行" });
       }
-      actions.push({ type: "reject", label: "暂不执行" });
+      actions.push({ type: "reject", label: "返回节点" });
       actions.push({
         type: "send_message",
         label: "说明意见",
-        placeholder: "改排、回头改某步，或说明不要这一步…",
+        placeholder: "改排、补节点（如 NPC）、回头改某步，或说明不要这一步…",
+      });
+    } else if (reason?.kind === "pick_creation_step") {
+      hints.push(
+        "点可进入的节点即确认并开始。虚线原型点一下会增殖一条实例再进去。要改排在底栏写意见再发。",
+      );
+      actions.push({ type: "replan", label: "发送" });
+      actions.push({
+        type: "send_message",
+        label: "发送",
+        placeholder: "例如：补舞台骨架、把某步改到开场白之前…",
       });
     } else if (reason?.kind === "next_intent") {
       hints.push("下一步想写什么？可留空；也可说回头改某步。发送后会展示下一节点供你确认。");
@@ -2220,15 +2428,30 @@ export class SessionManager {
       const copy = reviewComposerCopy(art?.workerId, {
         hasQuestions: Boolean(reason.questions?.length),
       });
-      actions.push({ type: "accept", label: copy.acceptLabel });
-      actions.push({ type: "reject", label: "不接受" });
-      actions.push({
-        type: "send_message",
-        label: copy.submitLabel,
-        placeholder: `${copy.placeholder}；在现有产物上改，不整份重做…`,
-      });
+      if (art?.workerId === DESIGN_FLOW_WORKER_ID) {
+        hints.push(
+          "点可进入的节点即确认并开始。虚线原型点一下会增殖一条实例再进去。要改排在底栏写意见再发。",
+        );
+        actions.push({
+          type: "send_message",
+          label: "发送",
+          placeholder: "例如：补舞台骨架、把某步改到开场白之前…",
+        });
+      } else {
+        actions.push({ type: "accept", label: copy.acceptLabel });
+        actions.push({ type: "reject", label: "不接受" });
+        actions.push({
+          type: "send_message",
+          label: copy.submitLabel,
+          placeholder: `${copy.placeholder}；在现有产物上改，不整份重做…`,
+        });
+      }
       if (reason.questions?.length) {
-        hints.push(`下方追问可选；${copy.acceptLabel}即收起（表示无需再完善）`);
+        hints.push(
+          art?.workerId === DESIGN_FLOW_WORKER_ID
+            ? "下方追问可选；点节点进入即收起"
+            : `下方追问可选；${copy.acceptLabel}即收起（表示无需再完善）`,
+        );
         actions.push({ type: "answer_questions", label: "提交作答" });
         actions.push({ type: "skip_questions", label: "跳过追问" });
       }
@@ -2281,6 +2504,10 @@ export class SessionManager {
       });
     }
 
+    if (this.canOfferLeaveCreationStep(s, reason)) {
+      actions.push({ type: "leave_step", label: "返回节点" });
+    }
+
     if (s.bookId) {
       this.persist(s);
     }
@@ -2330,7 +2557,12 @@ export class SessionManager {
         effectiveStartupMode(activeSnap) === "agent-first"
           ? activeSnap.uiPrompt?.trim() || DEFAULT_UI_PROMPT
           : undefined,
-      reviewArtifact: buildReviewArtifactView(session, messages, s.runtime.getBlackboard()),
+      reviewArtifact: buildReviewArtifactView(
+        session,
+        messages,
+        s.runtime.getBlackboard(),
+        s.moduleCatalog,
+      ),
       workerSetView: buildWorkerSetUserView(
         s.runtime.getBlackboard(),
         s.runtime.getSession(),
@@ -2338,6 +2570,7 @@ export class SessionManager {
       creationFlowView: buildCreationFlowUserView(
         s.runtime.getBlackboard(),
         session.slots[SLOT_CREATION_ACCEPTED_UNITS],
+        s.moduleCatalog,
       ),
       proposedNextStep:
         reason?.kind === "approve_step"
@@ -2448,6 +2681,7 @@ export class SessionManager {
     const skillName = s.runtime.getActiveSkill()?.name;
     if (!skillName) {
       s.recipeOptions = [];
+      s.moduleCatalog = null;
       s.openingGuide = null;
       return;
     }
@@ -2455,13 +2689,19 @@ export class SessionManager {
       const skill = await loadSkill(skillName);
       if (!skill.skillPackRoot) {
         s.recipeOptions = [];
+        s.moduleCatalog = null;
         s.openingGuide = null;
         return;
       }
-      const catalog = await loadRecipeCatalog(skill.skillPackRoot);
+      const [catalog, modules] = await Promise.all([
+        loadRecipeCatalog(skill.skillPackRoot),
+        loadModuleCatalog(skill.skillPackRoot),
+      ]);
       s.recipeOptions = catalog?.recipes ?? [];
+      s.moduleCatalog = modules;
     } catch {
       s.recipeOptions = [];
+      s.moduleCatalog = null;
     }
     await this.ensureRecipeSeededFlow(s);
     await this.refreshOpeningGuide(s);
@@ -2489,11 +2729,7 @@ export class SessionManager {
       const detail = await loadRecipeDetail(packRoot, entry);
       const seeded = creationFlowFromRecipeSeed(detail);
       if (!seeded) return;
-      board.write({
-        tag: CREATION_FLOW_TAG,
-        content: stringifyCreationFlow(seeded),
-        source: "runtime",
-      });
+      await this.commitSeededCreationFlow(s, seeded);
     } catch (err) {
       console.error("[会话] 配方预置失败", err);
     }
@@ -2553,6 +2789,7 @@ export class SessionManager {
     s: ManagedSession,
     reason: WaitingReason | undefined,
   ): { stepId: string; stepName: string; text: string } | null {
+    if (reason?.kind === "pick_creation_step") return null;
     if (reason?.kind === "worker_questions") {
       const qs = normalizeQuestions(reason.questions);
       if (isModuleOpeningQuestions(qs)) {
@@ -2584,6 +2821,44 @@ export class SessionManager {
     return s.openingGuide ?? null;
   }
 
+  /** 写入剧本 seed，并立刻进入点选图（开局节点跟配方走）。 */
+  private async commitSeededCreationFlow(
+    s: ManagedSession,
+    seeded: CreationFlow,
+  ): Promise<void> {
+    this.writeSeededCreationFlow(s, seeded);
+    await s.runtime.enterSeededCreationPick();
+  }
+
+  /** 配方预置 DAG：写入黑板并留下可回退的编排检查点（不必先跑 LLM） */
+  private writeSeededCreationFlow(s: ManagedSession, seeded: CreationFlow): void {
+    s.runtime.getBlackboard().write({
+      tag: CREATION_FLOW_TAG,
+      content: stringifyCreationFlow(seeded),
+      source: "runtime",
+    });
+    const alreadyRecorded = s.messages.some(
+      (m) =>
+        m.kind === "worker_output" &&
+        m.actor === "design-flow" &&
+        (m.text ?? "").includes("配方预置近期起点"),
+    );
+    if (alreadyRecorded) return;
+    const names = seeded.steps.map((step) => step.name).join(" → ");
+    recordPreMessageCheckpoint(
+      s.branchState,
+      s.messages.length,
+      this.captureCheckpoint(s),
+    );
+    s.messages.push(
+      this.msg(
+        "system",
+        `[Worker] design-flow 已完成\n\n配方预置近期起点${names ? `：${names}` : ""}。\n这是可回退的编排检查点；之后可再编排追加节点（如生成规则 / 具体实例）。`,
+      ),
+    );
+    this.syncCreationDialogue(s);
+  }
+
   private async applySelectedRecipe(
     s: ManagedSession,
     recipeId: string,
@@ -2606,7 +2881,7 @@ export class SessionManager {
       source: "user",
     });
 
-    // 剧本已钉死开局模块 → 默认写入近期起点，开局即坐在 DAG 第一步（不必先跑 design-flow）
+    // 开局节点跟剧本 seed：写入近期起点并进入点选图（不必先跑 design-flow / 先描述需求）
     const existingFlow = board.getContentByTag(CREATION_FLOW_TAG)?.trim();
     if (!existingFlow) {
       const skillName = s.runtime.getActiveSkill()?.name;
@@ -2618,11 +2893,7 @@ export class SessionManager {
             const detail = await loadRecipeDetail(packRoot, entry);
             const seeded = creationFlowFromRecipeSeed(detail);
             if (seeded) {
-              board.write({
-                tag: CREATION_FLOW_TAG,
-                content: stringifyCreationFlow(seeded),
-                source: "runtime",
-              });
+              await this.commitSeededCreationFlow(s, seeded);
             }
           }
         } catch (err) {
@@ -2652,6 +2923,7 @@ function collectFilledTags(blackboard: Blackboard): string[] {
 function buildCreationFlowUserView(
   blackboard: Blackboard,
   acceptedRaw?: unknown,
+  catalog?: ModuleCatalog | null,
 ): CreationFlowUserView | undefined {
   const raw = blackboard.getContentByTag(CREATION_FLOW_TAG)?.trim();
   if (!raw) return undefined;
@@ -2662,7 +2934,24 @@ function buildCreationFlowUserView(
   const accepted = parseAcceptedUnits(
     acceptedRaw ?? blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
   );
-  return formatCreationFlowForUser(flow, undefined, accepted);
+  const titleHints: Record<string, FlowStepTitleHint> = {};
+  const store = parseAcceptedContentStore(
+    blackboard.getContentByTag(CREATION_ACCEPTED_CONTENT_TAG),
+  );
+  for (const [id, entry] of Object.entries(store.units)) {
+    if (!entry.summary && entry.content == null) continue;
+    titleHints[id] = {
+      ...(entry.summary ? { summary: entry.summary } : {}),
+      ...(entry.content != null ? { content: entry.content } : {}),
+    };
+  }
+  return formatCreationFlowForUser(
+    flow,
+    catalog,
+    accepted,
+    collectFilledTags(blackboard),
+    titleHints,
+  );
 }
 
 function readProposedNextStep(
@@ -2708,6 +2997,7 @@ function readProposedNextStep(
       intent: typeof doc.intent === "string" ? doc.intent : undefined,
       mode: doc.mode === "revise" ? "revise" : undefined,
       revises: typeof doc.revises === "string" ? doc.revises : undefined,
+      closer: doc.closer === true ? true : undefined,
     };
   } catch {
     return undefined;
@@ -2767,6 +3057,7 @@ function buildReviewArtifactView(
   session: RuntimeSession,
   messages: ChatMessage[],
   blackboard: Blackboard,
+  catalog?: ModuleCatalog | null,
 ): ReviewArtifactView | undefined {
   if (session.waitingReason?.kind !== "review_artifact") return undefined;
   const art = session.artifacts.find((a) => a.id === session.pendingArtifactId);
@@ -2869,6 +3160,7 @@ function buildReviewArtifactView(
     ? buildCreationFlowUserView(
         blackboard,
         session.slots[SLOT_CREATION_ACCEPTED_UNITS],
+        catalog,
       )
     : undefined;
 
@@ -2896,7 +3188,7 @@ function formatRuntimeError(detail: string): string {
   if (detail.includes("401") || detail.toLowerCase().includes("authentication")) {
     return (
       "[请求失败] API Key 无效或未授权。请到「设置 → API 配置」检查 Key 与 Base URL，" +
-      "或点击「测试连接」验证。"
+      "或点击「探测」验证。"
     );
   }
   if (detail.startsWith("LLM request failed")) {

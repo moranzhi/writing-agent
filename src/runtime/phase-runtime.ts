@@ -17,7 +17,11 @@ import {
 } from "./phase-machine.js";
 import { Blackboard } from "../blackboard/blackboard.js";
 import type { LlmProvider } from "../llm/client.js";
-import { DEFAULT_WORKERS, MainAgent } from "../main-agent/main-agent.js";
+import {
+  DEFAULT_WORKERS,
+  isUnusableMainAgentOutput,
+  MainAgent,
+} from "../main-agent/main-agent.js";
 import { listSkills, listWorkerSkills, loadSkill, resolveSkillId } from "../skills/loader.js";
 import {
   buildInstanceWorkerDeclaration,
@@ -58,14 +62,32 @@ import {
   CREATION_FLOW_TAG,
   CREATION_CURRENT_STEP_TAG,
   CREATION_PROPOSED_STEP_TAG,
+  CREATION_INHERIT_EXISTING_TAG,
   CREATION_MODULE_OPENING_TAG,
   CREATION_MODULE_OPENING_STATE_TAG,
   SLOT_CREATION_MODULE_OPENING_STATE,
   loadModuleCatalog,
   isReviseStep,
+  isStepAccepted,
+  isInheritExistingFlag,
   mergeCreationFlowPreservingAccepted,
   nextPendingStep,
+  listReadySteps,
+  listSelectablePrototypes,
+  listRepeatableSpawns,
+  isStepReady,
+  hasSelectableCreationWork,
+  spawnRepeatableCreationStep,
+  spawnInstanceFromPrototype,
+  removeUnstartedInstance,
+  isPrototypeStep,
+  isPrototypeSelectable,
+  isInstanceStep,
+  findStepByRef,
+  findModuleByName,
   parseCreationFlow,
+  DESIGN_FLOW_WORKER_ID,
+  DESIGN_STEP_WORKER_ID,
   parseModuleOpeningState,
   patchCreationFlowStepParams,
   pickRecordedStepId,
@@ -76,7 +98,10 @@ import {
   stepUnitId,
   stringifyCreationFlow,
   stringifyModuleOpeningState,
+  finalizeCreationFlow,
+  type CreationFlow,
   type CreationFlowStepParams,
+  type ModuleCatalog,
   type ModuleCatalogEntry,
   type ModuleParamSpec,
 } from "../skills/creation-flow.js";
@@ -98,6 +123,7 @@ import {
   OPENING_OUTPUT_TAG,
   OPENING_SETUP_ARTIFACT_TAG,
   parseOpeningSealPayload,
+  reopenCreationFlowRaw,
   SLOT_CREATION_SEALED_BY_OPENING,
   SLOT_OPENING_SELECTED_INDEX,
 } from "../skills/opening-seal.js";
@@ -324,6 +350,56 @@ export class PhaseRuntime {
       return this.session;
     }
     throw new Error("当前没有可重试的执行");
+  }
+
+  /** LLM/解析失败后离开 running，避免界面一直转圈。 */
+  async failRun(reason: string): Promise<RuntimeSession> {
+    if (this.session.phase !== "running") return this.session;
+    const result = this.commitEvent({
+      type: "runtime_failed",
+      payload: { reason },
+    });
+    await this.processEffects(result.effects);
+    return this.session;
+  }
+
+  /**
+   * 进程里留下的「执行中、没 worker」：配方已预置 DAG 时改回点选等待。
+   * 读档 / 轮询时调用，避免界面一直转圈。
+   */
+  recoverOrphanedRun(): boolean {
+    if (this.session.phase !== "running" || this.session.waitingReason) {
+      return false;
+    }
+    if (this.session.currentWorkerId) return false;
+    if (!this.hasCreationFlow()) return false;
+    debugLog("step", "恢复中断的调度，等待点选节点");
+    this.clearProposedStep();
+    this.session = {
+      ...this.session,
+      phase: "waiting_user",
+      waitingReason: { kind: "pick_creation_step" },
+      pendingDecision: undefined,
+      currentWorkerId: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    return true;
+  }
+
+  /**
+   * 配方已预置 DAG：跳过「先描述需求」，直接进入点选图。
+   * 图上节点来自当前剧本 seed，换配方即换开局。
+   */
+  async enterSeededCreationPick(): Promise<void> {
+    if (!this.hasCreationFlow()) return;
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        startupCompleted: true,
+      },
+    };
+    await this.awaitCreationStepPick();
   }
 
   /** 重 roll 指定 worker（刷新 Skill 回复） */
@@ -595,7 +671,7 @@ export class PhaseRuntime {
     return this.session;
   }
 
-  /** 用户拒绝 pendingDecision，回到总管 */
+  /** 用户拒绝 pendingDecision：回到流程编排，可追加节点 */
   async rejectStep(reason?: string): Promise<RuntimeSession> {
     const id = this.session.pendingDecision?.id;
     if (!id) throw new Error("当前没有待拒绝的决策");
@@ -604,6 +680,180 @@ export class PhaseRuntime {
       payload: { decisionId: id, reason },
     });
     return this.session;
+  }
+
+  /**
+   * 离开当前技能步，回到分层图。
+   * 可增殖节点刚增殖出、尚未验收的空实例从图上撤掉。
+   */
+  async leaveCreationStep(): Promise<RuntimeSession> {
+    const waiting = this.session.waitingReason?.kind;
+    const allowed =
+      waiting === "worker_questions" ||
+      waiting === "input" ||
+      waiting === "revision" ||
+      waiting === "approve_step";
+    if (!allowed) {
+      throw new Error("当前不能返回节点选择");
+    }
+    if (inferLifecycleStage(this.session) === "play") {
+      throw new Error("游玩中不能返回创作节点");
+    }
+    const stepId = this.readPinnedStepId();
+    const removed = this.unspawnCurrentInstanceIfEmpty();
+    this.clearProposedStep();
+    this.clearCurrentStepPointers();
+    const result = await this.dispatch({
+      type: "user_left_creation_step",
+      payload: {},
+    });
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    const stepName = removed?.name?.trim();
+    this.onMessage(
+      removed
+        ? `已取消刚增殖的「${stepName || stepId}」，回到节点选择。`
+        : "已回到节点选择。",
+    );
+    return this.session;
+  }
+
+  private unspawnCurrentInstanceIfEmpty(): { id: string; name: string } | null {
+    const stepId = this.readPinnedStepId();
+    if (!stepId) return null;
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (!flow) return null;
+    const step = findStepByRef(flow, stepId);
+    if (!step || !isInstanceStep(step)) return null;
+    const accepted = this.readAcceptedStepIds();
+    if (isStepAccepted(step, accepted)) return null;
+    if (
+      this.session.artifacts.some(
+        (a) => a.stepId === step.id && a.status !== "rejected",
+      )
+    ) {
+      return null;
+    }
+    const next = removeUnstartedInstance(flow, step.id, accepted);
+    if (next.steps.length === flow.steps.length) return null;
+    this.writeCreationFlow(next);
+    debugLog("step", `取消未完成实例 ${step.id}`);
+    return { id: step.id, name: step.name };
+  }
+
+  private clearCurrentStepPointers(): void {
+    this.blackboard.write({
+      tag: CREATION_CURRENT_STEP_TAG,
+      content: "",
+      source: "runtime",
+    });
+    this.blackboard.write({
+      tag: CREATION_INHERIT_EXISTING_TAG,
+      content: "",
+      source: "runtime",
+    });
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [CREATION_CURRENT_STEP_TAG]: undefined,
+        [CREATION_INHERIT_EXISTING_TAG]: undefined,
+        [SLOT_CREATION_CURRENT_UNIT]: undefined,
+      },
+    };
+  }
+
+  /** 开场白等步骤上发现漏了前序节点：再进流程编排，不整局重开 */
+  async replanCreationFlow(reason?: string): Promise<RuntimeSession> {
+    const waiting = this.session.waitingReason?.kind;
+    if (waiting === "approve_step") {
+      return this.rejectStep(reason);
+    }
+    await this.dispatch({
+      type: "user_requested_flow_replan",
+      payload: { reason },
+    });
+    return this.session;
+  }
+
+  /** 图上点选：普通节点开干；原型槽位先增殖再进去；已完成节点可 reenter 重进 */
+  async pickCreationStep(
+    stepId: string,
+    stepParams?: CreationFlowStepParams,
+    opts?: { reenter?: boolean },
+  ): Promise<RuntimeSession> {
+    const id = stepId.trim();
+    this.syncSlotsToBlackboard(this.session);
+    const catalog = await this.loadActiveModuleCatalog();
+    const flow = this.readNormalizedFlow(catalog);
+    const step = flow ? findStepByRef(flow, id) : null;
+    if (flow && step && isPrototypeStep(step)) {
+      if (opts?.reenter) {
+        throw new Error("原型槽位不能回头修改，请点已完成的实例");
+      }
+      const spawned = spawnInstanceFromPrototype({
+        flow,
+        catalog,
+        prototypeId: step.id,
+        acceptedStepIds: this.readAcceptedStepIds(),
+      });
+      if ("error" in spawned) throw new Error(spawned.error);
+      this.writeCreationFlow(spawned.flow);
+      debugLog("step", `点原型 ${step.id} → ${spawned.step.id}`);
+      await this.startCreationStep(spawned.step.id, { stepParams });
+      return this.session;
+    }
+    await this.startCreationStep(id, {
+      stepParams,
+      reenter: opts?.reenter === true,
+    });
+    return this.session;
+  }
+
+  /** 可反复能力：新编一条再进去 */
+  async spawnCreationStep(moduleName: string): Promise<RuntimeSession> {
+    this.syncSlotsToBlackboard(this.session);
+    const catalog = await this.loadActiveModuleCatalog();
+    const flow = this.readNormalizedFlow(catalog);
+    if (!flow) throw new Error("还没有工作流计划，无法追加节点");
+    const spawned = spawnRepeatableCreationStep({
+      flow,
+      catalog,
+      moduleName,
+      acceptedStepIds: this.readAcceptedStepIds(),
+    });
+    if ("error" in spawned) throw new Error(spawned.error);
+    this.writeCreationFlow(spawned.flow);
+    debugLog("step", `新开 ${spawned.step.id}（${spawned.step.name}）`);
+    await this.startCreationStep(spawned.step.id);
+    return this.session;
+  }
+
+  private writeCreationFlow(flow: CreationFlow): void {
+    const content = stringifyCreationFlow(flow);
+    this.blackboard.write({
+      tag: CREATION_FLOW_TAG,
+      content,
+      source: "user",
+    });
+    this.session = {
+      ...this.session,
+      slots: { ...this.session.slots, [CREATION_FLOW_TAG]: content },
+    };
+  }
+
+  private readNormalizedFlow(catalog: ModuleCatalog | null): CreationFlow | null {
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (!flow) return null;
+    const next = finalizeCreationFlow(flow, catalog);
+    const changed = JSON.stringify(next.steps) !== JSON.stringify(flow.steps);
+    if (changed) this.writeCreationFlow(next);
+    return next;
   }
 
   /** 将实例 Worker 声明写入 slots，便于 session 持久化与调试 */
@@ -857,6 +1107,13 @@ export class PhaseRuntime {
           }
           break;
         case "run_worker":
+          if (
+            effect.workerId === DESIGN_STEP_WORKER_ID &&
+            !this.hasPinnedReadyStep()
+          ) {
+            await this.awaitCreationStepPick();
+            break;
+          }
           if (this.autoStubWorker) {
             await this.runStubWorker(effect);
           } else if (this.llm) {
@@ -894,6 +1151,9 @@ export class PhaseRuntime {
         case "seal_creation_opening":
           this.sealCreationOpening();
           break;
+        case "unseal_creation_opening":
+          this.unsealCreationOpening();
+          break;
         case "run_play_turn":
           await this.startPlayTurn();
           break;
@@ -905,9 +1165,243 @@ export class PhaseRuntime {
   }
 
   /**
-   * 用户填完「下一步想写什么」后：有待执行步则提案并进入确认；否则交总管扩步/收口。
+   * 用户填完「下一步想写什么」后：有可点节点则停在分层图；程序步自动开干；否则交总管扩步。
    */
   private async proposeNextCreationStep(): Promise<void> {
+    await this.awaitCreationStepPick();
+  }
+
+  private readAcceptedStepIds(): string[] {
+    return parseAcceptedUnits(
+      this.session.slots[SLOT_CREATION_ACCEPTED_UNITS] ??
+        this.blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
+    );
+  }
+
+  private async loadActiveModuleCatalog(): Promise<ModuleCatalog | null> {
+    const active = this.getActiveSkill();
+    if (!active?.name) return null;
+    try {
+      const skill = await loadSkill(active.name);
+      if (!skill.skillPackRoot) return null;
+      return await loadModuleCatalog(skill.skillPackRoot);
+    } catch {
+      return null;
+    }
+  }
+
+  private readPinnedStepId(): string {
+    const fromCurrent = this.blackboard
+      .getContentByTag(CREATION_CURRENT_STEP_TAG)
+      ?.trim();
+    if (fromCurrent) return fromCurrent;
+    const raw =
+      (typeof this.session.slots[CREATION_PROPOSED_STEP_TAG] === "string"
+        ? String(this.session.slots[CREATION_PROPOSED_STEP_TAG])
+        : null) || this.blackboard.getContentByTag(CREATION_PROPOSED_STEP_TAG);
+    if (!raw?.trim()) return "";
+    try {
+      const doc = JSON.parse(raw) as { stepId?: unknown };
+      return typeof doc.stepId === "string" ? doc.stepId.trim() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private hasPinnedReadyStep(): boolean {
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (!flow) return false;
+    const step = findStepByRef(flow, this.readPinnedStepId());
+    if (!step) return false;
+    return isStepReady(flow, step, this.readAcceptedStepIds());
+  }
+
+  private pinCreationStepSnapshot(params: {
+    stepId: string;
+    name: string;
+    declaration: string;
+    params: Record<string, unknown>;
+    paramsMissing: string[];
+    paramSpecs: ModuleParamSpec[];
+    kind?: ModuleCatalogEntry["kind"];
+    closer?: boolean;
+    revise: boolean;
+    revises?: string;
+  }): void {
+    const intent =
+      typeof this.session.slots["用户.下一步意向"] === "string"
+        ? String(this.session.slots["用户.下一步意向"]).trim()
+        : "";
+    const snapshot = {
+      stepId: params.stepId,
+      name: params.name,
+      declaration: params.declaration || undefined,
+      params: params.params,
+      paramsMissing: params.paramsMissing,
+      paramSpecs: params.paramSpecs.map((p) => ({
+        key: p.key,
+        label: p.label,
+        required: Boolean(p.required),
+        hint: p.hint,
+      })),
+      intent: intent || undefined,
+      ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.closer ? { closer: true } : {}),
+      ...(params.revise ? { mode: "revise" as const } : {}),
+      ...(params.revises ? { revises: params.revises } : {}),
+    };
+    this.blackboard.write({
+      tag: CREATION_PROPOSED_STEP_TAG,
+      content: JSON.stringify(snapshot),
+      source: "runtime",
+    });
+    this.blackboard.write({
+      tag: CREATION_CURRENT_STEP_TAG,
+      content: params.stepId,
+      source: "runtime",
+    });
+    this.blackboard.write({
+      tag: CREATION_INHERIT_EXISTING_TAG,
+      content: params.revise ? "1" : "",
+      source: "runtime",
+    });
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [CREATION_PROPOSED_STEP_TAG]: JSON.stringify(snapshot),
+        [CREATION_CURRENT_STEP_TAG]: params.stepId,
+        [CREATION_INHERIT_EXISTING_TAG]: params.revise ? "1" : "",
+      },
+    };
+  }
+
+  private async startCreationStep(
+    stepId: string,
+    opts?: { stepParams?: CreationFlowStepParams; reenter?: boolean },
+  ): Promise<void> {
+    this.syncSlotsToBlackboard(this.session);
+    let flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (!flow) throw new Error("还没有工作流计划");
+    let step = findStepByRef(flow, stepId);
+    if (!step) throw new Error(`找不到节点：${stepId}`);
+    const accepted = this.readAcceptedStepIds();
+    const catalog = await this.loadActiveModuleCatalog();
+    const reenter = opts?.reenter === true;
+
+    if (isPrototypeStep(step)) {
+      if (!isPrototypeSelectable(flow, step, accepted)) {
+        throw new Error(`「${step.name}」的前置还没齐，不能增殖`);
+      }
+      const spawned = spawnInstanceFromPrototype({
+        flow,
+        catalog,
+        prototypeId: step.id,
+        acceptedStepIds: accepted,
+      });
+      if ("error" in spawned) throw new Error(spawned.error);
+      const content = stringifyCreationFlow(spawned.flow);
+      this.blackboard.write({
+        tag: CREATION_FLOW_TAG,
+        content,
+        source: "user",
+      });
+      this.session = {
+        ...this.session,
+        slots: { ...this.session.slots, [CREATION_FLOW_TAG]: content },
+      };
+      flow = spawned.flow;
+      step = spawned.step;
+    } else if (reenter) {
+      if (!isStepAccepted(step, accepted)) {
+        throw new Error(`「${step.name}」还没完成，请直接进入而不是回头修改`);
+      }
+    } else if (!isStepReady(flow, step, accepted)) {
+      throw new Error(`「${step.name}」的前置节点还没完成，不能开始`);
+    }
+
+    const pendingModule = findModuleByName(catalog, step.name);
+    const paramSpecs = pendingModule?.params ?? [];
+    const auto = pendingModule?.auto === true;
+    if (opts?.stepParams && Object.keys(opts.stepParams).length > 0) {
+      const next = patchCreationFlowStepParams(flow, step.id, opts.stepParams);
+      const content = stringifyCreationFlow(next);
+      this.blackboard.write({
+        tag: CREATION_FLOW_TAG,
+        content,
+        source: "user",
+      });
+      this.session = {
+        ...this.session,
+        slots: { ...this.session.slots, [CREATION_FLOW_TAG]: content },
+      };
+    }
+    const latest = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    const pinned = latest ? findStepByRef(latest, step.id) ?? step : step;
+    const params = pinned.params ? { ...pinned.params } : {};
+    const paramsMissing = missingRequiredStepParams(pinned, pendingModule);
+    this.pinCreationStepSnapshot({
+      stepId: pinned.id,
+      name: pinned.name,
+      declaration: pendingModule?.declaration?.trim() || "",
+      params,
+      paramsMissing,
+      paramSpecs,
+      kind: pendingModule?.kind,
+      closer: pendingModule?.closer === true,
+      revise: reenter || isReviseStep(pinned),
+      revises: pinned.revises,
+    });
+
+    const waitingPick =
+      this.session.waitingReason?.kind === "pick_creation_step";
+    const needsParamForm = paramsMissing.length > 0 && !auto;
+    if (needsParamForm) {
+      const decision = createDecision({
+        action: "run_worker",
+        workerId: DESIGN_STEP_WORKER_ID,
+        reason: `「${pinned.name}」还缺参数：${paramsMissing.join("、")}`,
+        requiresApproval: true,
+      });
+      await this.dispatch({
+        type: "main_agent_decision_created",
+        payload: { decision },
+      });
+      return;
+    }
+
+    if (waitingPick) {
+      await this.dispatch({
+        type: "user_picked_creation_step",
+        payload: { stepId: pinned.id },
+      });
+      return;
+    }
+
+    const decision = createDecision({
+      action: "run_worker",
+      workerId: DESIGN_STEP_WORKER_ID,
+      reason: reenter || isReviseStep(pinned)
+        ? `回头修改 · ${pinned.name}`
+        : `开始：${pinned.name}`,
+      requiresApproval: false,
+    });
+    await this.dispatch({
+      type: "main_agent_decision_created",
+      payload: { decision },
+    });
+  }
+
+  /**
+   * 验收后回到分层图：点节点即确认并进入，底栏写意见再发即改编排。
+   */
+  private async awaitCreationStepPick(): Promise<void> {
     if (this.session.slots[SLOT_CREATION_SEALED_BY_OPENING]) {
       this.onMessage(CREATION_SEALED_WAITING_MESSAGE);
       return;
@@ -916,121 +1410,67 @@ export class PhaseRuntime {
     const flow = parseCreationFlow(
       this.blackboard.getContentByTag(CREATION_FLOW_TAG),
     );
-    const accepted = parseAcceptedUnits(
-      this.session.slots[SLOT_CREATION_ACCEPTED_UNITS] ??
-        this.blackboard.getContentByTag(CREATION_ACCEPTED_UNITS_TAG),
-    );
-    const pending = nextPendingStep(flow, accepted);
-    if (!pending || !flow) {
-      debugLog("step", "暂无下一步，交给总管");
-      this.session = {
-        ...this.session,
-        slots: {
-          ...this.session.slots,
-          [CREATION_PROPOSED_STEP_TAG]: undefined,
-        },
-      };
-      if (this.mainAgent) {
-        await this.runMainAgent();
-      } else {
-        this.onMessage(
-          "[阶段机] 暂无下一节点，等待总管编排或补充意向。",
-        );
-      }
+    const accepted = this.readAcceptedStepIds();
+    if (!flow) {
+      debugLog("step", "暂无可用流程，等待点选或改编排");
+      await this.enterCreationStepPickWait();
       return;
     }
 
-    const active = this.getActiveSkill();
-    let paramSpecs: ModuleParamSpec[] = [];
-    let declaration = "";
-    let auto = false;
-    let kind: ModuleCatalogEntry["kind"];
-    let pendingModule: ModuleCatalogEntry | null = null;
-    if (active?.name) {
-      try {
-        const skill = await loadSkill(active.name);
-        if (skill.skillPackRoot) {
-          const catalog = await loadModuleCatalog(skill.skillPackRoot);
-          const mod = catalog?.modules.find((m) => m.name === pending.name);
-          paramSpecs = mod?.params ?? [];
-          declaration = mod?.declaration?.trim() || "";
-          auto = mod?.auto === true;
-          kind = mod?.kind;
-          pendingModule = mod ?? null;
-        }
-      } catch {
-        /* catalog optional */
+    const catalog = await this.loadActiveModuleCatalog();
+    const ready = listReadySteps(flow, accepted);
+    const autoReady = ready.filter((step) => {
+      const mod = findModuleByName(catalog, step.name);
+      return (
+        mod?.auto === true &&
+        missingRequiredStepParams(step, mod).length === 0
+      );
+    });
+    if (autoReady.length > 0 && autoReady.length === ready.length) {
+      const protoReady = listSelectablePrototypes(flow, accepted).length > 0;
+      const spawnReady = catalog
+        ? listRepeatableSpawns(flow, catalog, accepted).some((s) => s.ready)
+        : false;
+      if (!protoReady && !spawnReady) {
+        debugLog("step", `程序步直接开始 ${autoReady[0]!.id}`);
+        await this.startCreationStep(autoReady[0]!.id);
+        return;
       }
     }
+    debugLog(
+      "step",
+      hasSelectableCreationWork(flow, catalog, accepted)
+        ? "等待点选创作节点"
+        : "图上暂无已就绪节点，点节点进入或在底栏写意见改编排",
+    );
+    await this.enterCreationStepPickWait();
+  }
 
-    debugLog("step", `提案下一步 ${pending.id}（${pending.name}）`);
-
-    const params = pending.params ? { ...pending.params } : {};
-    const paramsMissing = missingRequiredStepParams(pending, pendingModule);
-
-    const intent =
-      typeof this.session.slots["用户.下一步意向"] === "string"
-        ? String(this.session.slots["用户.下一步意向"]).trim()
-        : "";
-    const paramHint =
-      Object.keys(params).length > 0
-        ? `；参数 ${Object.entries(params)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(" · ")}`
-        : paramsMissing.length
-          ? `；待钉参数：${paramsMissing.join("、")}`
-          : "";
-    const revise = isReviseStep(pending);
-    const reason = [
-      revise ? `下一步：回头修改 · ${pending.name}` : `下一步：${pending.name}`,
-      declaration ? `—— ${declaration}` : "",
-      paramHint,
-      intent ? `（你的意向：${intent}）` : "",
-    ]
-      .filter(Boolean)
-      .join("");
-
-    const snapshot = {
-      stepId: pending.id,
-      name: pending.name,
-      declaration: declaration || undefined,
-      params,
-      paramsMissing,
-      paramSpecs: paramSpecs.map((p) => ({
-        key: p.key,
-        label: p.label,
-        required: Boolean(p.required),
-        hint: p.hint,
-      })),
-      intent: intent || undefined,
-      ...(kind ? { kind } : {}),
-      ...(revise ? { mode: "revise" as const } : {}),
-      ...(pending.revises ? { revises: pending.revises } : {}),
+  private async enterCreationStepPickWait(): Promise<void> {
+    this.clearProposedStep();
+    if (this.session.waitingReason?.kind === "pick_creation_step") return;
+    if (this.session.phase === "running") {
+      await this.dispatch({ type: "creation_step_pick_awaited", payload: {} });
+      return;
+    }
+    this.session = {
+      ...this.session,
+      phase: "waiting_user",
+      waitingReason: { kind: "pick_creation_step" },
+      pendingDecision: undefined,
+      currentWorkerId: undefined,
+      updatedAt: new Date().toISOString(),
     };
-    this.blackboard.write({
-      tag: CREATION_PROPOSED_STEP_TAG,
-      content: JSON.stringify(snapshot),
-      source: "runtime",
-    });
+  }
+
+  private clearProposedStep(): void {
     this.session = {
       ...this.session,
       slots: {
         ...this.session.slots,
-        [CREATION_PROPOSED_STEP_TAG]: JSON.stringify(snapshot),
+        [CREATION_PROPOSED_STEP_TAG]: undefined,
       },
     };
-
-    const decision = createDecision({
-      action: "run_worker",
-      workerId: "design-step",
-      reason,
-      // 程序步（如投影排序）且参数已齐：跳过「同意并开始」，直接执行。
-      requiresApproval: !(auto && paramsMissing.length === 0),
-    });
-    await this.dispatch({
-      type: "main_agent_decision_created",
-      payload: { decision },
-    });
   }
 
   /**
@@ -1106,6 +1546,24 @@ export class PhaseRuntime {
         [OPENING_OUTPUT_TAG]: openingText || this.session.slots[OPENING_OUTPUT_TAG],
       },
     };
+  }
+
+  /** 再编排：解开开场收口，让 design-flow 能在收口前插入节点 */
+  private unsealCreationOpening(): void {
+    const reopened = reopenCreationFlowRaw(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    if (reopened) {
+      this.blackboard.write({
+        tag: CREATION_FLOW_TAG,
+        content: reopened,
+        source: "runtime",
+      });
+    }
+    const slots = { ...this.session.slots };
+    delete slots[SLOT_CREATION_SEALED_BY_OPENING];
+    if (reopened) slots[CREATION_FLOW_TAG] = reopened;
+    this.session = { ...this.session, slots };
   }
 
   private applyProposedStepParams(params: CreationFlowStepParams): void {
@@ -1807,6 +2265,10 @@ export class PhaseRuntime {
       flowRaw,
       currentStepName,
       acceptedStepNames: accepted,
+      inheritExisting: isInheritExistingFlag(
+        this.blackboard.getContentByTag(CREATION_INHERIT_EXISTING_TAG) ??
+          this.session.slots[CREATION_INHERIT_EXISTING_TAG],
+      ),
     });
     if (!binding?.opening?.trim()) return false;
 
@@ -1952,7 +2414,9 @@ export class PhaseRuntime {
       const flow = parseCreationFlow(
         this.blackboard.getContentByTag(CREATION_FLOW_TAG),
       );
-      const pending = nextPendingStep(flow, accepted);
+      const pinnedId = this.readPinnedStepId();
+      const pinned = flow && pinnedId ? findStepByRef(flow, pinnedId) : null;
+      const pending = pinned ?? nextPendingStep(flow, accepted);
       current = pending ? stepUnitId(pending) : current || "（无待执行步骤）";
       this.blackboard.write({
         tag: CREATION_CURRENT_STEP_TAG,
@@ -2209,65 +2673,100 @@ export class PhaseRuntime {
     }
   }
 
+  private hasCreationFlow(): boolean {
+    return Boolean(
+      parseCreationFlow(this.blackboard.getContentByTag(CREATION_FLOW_TAG)),
+    );
+  }
+
+  private async commitMainAgentDecision(
+    decision: MainAgentDecision,
+  ): Promise<void> {
+    debugLog(
+      "step",
+      `总管决策 ${labelAction(decision.action)}${decision.workerId ? ` ${decision.workerId}` : ""}`,
+    );
+    this.onMessage(`[总管] ${decision.action}: ${decision.reason}`);
+    const result = this.commitEvent({
+      type: "main_agent_decision_created",
+      payload: { decision },
+    });
+    if (result.error) this.onMessage(result.error);
+    await this.processEffects(result.effects);
+    await this.maybeRunMainAgent(result.effects);
+  }
+
   private async runMainAgent(): Promise<void> {
     if (!this.mainAgent || this.session.phase !== "running") {
+      return;
+    }
+
+    if (this.hasCreationFlow()) {
+      debugLog("step", "已有创作流程，等待点选节点");
+      await this.awaitCreationStepPick();
       return;
     }
 
     debugLog("step", "总管开始");
     const availableWorkers = await this.resolveAvailableWorkers();
 
-    const decision = await this.mainAgent.runToolLoop(
-      {
-        session: this.session,
-        blackboardIndex: this.blackboard.listTagIndex(),
-        availableWorkers,
-      },
-      {
-        handlers: {
-          readBlackboard: (tags) => this.readBlackboardForAgent(tags),
-          listWorkers: () => availableWorkers,
-          listArtifacts: () =>
-            this.session.artifacts.map((a) => ({
-              id: a.id,
-              workerId: a.workerId,
-              status: a.status,
-              summary: a.summary,
-              outputTags: a.outputTags,
-            })),
-          onToolCall: (name, detail) => {
-            const preview =
-              detail.length > 120 ? `${detail.slice(0, 120)}…` : detail;
-            this.onMessage(`[总管 tool] ${name}${preview ? `: ${preview}` : ""}`);
-          },
-          onThinkingDelta: (delta) => {
-            this.onAgentThinkingDelta?.(delta);
-          },
-          onThinkingDone: (text) => {
-            this.onAgentThinkingDone?.(text);
-            this.onMessage(`[总管 思考]\n\n${text}`);
+    try {
+      const decision = await this.mainAgent.runToolLoop(
+        {
+          session: this.session,
+          blackboardIndex: this.blackboard.listTagIndex(),
+          availableWorkers,
+        },
+        {
+          handlers: {
+            readBlackboard: (tags) => this.readBlackboardForAgent(tags),
+            listWorkers: () => availableWorkers,
+            listArtifacts: () =>
+              this.session.artifacts.map((a) => ({
+                id: a.id,
+                workerId: a.workerId,
+                status: a.status,
+                summary: a.summary,
+                outputTags: a.outputTags,
+              })),
+            onToolCall: (name, detail) => {
+              const preview =
+                detail.length > 120 ? `${detail.slice(0, 120)}…` : detail;
+              this.onMessage(`[总管 tool] ${name}${preview ? `: ${preview}` : ""}`);
+            },
+            onThinkingDelta: (delta) => {
+              this.onAgentThinkingDelta?.(delta);
+            },
+            onThinkingDone: (text) => {
+              this.onAgentThinkingDone?.(text);
+              this.onMessage(`[总管 思考]\n\n${text}`);
+            },
           },
         },
-      },
-    );
-
-    debugLog(
-      "step",
-      `总管决策 ${labelAction(decision.action)}${decision.workerId ? ` ${decision.workerId}` : ""}`,
-    );
-    this.onMessage(`[总管] ${decision.action}: ${decision.reason}`);
-
-    const result = this.commitEvent({
-      type: "main_agent_decision_created",
-      payload: { decision },
-    });
-
-    if (result.error) {
-      this.onMessage(result.error);
+      );
+      await this.commitMainAgentDecision(decision);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (this.hasCreationFlow()) {
+        debugLog("step", "总管无可用决策，改为等待点选");
+        await this.awaitCreationStepPick();
+        return;
+      }
+      if (isUnusableMainAgentOutput(err)) {
+        debugLog("step", "总管未给出工具调用，改为启动 design-flow");
+        await this.commitMainAgentDecision(
+          createDecision({
+            action: "run_worker",
+            workerId: DESIGN_FLOW_WORKER_ID,
+            reason: "尚无创作流程，开始编排近期起点",
+            requiresApproval: false,
+          }),
+        );
+        return;
+      }
+      debugLog("step", `总管失败 ${reason.slice(0, 120)}`);
+      await this.failRun(reason);
     }
-
-    await this.processEffects(result.effects);
-    await this.maybeRunMainAgent(result.effects);
   }
 
   /** 总管 read_blackboard tool：按 tag 或模式读取正文 */
