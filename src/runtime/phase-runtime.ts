@@ -85,6 +85,7 @@ import {
   isInstanceStep,
   findStepByRef,
   findModuleByName,
+  hasAcceptedCloserStep,
   parseCreationFlow,
   DESIGN_FLOW_WORKER_ID,
   DESIGN_STEP_WORKER_ID,
@@ -114,9 +115,8 @@ import {
   SLOT_ASKED_QUESTIONS,
 } from "../skills/question-protocol.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
+import { defaultPlaySlots } from "../skills/play-slots.js";
 import {
-  closeCreationFlowRaw,
-  CREATION_SEALED_WAITING_MESSAGE,
   mergeOpeningTablePatch,
   OPENING_CURRENT_VARS_TAG,
   OPENING_INITIAL_VARS_TAG,
@@ -425,6 +425,23 @@ export class PhaseRuntime {
       slots: { ...this.session.slots, uiLifecycleStage: stage },
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  /** 收口已验收但未落印时补封印，并保证有可上场的运行规格 */
+  prepareEnterPlay(): void {
+    if (
+      this.hasAcceptedCloser() &&
+      !this.session.slots[SLOT_CREATION_SEALED_BY_OPENING]
+    ) {
+      this.sealCreationOpening();
+      return;
+    }
+    if (
+      this.session.slots[SLOT_CREATION_SEALED_BY_OPENING] ||
+      this.session.slots.designInstanceReady
+    ) {
+      this.ensurePlaySpecReady();
+    }
   }
 
   getAvailableSkills(): SkillIndexEntry[] {
@@ -1402,10 +1419,6 @@ export class PhaseRuntime {
    * 验收后回到分层图：点节点即确认并进入，底栏写意见再发即改编排。
    */
   private async awaitCreationStepPick(): Promise<void> {
-    if (this.session.slots[SLOT_CREATION_SEALED_BY_OPENING]) {
-      this.onMessage(CREATION_SEALED_WAITING_MESSAGE);
-      return;
-    }
     this.syncSlotsToBlackboard(this.session);
     const flow = parseCreationFlow(
       this.blackboard.getContentByTag(CREATION_FLOW_TAG),
@@ -1474,7 +1487,7 @@ export class PhaseRuntime {
   }
 
   /**
-   * 选定开场白后：把候选落成 输出.开场白 / 初值表，关闭 DAG。
+   * 选定开场白后：把候选落成 输出.开场白 / 初值表。不关 DAG，创作流程继续。
    */
   private sealCreationOpening(): void {
     const selectedRaw = this.session.slots[SLOT_OPENING_SELECTED_INDEX];
@@ -1515,17 +1528,6 @@ export class PhaseRuntime {
       }
     }
 
-    const closed = closeCreationFlowRaw(
-      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
-    );
-    if (closed) {
-      this.blackboard.write({
-        tag: CREATION_FLOW_TAG,
-        content: closed,
-        source: "runtime",
-      });
-    }
-
     const n = payload?.candidates.length ?? (openingText ? 1 : 0);
     const which =
       n > 1 && payload
@@ -1534,7 +1536,7 @@ export class PhaseRuntime {
           ? "开场白"
           : "开场";
     this.onMessage(
-      `[创作收口] 已选定${which}，工作流计划已关闭。可切换到「游玩」。`,
+      `[创作] 已选定${which}。可保存为产物后开玩，或继续补节点。`,
     );
 
     this.session = {
@@ -1542,8 +1544,35 @@ export class PhaseRuntime {
       slots: {
         ...this.session.slots,
         [SLOT_CREATION_SEALED_BY_OPENING]: true,
-        [CREATION_FLOW_TAG]: closed ?? this.session.slots[CREATION_FLOW_TAG],
         [OPENING_OUTPUT_TAG]: openingText || this.session.slots[OPENING_OUTPUT_TAG],
+      },
+    };
+    this.ensurePlaySpecReady();
+  }
+
+  private hasAcceptedCloser(): boolean {
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    return hasAcceptedCloserStep(flow, this.readAcceptedStepIds());
+  }
+
+  /** 收口后若还没有运行规格，用草稿或默认槽位补一份，才能进游玩 */
+  private ensurePlaySpecReady(): void {
+    const finalTag = this.blackboard.getContentByTag(WORKER_SET_FINAL_TAG)?.trim();
+    const draft = this.blackboard.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim();
+    if (!finalTag) {
+      const spec = draft?.trim()
+        ? draft
+        : JSON.stringify({ play_slots: defaultPlaySlots() });
+      this.writeWorkerTagContent(WORKER_SET_FINAL_TAG, spec, "opening-setup");
+    }
+    if (this.session.slots.designInstanceReady) return;
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        designInstanceReady: true,
       },
     };
   }
@@ -2667,7 +2696,6 @@ export class PhaseRuntime {
   /** invoke_main_agent 副作用：running 时调用总管 LLM，链式推进直到需用户介入 */
   private async maybeRunMainAgent(effects: PhaseEffect[]): Promise<void> {
     if (inferLifecycleStage(this.session) === "play") return;
-    if (this.session.slots[SLOT_CREATION_SEALED_BY_OPENING]) return;
     if (this.mainAgent && effects.some((e) => e.type === "invoke_main_agent")) {
       await this.runMainAgent();
     }

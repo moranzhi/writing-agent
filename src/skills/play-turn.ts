@@ -5,6 +5,8 @@
  */
 export const SLOT_PLAY_TURN_QUEUE = "playTurnQueue";
 export const SLOT_PLAY_LAYER_ACTIVE = "playLayerActive";
+/** 当前游玩线所依据的产物 snapshot id */
+export const SLOT_PLAY_INSTANCE_ID = "playInstanceId";
 
 export const PLAY_WORKING_SNAPSHOT_ID = "play-working";
 export const PLAY_WORKING_SNAPSHOT_LABEL = "当前游玩";

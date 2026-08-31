@@ -3,6 +3,7 @@ import { Blackboard } from "../src/blackboard/blackboard.js";
 import { createSession } from "../src/runtime/phase-machine.js";
 import {
   buildInstanceWorkerDeclaration,
+  canEnterPlay,
   inferLifecycleStage,
   isWorkerDeclared,
   readWorkerSetYamlForDeclaration,
@@ -107,5 +108,16 @@ describe("worker-declaration", () => {
       },
     };
     expect(inferLifecycleStage(s3)).toBe("play");
+  });
+
+  it("closer accepted is enough to enter play", () => {
+    const session = {
+      ...createSession(),
+      slots: {
+        ...createSession().slots,
+        creationAcceptedUnits: ["开场白与开场变量"],
+      },
+    };
+    expect(canEnterPlay(session)).toBe(true);
   });
 });

@@ -64,6 +64,20 @@ describe("run snapshot store", () => {
     expect(loaded!.note).toBe("测试快照");
   });
 
+  it("stores instanceId on run snapshots and lists it", async () => {
+    const { saveRunSnapshot, loadRunSnapshot, listRunSnapshots } = await import(
+      "../src/book/run-snapshot-store.js"
+    );
+    const bookId = randomUUID();
+    const instanceId = randomUUID();
+    const snapshot = makeSnapshot(bookId, "巷战");
+    snapshot.instanceId = instanceId;
+
+    saveRunSnapshot(snapshot);
+    expect(loadRunSnapshot(bookId, snapshot.id)?.instanceId).toBe(instanceId);
+    expect(listRunSnapshots(bookId)[0].instanceId).toBe(instanceId);
+  });
+
   it("listRunSnapshots returns saved items newest first", async () => {
     const { saveRunSnapshot, listRunSnapshots } = await import(
       "../src/book/run-snapshot-store.js"
@@ -156,6 +170,7 @@ describe("run snapshot store", () => {
       runtime: { getSession: () => { slots: Record<string, unknown> }; getBlackboard: () => { write: (i: object) => void } };
     };
     managed.runtime.getSession().slots.startupCompleted = true;
+    managed.runtime.getSession().slots.designInstanceReady = true;
     const bb = managed.runtime.getBlackboard();
     bb.write({ tag: "情境.实验.设定", content: "囚徒困境", source: "worker" });
     bb.write({ tag: "运行.事件流", content: "第1轮", source: "worker" });
@@ -168,6 +183,26 @@ describe("run snapshot store", () => {
     expect(stored.blackboardItems.some((i) => i.tag === "运行.事件流")).toBe(false);
 
     const loaded = await mgr.loadGameSnapshot(book.id, save.id);
-    expect(loaded.hints.some((h) => h.includes("实例"))).toBe(true);
+    expect(loaded.hints.some((h) => h.includes("产物"))).toBe(true);
+  });
+
+  it("renameGameSnapshot updates the label", async () => {
+    const { createBook } = await import("../src/book/store.js");
+    const { SessionManager } = await import("../src/server/session-manager.js");
+    const { loadRunSnapshot } = await import("../src/book/run-snapshot-store.js");
+
+    const book = createBook({ title: "改名测试" });
+    const mgr = new SessionManager();
+    const view = await mgr.createForBook(book.id, "world-simulator");
+    const managed = mgr["require"](view.id) as {
+      runtime: { getSession: () => { slots: Record<string, unknown> } };
+    };
+    managed.runtime.getSession().slots.startupCompleted = true;
+    managed.runtime.getSession().slots.designInstanceReady = true;
+
+    const save = mgr.saveGameSnapshot(view.id, "定稿", "instance");
+    const renamed = mgr.renameGameSnapshot(book.id, save.id, "丧尸街巷");
+    expect(renamed.label).toBe("丧尸街巷");
+    expect(loadRunSnapshot(book.id, save.id)?.label).toBe("丧尸街巷");
   });
 });

@@ -1,4 +1,11 @@
-import { renderWorkspace, updateLiveStreamPanel, resetRailChrome, fillStepArtifactDialog } from "./agent-ui.js";
+import {
+  renderWorkspace,
+  updateLiveStreamPanel,
+  resetRailChrome,
+  fillStepArtifactDialog,
+  canOfferSaveProduct,
+  canOfferEnterPlay,
+} from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
 import { displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
@@ -24,6 +31,8 @@ let bookSelectMode = false;
 let selectedBookIds = new Set();
 let activePlaySaveId = null;
 const playSavesByBook = new Map();
+const playWorkingInstanceByBook = new Map();
+const expandedProductsByBook = new Map();
 const playSavesLoading = new Set();
 let bookMenuBookId = null;
 let livePollTimer = null;
@@ -96,6 +105,17 @@ function resolveUserTask(view, loading) {
       label: USER_TASK.speak.label,
       title: "继续说",
       hint: "你说一句，世界推进一轮。",
+    };
+  }
+
+  if (canOfferSaveProduct(view)) {
+    return {
+      id: "speak",
+      label: "可保存",
+      title: "落档产物",
+      hint: view.hasProduct
+        ? "可再保存一份新定稿，或用已有产物开玩。补节点仍点图。"
+        : "点「保存定稿」拆出产物。创作流程还在，之后用产物开玩。",
     };
   }
 
@@ -758,12 +778,30 @@ function renderComposer(view, loading) {
   }
 
   if (spec.mode === "pick_step") {
+    const saveProduct = canOfferSaveProduct(view)
+      ? `<button type="button" class="btn btn-primary" data-act="save-product">保存定稿</button>`
+      : "";
+    const enterPlay = canOfferEnterPlay(view)
+      ? `<button type="button" class="btn" data-act="enter-play">${
+          view.hasProduct ? "用产物开玩" : "开玩"
+        }</button>`
+      : "";
+    const sendCls =
+      canOfferSaveProduct(view) || canOfferEnterPlay(view)
+        ? "btn composer-btn"
+        : "btn btn-primary composer-btn";
     const shell = composerInputShell(spec, {
       textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
-      trailing: `<button type="submit" class="btn btn-primary composer-btn" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进入">${esc(spec.submitLabel || "发送")}</button>`,
+      trailing: `${saveProduct}${enterPlay}<button type="submit" class="${sendCls}" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进入">${esc(spec.submitLabel || "发送")}</button>`,
     });
     root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
     wireComposerForm({ requiresText: true });
+    root.querySelector("[data-act=save-product]")?.addEventListener("click", () => {
+      void saveCurrentInstance();
+    });
+    root.querySelector("[data-act=enter-play]")?.addEventListener("click", () => {
+      enterPlayNow();
+    });
     applyPendingComposerDraft();
     return;
   }
@@ -956,8 +994,49 @@ function playRunsForBook(bookId) {
   return (playSavesByBook.get(bookId) ?? []).filter((s) => s.kind === "run");
 }
 
+function productInstancesForBook(bookId) {
+  return (playSavesByBook.get(bookId) ?? []).filter((s) => s.kind === "instance");
+}
+
+function resolveRunInstanceId(run, products) {
+  if (run.instanceId && products.some((p) => p.id === run.instanceId)) {
+    return run.instanceId;
+  }
+  if (!products.length) return null;
+  const sorted = [...products].sort((a, b) =>
+    String(a.createdAt).localeCompare(String(b.createdAt)),
+  );
+  let id = sorted[0].id;
+  for (const product of sorted) {
+    if (String(product.createdAt) <= String(run.createdAt)) id = product.id;
+  }
+  return id;
+}
+
+function runsForProduct(bookId, instanceId, products) {
+  return playRunsForBook(bookId).filter(
+    (run) => resolveRunInstanceId(run, products) === instanceId,
+  );
+}
+
+function isProductExpanded(bookId, instanceId, fallback) {
+  const set = expandedProductsByBook.get(bookId);
+  if (set) return set.has(instanceId);
+  return Boolean(fallback);
+}
+
+function toggleProductExpanded(bookId, instanceId) {
+  const open = isProductExpanded(bookId, instanceId, false);
+  const next = new Set();
+  if (!open) next.add(instanceId);
+  expandedProductsByBook.set(bookId, next);
+  renderBookList();
+}
+
 function bookPlayReady(bookId) {
-  if (lastView?.bookId === bookId && Boolean(lastView?.playReady)) return true;
+  if (lastView?.bookId === bookId && Boolean(lastView?.playReady || lastView?.hasProduct)) {
+    return true;
+  }
   const saves = playSavesByBook.get(bookId);
   if (!Array.isArray(saves)) return false;
   return saves.some((s) => s.kind === "instance" || s.kind === "run");
@@ -980,8 +1059,10 @@ async function fetchPlaySavesForBook(bookId, force = false) {
   try {
     const data = await api(`/api/books/${encodeURIComponent(bookId)}/saves`);
     playSavesByBook.set(bookId, data.saves ?? []);
+    playWorkingInstanceByBook.set(bookId, data.playWorkingInstanceId ?? null);
   } catch {
     playSavesByBook.set(bookId, []);
+    playWorkingInstanceByBook.set(bookId, null);
   } finally {
     playSavesLoading.delete(bookId);
     renderBookList();
@@ -1107,10 +1188,12 @@ function renderExplorerRow({
   actionClass,
   onClick,
   onDelete,
+  onRename,
   child,
   twistie,
   expanded,
   onTwistie,
+  title,
 }) {
   const row = document.createElement("button");
   row.type = "button";
@@ -1125,6 +1208,7 @@ function renderExplorerRow({
     .filter(Boolean)
     .join(" ");
   if (bookId) row.dataset.bookId = bookId;
+  if (title) row.title = title;
   row.innerHTML = `
     ${twistie ? `<span class="explorer-twist" data-twist>${expanded ? "▾" : "▸"}</span>` : ""}
     <span class="explorer-main">
@@ -1136,10 +1220,17 @@ function renderExplorerRow({
     if (e.target.closest(".explorer-del") || e.target.closest("[data-twist]")) return;
     onClick?.(e);
   });
-  row.querySelector("[data-twist]")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    onTwistie?.();
-  });
+  if (onRename) {
+    row.addEventListener("dblclick", (e) => {
+      if (e.target.closest(".explorer-del") || e.target.closest("[data-twist]")) return;
+      e.preventDefault();
+      onRename();
+    });
+  }
+    row.querySelector("[data-twist]")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      (onTwistie || onClick)?.();
+    });
   row.querySelector(".explorer-del")?.addEventListener("click", (e) => {
     e.stopPropagation();
     onDelete?.();
@@ -1157,11 +1248,16 @@ function renderExplorerRow({
   return row;
 }
 
-function renderBookBranch(book, list, { nested = false } = {}) {
+function renderBookBranch(book, list) {
   const loading = playSavesLoading.has(book.id);
   const saves = playSavesByBook.get(book.id);
-  const ready = bookPlayReady(book.id);
+  const products = productInstancesForBook(book.id);
   const playHere = book.id === activeBookId && isPlayNow();
+  const playingInstanceId =
+    playHere && lastView?.playInstanceId
+      ? lastView.playInstanceId
+      : playWorkingInstanceByBook.get(book.id);
+  const latestId = products[0]?.id;
 
   if (loading && saves === undefined) {
     const hint = document.createElement("p");
@@ -1171,56 +1267,96 @@ function renderBookBranch(book, list, { nested = false } = {}) {
     return;
   }
 
-  if (ready) {
-    list.appendChild(
-      renderExplorerRow({
-        name: "当前",
-        meta: playHere && !activePlaySaveId ? "进行中" : "工作副本",
-        active: playHere && !activePlaySaveId,
-        child: nested,
-        onClick: () => void openCurrentPlay(book.id),
-      }),
-    );
-  }
+  for (const product of products) {
+    const isLatest = product.id === latestId;
+    const isPlayingHere = playHere && playingInstanceId === product.id;
+    const hasWorking = playingInstanceId === product.id;
+    const expanded = isProductExpanded(book.id, product.id, isPlayingHere);
+    const runs = runsForProduct(book.id, product.id, products);
+    const wrap = document.createElement("div");
+    wrap.className = `explorer-product${expanded ? " is-open" : ""}`;
 
-  for (const s of playRunsForBook(book.id)) {
-    const when = formatSaveWhen(s.createdAt);
-    list.appendChild(
-      renderExplorerRow({
-        name: s.label,
-        meta: when ? `游玩 · ${when}` : "游玩进度",
-        active: playHere && activePlaySaveId === s.id,
-        child: nested,
-        actionClass: "explorer-file",
-        onClick: () => void loadPlaySave(book.id, s.id),
-        onDelete: () => void deletePlaySave(book.id, s.id, s.label),
-      }),
-    );
-  }
+    const header = renderExplorerRow({
+      name: product.label,
+      meta: isLatest ? "最新" : "",
+      twistie: true,
+      expanded,
+      title: "点开游玩存档，双击改名",
+      onTwistie: () => toggleProductExpanded(book.id, product.id),
+      onClick: () => toggleProductExpanded(book.id, product.id),
+      onRename: () => void renamePlaySave(book.id, product.id, product.label),
+      onDelete: () => void deletePlaySave(book.id, product.id, product.label, "落档"),
+    });
+    header.setAttribute("aria-expanded", expanded ? "true" : "false");
+    wrap.appendChild(header);
 
-  if (ready) {
-    list.appendChild(
-      renderExplorerRow({
-        name: "+ 新开一局",
-        actionClass: "explorer-action",
-        child: nested,
-        onClick: () => void startNewPlayForBook(book.id),
-      }),
-    );
+    if (expanded) {
+      const drop = document.createElement("div");
+      drop.className = "explorer-drop";
+      drop.setAttribute("role", "group");
+      drop.setAttribute("aria-label", `${product.label} 的游玩存档`);
+
+      if (hasWorking) {
+        drop.appendChild(
+          renderExplorerRow({
+            name: "当前游玩",
+            meta: isPlayingHere && !activePlaySaveId ? "进行中" : "工作副本",
+            active: isPlayingHere && !activePlaySaveId,
+            child: true,
+            onClick: () => void openCurrentPlay(book.id),
+          }),
+        );
+      }
+
+      if (!runs.length && !hasWorking) {
+        const hint = document.createElement("p");
+        hint.className = "explorer-drop-empty";
+        hint.textContent = "还没有游玩存档";
+        drop.appendChild(hint);
+      }
+
+      for (const run of runs) {
+        const runWhen = formatSaveWhen(run.createdAt);
+        drop.appendChild(
+          renderExplorerRow({
+            name: run.label,
+            meta: runWhen || "游玩进度",
+            active: playHere && activePlaySaveId === run.id,
+            child: true,
+            actionClass: "explorer-file",
+            onClick: () => void loadPlaySave(book.id, run.id),
+            onRename: () => void renamePlaySave(book.id, run.id, run.label),
+            onDelete: () => void deletePlaySave(book.id, run.id, run.label, "游玩存档"),
+          }),
+        );
+      }
+
+      drop.appendChild(
+        renderExplorerRow({
+          name: "+ 新开一局",
+          actionClass: "explorer-action",
+          child: true,
+          onClick: () => void startNewPlayForBook(book.id, product.id),
+        }),
+      );
+      wrap.appendChild(drop);
+    }
+
+    list.appendChild(wrap);
   }
 }
 
 function renderBookContents(book, list) {
-  const skill = book.activeSkillName ?? book.activeSkillId ?? book.orchestratorName ?? "实例设计";
+  const designing = book.id === activeBookId && !isPlayNow();
   list.appendChild(
     renderExplorerRow({
-      name: "创作",
-      meta: skill,
-      active: book.id === activeBookId && !isPlayNow(),
+      name: "继续创作",
+      meta: designing ? "进行中" : "",
+      active: designing,
       onClick: () => void openBookDesign(book.id),
     }),
   );
-  renderBookBranch(book, list, { nested: false });
+  renderBookBranch(book, list);
 }
 
 function renderBookList() {
@@ -1439,8 +1575,25 @@ async function loadPlaySave(bookId, saveId) {
   }
 }
 
-async function deletePlaySave(bookId, saveId, label) {
-  if (!confirm(`删除游玩存档「${label}」？`)) return;
+async function renamePlaySave(bookId, saveId, currentLabel) {
+  const next = prompt("名称", currentLabel);
+  if (next == null) return;
+  const trimmed = next.trim();
+  if (!trimmed) return alert("名称不能为空");
+  if (trimmed === currentLabel) return;
+  try {
+    await api(
+      `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}`,
+      { method: "PATCH", body: JSON.stringify({ label: trimmed }) },
+    );
+    await fetchPlaySavesForBook(bookId, true);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function deletePlaySave(bookId, saveId, label, kindLabel = "游玩存档") {
+  if (!confirm(`删除${kindLabel}「${label}」？`)) return;
   try {
     await api(
       `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}`,
@@ -1453,17 +1606,25 @@ async function deletePlaySave(bookId, saveId, label) {
   }
 }
 
-async function startNewPlayForBook(bookId) {
-  if (!bookPlayReady(bookId)) {
-    alert("须先验收 Worker 集");
+async function startNewPlayForBook(bookId, instanceId) {
+  const thisView = lastView?.bookId === bookId ? lastView : null;
+  if (!bookPlayReady(bookId) && !thisView?.hasProduct && !canOfferEnterPlay(thisView)) {
+    alert("请先保存产物，或完成收口后再开玩");
     return;
   }
   try {
     navigateToBook(bookId);
     if (lastView?.bookId === bookId) renderSession(lastView, true);
-    const data = await api(`/api/books/${encodeURIComponent(bookId)}/play/new`, { method: "POST" });
+    const data = await api(`/api/books/${encodeURIComponent(bookId)}/play/new`, {
+      method: "POST",
+      body: JSON.stringify(instanceId ? { instanceId } : {}),
+    });
     activePlaySaveId = null;
+    if (instanceId) {
+      expandedProductsByBook.set(bookId, new Set([instanceId]));
+    }
     renderSession(data.session, false);
+    void fetchPlaySavesForBook(bookId, true);
   } catch (err) {
     if (lastView) renderSession(lastView, false);
     alert(err.message);
@@ -1549,6 +1710,8 @@ function closeWorkspace({ emptyCopy = "" } = {}) {
   if (btnInst) btnInst.hidden = true;
   const btnExport = $("btn-export");
   if (btnExport) btnExport.disabled = true;
+  const toggle = $("lifecycle-toggle");
+  if (toggle) toggle.hidden = true;
   $("message-feed").innerHTML = emptyCopy ? `<p class="empty">${emptyCopy}</p>` : "";
   const stage = $("workspace-stage");
   if (stage) {
@@ -1683,6 +1846,8 @@ function renderSession(view, loading = false) {
     onViewStepArtifact: (stepId, name) => showStepArtifactDialog(stepId, name),
     onSpawnCreationStep: (moduleName) => runAction("spawn_step", { moduleName }),
     onLeaveCreationStep: () => runAction("leave_step"),
+    onEnterPlay: () => enterPlayNow(),
+    onSaveProduct: () => void saveCurrentInstance(),
   });
   renderComposer(view, loading);
   if (loading) startLivePoll();
@@ -1930,6 +2095,14 @@ async function runAction(action, extra = {}) {
   }
 }
 
+function enterPlayNow() {
+  if (activeBookId) {
+    void openCurrentPlay(activeBookId);
+    return;
+  }
+  void setLifecycle("play");
+}
+
 async function setLifecycle(stage) {
   if (!sessionId) return;
   if (stage === lastView?.lifecycleStage) {
@@ -1942,8 +2115,8 @@ async function setLifecycle(stage) {
       return;
     }
   }
-  if (stage === "play" && !lastView?.playReady) {
-    alert("请先验收 Worker 集（创作定稿）后再进入游玩");
+  if (stage === "play" && !lastView?.playReady && !canOfferEnterPlay(lastView) && !lastView?.hasProduct) {
+    alert("请先保存产物，或完成收口后再开玩");
     return;
   }
   try {
@@ -1953,6 +2126,7 @@ async function setLifecycle(stage) {
     });
     if (stage === "design") activePlaySaveId = null;
     renderSession(view, false);
+    if (activeBookId) void fetchPlaySavesForBook(activeBookId, true);
   } catch (err) {
     alert(err.message || "无法切换阶段");
     if (lastView) renderSession(lastView, false);
@@ -2109,17 +2283,34 @@ async function saveCurrentPlay() {
   }
 }
 
+function defaultArchiveLabel() {
+  return (
+    formatSaveWhen(new Date().toISOString()) ||
+    new Date().toLocaleString("zh-CN")
+  );
+}
+
 async function saveCurrentInstance() {
-  if (!activeBookId || !lastView?.playReady) return alert("须先验收 Worker 集");
-  const label = prompt("创作定稿存档名称");
+  if (!activeBookId || (!lastView?.playReady && !canOfferSaveProduct(lastView))) {
+    return alert("须先完成收口或验收 Worker 集");
+  }
+  const label = prompt("落档名称", defaultArchiveLabel());
   if (!label?.trim()) return;
   try {
     await api(`/api/books/${encodeURIComponent(activeBookId)}/saves`, {
       method: "POST",
       body: JSON.stringify({ label: label.trim(), sessionId, kind: "instance" }),
     });
-    playSavesByBook.delete(activeBookId);
-    void fetchPlaySavesForBook(activeBookId, true);
+    if (lastView) {
+      lastView = { ...lastView, hasProduct: true };
+      renderSession(lastView, false);
+    }
+    await fetchPlaySavesForBook(activeBookId, true);
+    const newest = productInstancesForBook(activeBookId)[0];
+    if (newest) {
+      expandedProductsByBook.set(activeBookId, new Set([newest.id]));
+      renderBookList();
+    }
   } catch (err) {
     alert(err.message);
   }
@@ -2223,6 +2414,11 @@ function exportSession() {
   downloadMarkdown(`${name}.md`, sessionToMarkdown(lastView));
 }
 
+$("lifecycle-toggle")?.addEventListener("click", (e) => {
+  const stage = e.target.closest("[data-stage]")?.getAttribute("data-stage");
+  if (stage === "play") enterPlayNow();
+  else if (stage === "design") void setLifecycle("design");
+});
 $("btn-new-book")?.addEventListener("click", openNewBookDialog);
 $("btn-cancel-new")?.addEventListener("click", () => $("dialog-new-book").close());
 $("book-action-menu")?.addEventListener("click", (e) => {

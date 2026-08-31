@@ -25,6 +25,7 @@ import {
   spawnRepeatableCreationStep,
   spawnInstanceFromPrototype,
   hasSelectableCreationWork,
+  hasAcceptedCloserStep,
   removeUnstartedInstance,
   looksLikeCreationFlowDoc,
   parseCreationFlow,
@@ -1268,5 +1269,22 @@ modules:
     expect("error" in ok).toBe(false);
     if ("error" in ok) return;
     expect(ok.step.depends_on).toEqual(["生成规则#1"]);
+  });
+
+  it("detects accepted closer step", () => {
+    const flow = parseCreationFlow(
+      JSON.stringify({
+        steps: [
+          {
+            id: "开场白与开场变量",
+            name: "开场白与开场变量",
+            depends_on: [],
+          },
+        ],
+      }),
+    );
+    expect(hasAcceptedCloserStep(flow, [])).toBe(false);
+    expect(hasAcceptedCloserStep(flow, ["开场白与开场变量"])).toBe(true);
+    expect(hasAcceptedCloserStep(null, ["开场白与开场变量"])).toBe(true);
   });
 });

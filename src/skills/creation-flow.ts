@@ -2292,7 +2292,23 @@ export function isCloserModule(
   name?: string,
 ): boolean {
   if (module?.closer === true) return true;
-  return (name ?? "").trim() === "开场白与开场变量";
+  const t = (name ?? "").trim();
+  return t === "开场白与开场变量" || t.startsWith("开场白与开场变量#") || t === "开场白";
+}
+
+export function hasAcceptedCloserStep(
+  flow: CreationFlow | null | undefined,
+  acceptedStepIds: readonly string[],
+  catalog?: ModuleCatalog | null,
+): boolean {
+  if (flow?.steps.length) {
+    return flow.steps.some(
+      (s) =>
+        isCloserModule(findModuleByName(catalog, s.name), s.name) &&
+        isStepAccepted(s, acceptedStepIds),
+    );
+  }
+  return acceptedStepIds.some((id) => isCloserModule(null, id));
 }
 
 export function findCloserStepIndex(

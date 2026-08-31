@@ -293,4 +293,43 @@ describe("phase runtime", () => {
       flow?.steps.find((s) => s.name === "开场白与开场变量")?.depends_on,
     ).toEqual(["美学纲领与交互范式"]);
   });
+
+  it("prepareEnterPlay seals when closer is already accepted", () => {
+    const session = createSession("default");
+    const blackboard = new Blackboard();
+    blackboard.write({
+      tag: "设计.创作流程",
+      content: JSON.stringify({
+        status: "open",
+        steps: [
+          {
+            id: "开场白与开场变量",
+            name: "开场白与开场变量",
+            depends_on: [],
+          },
+        ],
+      }),
+      source: "runtime",
+    });
+    const runtime = new PhaseRuntime({
+      initialSession: {
+        ...session,
+        slots: {
+          ...session.slots,
+          creationAcceptedUnits: ["开场白与开场变量"],
+        },
+      },
+      initialBlackboardItems: blackboard.exportItems(),
+    });
+    runtime.prepareEnterPlay();
+    expect(runtime.getSession().slots.creationSealedByOpening).toBe(true);
+    expect(runtime.getSession().slots.designInstanceReady).toBe(true);
+    expect(
+      runtime.getBlackboard().getContentByTag("设计.worker集")?.trim(),
+    ).toBeTruthy();
+    const flow = parseCreationFlow(
+      runtime.getBlackboard().getContentByTag("设计.创作流程"),
+    );
+    expect(flow?.status).not.toBe("closed");
+  });
 });

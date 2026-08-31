@@ -16,6 +16,8 @@ export type RunSnapshot = {
   bookId: string;
   label: string;
   kind: SnapshotKind;
+  /** 游玩存档所属的产物（instance）id */
+  instanceId?: string;
   /** skill 包 id（兼容旧字段名） */
   orchestratorId?: string;
   runtimeSession: RuntimeSession;
@@ -32,6 +34,8 @@ export type RunSnapshotMeta = {
   bookId: string;
   label: string;
   kind: SnapshotKind;
+  /** 游玩存档所属的产物（instance）id */
+  instanceId?: string;
   /** skill 包 id（兼容旧字段名） */
   orchestratorId?: string;
   createdAt: string;
@@ -44,6 +48,7 @@ export function toRunSnapshotMeta(snapshot: RunSnapshot): RunSnapshotMeta {
     bookId: snapshot.bookId,
     label: snapshot.label,
     kind: snapshot.kind,
+    instanceId: snapshot.instanceId,
     orchestratorId: snapshot.orchestratorId,
     createdAt: snapshot.createdAt,
     note: snapshot.note,

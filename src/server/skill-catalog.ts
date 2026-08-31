@@ -177,7 +177,7 @@ function buildWorldSimulatorCatalog(
     id: "declare-ready",
     stage: "design",
     label: "实例就绪",
-    purpose: "Worker 集已 accept 即可进游玩；若走了开场白终节点，选定后会自动保存定稿。",
+    purpose: "收口或 Worker 集验收后可保存产物；产物可单独开玩。",
     status: hasAcceptedWorkerSet(session) ? "done" : "pending",
   });
 

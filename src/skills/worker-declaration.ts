@@ -2,6 +2,14 @@ import type { Blackboard } from "../blackboard/blackboard.js";
 import type { RuntimeSession } from "../types/runtime.js";
 import { isPlayLayerActive } from "./play-turn.js";
 import {
+  SLOT_CREATION_ACCEPTED_UNITS,
+  parseAcceptedUnits,
+} from "./creation-units.js";
+import {
+  isCloserStepRef,
+  SLOT_CREATION_SEALED_BY_OPENING,
+} from "./opening-seal.js";
+import {
   deriveDesignStageScope,
   deriveOnDemandWorkerScope,
   deriveRunWorkerScope,
@@ -41,8 +49,14 @@ export function hasAcceptedWorkerSet(session: RuntimeSession): boolean {
   );
 }
 
+function hasAcceptedCloser(session: RuntimeSession): boolean {
+  if (Boolean(session.slots[SLOT_CREATION_SEALED_BY_OPENING])) return true;
+  const accepted = parseAcceptedUnits(session.slots[SLOT_CREATION_ACCEPTED_UNITS]);
+  return accepted.some((id) => isCloserStepRef(id));
+}
+
 export function canEnterPlay(session: RuntimeSession): boolean {
-  return hasAcceptedWorkerSet(session);
+  return hasAcceptedWorkerSet(session) || hasAcceptedCloser(session);
 }
 
 export function inferLifecycleStage(session: RuntimeSession): LifecycleStage {

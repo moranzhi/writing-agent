@@ -31,7 +31,6 @@ import {
   normalizeQuestions,
 } from "../skills/question-protocol.js";
 import {
-  CREATION_SEALED_WAITING_MESSAGE,
   SLOT_CREATION_SEALED_BY_OPENING,
   isOpeningSealArtifact,
 } from "../skills/opening-seal.js";
@@ -785,21 +784,6 @@ export function applyEvent(
         };
       }
 
-      if (session.slots[SLOT_CREATION_SEALED_BY_OPENING]) {
-        return {
-          session: waiting(touch({ ...next, resumeContext: undefined }), {
-            kind: "input",
-            message: CREATION_SEALED_WAITING_MESSAGE,
-          }),
-          effects: [
-            {
-              type: "emit_message",
-              message: "创作已收口并保存。请切换到「游玩」开始。",
-            },
-          ],
-        };
-      }
-
       // 常规定稿用户输入 → 等总管下一步
       return {
         session: touch(running({ ...next, resumeContext: undefined })),
@@ -1178,14 +1162,14 @@ export function applyEvent(
         pendingDecision: undefined,
         currentWorkerId: undefined,
       };
-      // 开场白终节点：选定后落库、关 DAG，不再问「下一步想写什么」。
+      // 开场白终节点：落库开场，再回到分层图。创作流程保留，产物靠「保存」拆出。
       if (isOpeningSealArtifact(artifact)) {
         return {
-          session: waiting(cleared, {
-            kind: "input",
-            message: CREATION_SEALED_WAITING_MESSAGE,
-          }),
-          effects: [{ type: "seal_creation_opening" }],
+          session: touch(running(cleared)),
+          effects: [
+            { type: "seal_creation_opening" },
+            { type: "propose_next_creation_step" },
+          ],
         };
       }
       if (inferLifecycleStage(session) === "play") {

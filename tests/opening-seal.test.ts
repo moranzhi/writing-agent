@@ -40,6 +40,13 @@ describe("opening-seal", () => {
     expect(
       isOpeningSealArtifact({
         workerId: "design-step",
+        stepId: "开场白与开场变量",
+        outputTags: ["artifact.flat.v1"],
+      }),
+    ).toBe(true);
+    expect(
+      isOpeningSealArtifact({
+        workerId: "design-step",
         outputTags: ["设计.美学纲领与交互范式"],
       }),
     ).toBe(false);

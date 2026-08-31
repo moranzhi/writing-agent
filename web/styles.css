@@ -849,6 +849,13 @@ body.design-workspace[data-design-surface="answer"] .workspace-answer {
   color: var(--muted);
   max-width: 46rem;
 }
+.workspace-intent-actions {
+  margin-top: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
 .workspace-intent-meta {
   margin: 14px 0 0;
   font-size: 12px;
@@ -1666,6 +1673,10 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
 }
 .explorer-row.child .explorer-name { font-size: 12px; font-weight: 400; }
 .explorer-row:hover { background: var(--bg); }
+.explorer-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .explorer-row.active { background: var(--accent-soft); }
 .explorer-row.active .explorer-name { color: var(--accent); font-weight: 600; }
 .explorer-row.selected { background: #dbeafe; }
@@ -1728,15 +1739,59 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
 .explorer-hint {
   margin: 4px 8px 4px 28px; font-size: 11px; color: var(--muted); line-height: 1.4;
 }
+.explorer-product {
+  margin: 2px 0 6px;
+}
+.explorer-product.is-open {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.explorer-product.is-open > .explorer-row {
+  border-radius: 0;
+  background: var(--bg);
+}
+.explorer-product.is-open > .explorer-row:hover {
+  background: #ececee;
+}
+.explorer-drop {
+  border-top: 1px solid var(--border);
+  padding: 4px;
+  background: var(--surface);
+}
+.explorer-drop .explorer-row.child {
+  padding-left: 12px;
+}
+.explorer-drop-empty {
+  margin: 4px 8px 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
 .sidebar-empty { padding: 12px; color: var(--muted); font-size: 13px; text-align: center; }
 
 /* Lifecycle */
-.lifecycle-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.lifecycle-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--surface);
+}
+.lifecycle-toggle[hidden] { display: none; }
 .lifecycle-btn {
-  border: none; background: transparent; padding: 4px 14px; border-radius: 6px;
-  font-size: 13px; cursor: pointer; color: var(--muted);
+  border: none; background: transparent; padding: 4px 10px; border-radius: 6px;
+  font-size: 12px; cursor: pointer; color: var(--muted); font-weight: 500;
 }
 .lifecycle-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.lifecycle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.lifecycle-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 body[data-lifecycle="play"] { --accent: #16a34a; --accent-soft: #dcfce7; --bg: #f0fdf4; }
 body[data-lifecycle="play"] .panel-rail { background: #f7fef9; }
 
@@ -2227,10 +2282,10 @@ body.rail-collapsed .message-feed {
 .msg-q-list li { margin: 0.35rem 0; }
 .msg-q-lead { margin: 0; line-height: 1.55; font-size: 14px; }
 
-/* 游玩：每轮终稿仍是气泡（方便扫上下文），正文在气泡里撑高 */
+/* 游玩：终稿铺满阅读区；字号跟正文阅读走，不跟创作验收的大字稿走 */
 body[data-lifecycle="play"] .message-feed {
-  padding: 16px 18px 22px;
-  gap: 16px;
+  padding: 10px 12px 16px;
+  gap: 10px;
 }
 body[data-lifecycle="play"] .msg-assistant-row .msg-bubble {
   width: min(100%, 44rem);
@@ -2246,7 +2301,12 @@ body[data-lifecycle="play"] .msg-user-row .msg-bubble {
   max-width: 90%;
 }
 body[data-lifecycle="play"] .msg-play-final .msg-bubble {
-  width: min(100%, 46rem);
+  width: 100%;
+  max-width: 100%;
+}
+body[data-lifecycle="play"] .msg-play-final .msg-body {
+  padding: 6px 14px 12px;
+  white-space: normal;
 }
 body[data-lifecycle="play"] .msg-play-final .present-shell {
   border: none;
@@ -2258,13 +2318,24 @@ body[data-lifecycle="play"] .msg-play-final .present-shell {
 body[data-lifecycle="play"] .msg-play-final .present-shell-badge {
   display: none;
 }
+body[data-lifecycle="play"] .msg-play-final .present-stack,
+body[data-lifecycle="play"] .msg-play-final .present-board,
+body[data-lifecycle="play"] .msg-play-final .present-split,
+body[data-lifecycle="play"] .msg-play-final .present-reader {
+  gap: 10px;
+}
 body[data-lifecycle="play"] .msg-play-final .present-stage .present-region--body .present-region-body,
-body[data-lifecycle="play"] .msg-play-final .present-stage.present-region--body .present-region-body {
-  font-size: 18.5px;
-  line-height: 1.88;
+body[data-lifecycle="play"] .msg-play-final .present-stage.present-region--body .present-region-body,
+body[data-lifecycle="play"] .msg-play-final .present-stage--read .present-region-body {
+  font-size: 15px;
+  line-height: 1.65;
   max-width: none;
   max-height: none;
   overflow: visible;
+}
+body[data-lifecycle="play"] .msg-play-final .present-tone--book .present-stage--read .present-region-body,
+body[data-lifecycle="play"] .msg-play-final .present-tone--book .present-stage .present-region-body {
+  max-width: none;
 }
 body[data-lifecycle="play"] .msg-play-final .present-shell--chat_monitor .present-stage {
   padding: 0;
@@ -4692,15 +4763,16 @@ body.design-workspace .af-mosaic {
  * 视觉：少盒子、少渐变；层级靠字号/间距/对比，不靠装饰抢注意力。
  */
 .present-shell {
+  white-space: normal;
   --present-ink: #1c1917;
   --present-muted: #78716c;
   --present-line: #e7e5e4;
   --present-soft: #f5f5f4;
   --present-accent: #0f766e;
-  --present-body: 17.5px;
-  --present-body-lh: 1.78;
-  --present-body-hero: 19px;
-  --present-body-read: 18.5px;
+  --present-body: 15px;
+  --present-body-lh: 1.62;
+  --present-body-hero: 16.5px;
+  --present-body-read: 15.5px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -4749,8 +4821,14 @@ body.design-workspace .af-mosaic {
 .present-region-body {
   margin: 0;
   line-height: 1.65;
-  white-space: pre-wrap;
+  white-space: normal;
   font-size: 14px;
+}
+.present-region-body > p {
+  margin: 0 0 0.7em;
+}
+.present-region-body > p:last-child {
+  margin-bottom: 0;
 }
 /* P0：正文舞台 —— 随字数伸展（500～2000 靠外层滚动，不塞进小框） */
 .present-stage {
@@ -4778,8 +4856,8 @@ body.design-workspace .af-mosaic {
 .present-stage--read .present-region-body {
   font-family: var(--font-read);
   font-size: var(--present-body-read);
-  line-height: 1.9;
-  max-width: 42rem;
+  line-height: 1.7;
+  max-width: none;
 }
 /* 双栏：侧栏钉住，正文再长也能对照 */
 .present-board-side,
@@ -4893,6 +4971,13 @@ body.design-workspace .af-mosaic {
   gap: 16px;
   align-items: start;
 }
+.present-board-mid.is-solo,
+.present-board-mid:not(:has(.present-board-side)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.present-board-side:empty {
+  display: none;
+}
 .present-board-side {
   display: flex;
   flex-direction: column;
@@ -4911,6 +4996,13 @@ body.design-workspace .af-mosaic {
   grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.85fr);
   gap: 16px 20px;
   align-items: start;
+}
+.present-split.is-solo,
+.present-split:not(:has(.present-split-side)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.present-split-side:empty {
+  display: none;
 }
 .present-split-main {
   display: flex;
@@ -4962,6 +5054,13 @@ body.design-workspace .af-mosaic {
   grid-template-columns: minmax(0, 1fr) minmax(120px, 0.38fr);
   gap: 20px;
   align-items: start;
+}
+.present-reader.is-solo,
+.present-reader:not(:has(.present-reader-aside)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.present-reader-aside:empty {
+  display: none;
 }
 .present-reader-main {
   display: flex;
@@ -5015,7 +5114,7 @@ body.design-workspace .af-mosaic {
 .present-tone--book .present-stage--read .present-region-body,
 .present-tone--book .present-stage .present-region-body {
   font-family: var(--font-read);
-  max-width: 38rem;
+  max-width: none;
 }
 .present-tone--terminal {
   --present-ink: #d6d3d1;

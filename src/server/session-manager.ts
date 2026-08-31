@@ -11,14 +11,13 @@ import type { RunSnapshot, RunSnapshotMeta, SnapshotKind } from "../types/run-sn
 import { toRunSnapshotMeta } from "../types/run-snapshot.js";
 import { materializeInstanceSnapshotPayload } from "../book/snapshot-filters.js";
 import {
-  CREATION_SEALED_WAITING_MESSAGE,
   INSTANCE_OPENING_SNAPSHOT_LABEL,
   OPENING_OUTPUT_TAG,
-  SLOT_CREATION_SEALED_BY_OPENING,
 } from "../skills/opening-seal.js";
 import {
   PLAY_WORKING_SNAPSHOT_ID,
   PLAY_WORKING_SNAPSHOT_LABEL,
+  SLOT_PLAY_INSTANCE_ID,
   SLOT_PLAY_LAYER_ACTIVE,
   isPlayLayerActive,
 } from "../skills/play-turn.js";
@@ -209,6 +208,10 @@ export type SessionView = {
   /** 已从定稿开出聊天层（不是只把顶栏标成游玩） */
   playLayerActive: boolean;
   playReady: boolean;
+  /** 已落档至少一份产物（instance 快照） */
+  hasProduct: boolean;
+  /** 当前游玩所依据的产物 id */
+  playInstanceId?: string;
   skillCatalog: SkillCatalogEntry[];
   toolTrace: ToolTraceEntry[];
   burst: BurstState;
@@ -371,11 +374,11 @@ export class SessionManager {
 
   setLifecycleStage(sessionId: string, stage: LifecycleStage): SessionView {
     const s = this.require(sessionId);
-    const session = s.runtime.getSession();
-    if (stage === "play" && !canEnterPlay(session)) {
-      throw new Error("实例尚未就绪，无法进入游玩");
-    }
     if (stage === "play") {
+      s.runtime.prepareEnterPlay();
+      if (!canEnterPlay(s.runtime.getSession())) {
+        throw new Error("实例尚未就绪，无法进入游玩");
+      }
       this.enterPlayLayer(s, { resume: true });
     } else {
       this.enterDesignLayer(s);
@@ -609,8 +612,11 @@ export class SessionManager {
     let blackboardItems = s.runtime.getBlackboard().exportItems();
 
     if (kind === "instance") {
-      if (!canEnterPlay(runtimeSession) && !runtimeSession.slots.startupCompleted) {
-        throw new Error("须先验收 Worker 集，才能保存创作定稿");
+      s.runtime.prepareEnterPlay();
+      runtimeSession = structuredClone(s.runtime.getSession());
+      blackboardItems = s.runtime.getBlackboard().exportItems();
+      if (!canEnterPlay(runtimeSession)) {
+        throw new Error("须先完成收口或验收 Worker 集，才能保存产物");
       }
       ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
         runtimeSession,
@@ -626,6 +632,8 @@ export class SessionManager {
       bookId: s.bookId,
       label: trimmed,
       kind,
+      instanceId:
+        kind === "run" ? this.currentPlayInstanceId(s) : undefined,
       orchestratorId: skillPackId,
       runtimeSession,
       blackboardItems,
@@ -665,25 +673,30 @@ export class SessionManager {
     return this.saveGameSnapshot(sessionId, label, "run", note);
   }
 
-  /** 从已验收实例开一条新的游玩线（清空 run 层状态） */
-  async startNewPlayRun(sessionId: string): Promise<SessionView> {
+  /** 从已落档产物开一条新的游玩线（清空 run 层状态） */
+  async startNewPlayRun(
+    sessionId: string,
+    instanceId?: string,
+  ): Promise<SessionView> {
     const s = this.require(sessionId);
     if (!s.bookId) throw new Error("仅绑定作品时可新建游玩");
-    const session = s.runtime.getSession();
-    if (!canEnterPlay(session)) {
-      throw new Error("须先验收 Worker 集，才能开始游玩");
+    this.persistCreationIfDesign(s);
+    s.runtime.prepareEnterPlay();
+    if (!canEnterPlay(s.runtime.getSession())) {
+      throw new Error("须先验收 Worker 集或完成收口，才能开始游玩");
     }
     this.archivePlayWorking(s.bookId);
-    this.enterPlayLayer(s, { resume: false });
-    this.persist(s);
+    this.enterPlayLayer(s, { resume: false, instanceId });
     return this.toView(sessionId);
   }
 
-  /** 进入游玩层：resume 时恢复「当前游玩」，否则从定稿新开一条聊天 */
+  /** 进入游玩层：resume 时恢复「当前游玩」，否则从产物新开一条聊天 */
   private enterPlayLayer(
     s: ManagedSession,
-    opts: { resume: boolean },
+    opts: { resume: boolean; instanceId?: string },
   ): void {
+    this.persistCreationIfDesign(s);
+    s.runtime.prepareEnterPlay();
     const session = s.runtime.getSession();
     if (!canEnterPlay(session)) {
       throw new Error("实例尚未就绪，无法进入游玩");
@@ -704,11 +717,11 @@ export class SessionManager {
         return;
       }
     }
-    this.beginNewPlayFromInstance(s);
+    this.beginNewPlayFromInstance(s, opts.instanceId);
     if (s.bookId) this.savePlayWorking(s);
   }
 
-  /** 回到创作层：先把当前聊天写入「当前游玩」，再加载定稿 */
+  /** 回到创作层：先把当前聊天写入「当前游玩」，再恢复创作过程 */
   private enterDesignLayer(s: ManagedSession): void {
     const session = s.runtime.getSession();
     if (
@@ -721,33 +734,18 @@ export class SessionManager {
     if (s.bookId && isPlayLayerActive(session.slots)) {
       this.savePlayWorking(s);
     }
-    const instance = s.bookId ? this.latestInstanceSnapshot(s.bookId) : null;
-    if (instance) {
-      this.restoreSnapshotInPlace(s, instance, "design");
-      return;
-    }
-    let runtimeSession = structuredClone(s.runtime.getSession());
-    let blackboardItems = s.runtime.getBlackboard().exportItems();
-    ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
-      runtimeSession,
-      blackboardItems,
-    }));
-    runtimeSession.id = session.id;
-    runtimeSession.slots = {
-      ...runtimeSession.slots,
-      uiLifecycleStage: "design",
-      [SLOT_PLAY_LAYER_ACTIVE]: undefined,
-    };
-    runtimeSession.phase = "waiting_user";
-    runtimeSession.waitingReason = { kind: "input" };
-    s.runtime.restoreFromCheckpoint(runtimeSession, blackboardItems);
+    this.restoreCreationFromDisk(s);
   }
 
-  private beginNewPlayFromInstance(s: ManagedSession): void {
+  private beginNewPlayFromInstance(s: ManagedSession, instanceId?: string): void {
     const keepId = s.runtime.getSession().id;
     let runtimeSession: RuntimeSession;
     let blackboardItems: import("../types/blackboard.js").BlackboardItem[];
-    const instance = s.bookId ? this.latestInstanceSnapshot(s.bookId) : null;
+    const instance = s.bookId
+      ? instanceId
+        ? this.loadInstanceSnapshot(s.bookId, instanceId)
+        : this.latestInstanceSnapshot(s.bookId)
+      : null;
     if (instance) {
       runtimeSession = structuredClone(instance.runtimeSession);
       blackboardItems = structuredClone(instance.blackboardItems);
@@ -764,6 +762,7 @@ export class SessionManager {
       ...runtimeSession.slots,
       uiLifecycleStage: "play",
       [SLOT_PLAY_LAYER_ACTIVE]: true,
+      [SLOT_PLAY_INSTANCE_ID]: instance?.id,
       startupCompleted: true,
     };
     runtimeSession.phase = "waiting_user";
@@ -807,6 +806,13 @@ export class SessionManager {
       ...runtimeSession.slots,
       uiLifecycleStage: layer,
       [SLOT_PLAY_LAYER_ACTIVE]: layer === "play" ? true : undefined,
+      [SLOT_PLAY_INSTANCE_ID]:
+        layer === "play"
+          ? snapshot.instanceId ||
+            (typeof runtimeSession.slots[SLOT_PLAY_INSTANCE_ID] === "string"
+              ? runtimeSession.slots[SLOT_PLAY_INSTANCE_ID]
+              : undefined)
+          : undefined,
       startupCompleted: true,
     };
     if (layer === "play") {
@@ -817,12 +823,12 @@ export class SessionManager {
         runtimeSession.waitingReason = { kind: "input" };
       }
     } else {
-      const sealed = Boolean(runtimeSession.slots[SLOT_CREATION_SEALED_BY_OPENING]);
-      runtimeSession.phase = "waiting_user";
-      runtimeSession.waitingReason = {
-        kind: "input",
-        ...(sealed ? { message: CREATION_SEALED_WAITING_MESSAGE } : {}),
-      };
+      if (runtimeSession.phase === "done") {
+        runtimeSession.phase = "waiting_user";
+      }
+      if (!runtimeSession.waitingReason) {
+        runtimeSession.waitingReason = { kind: "input" };
+      }
       runtimeSession.pendingArtifactId = undefined;
       runtimeSession.pendingDecision = undefined;
       runtimeSession.currentWorkerId = undefined;
@@ -868,6 +874,7 @@ export class SessionManager {
       bookId: s.bookId,
       label: PLAY_WORKING_SNAPSHOT_LABEL,
       kind: "run",
+      instanceId: this.currentPlayInstanceId(s),
       orchestratorId:
         sessionSkillPackId(runtimeSession) ??
         (book ? bookSkillPackId(book) : "") ??
@@ -909,17 +916,89 @@ export class SessionManager {
         s.runtime.getSession().id,
         INSTANCE_OPENING_SNAPSHOT_LABEL,
         "instance",
-        "进入游玩前自动保存定稿",
+        "开玩前自动保存产物",
       );
     } catch (err) {
-      console.warn("[会话] 进入游玩前保存定稿失败", err);
+      console.warn("[会话] 开玩前保存产物失败", err);
     }
+  }
+
+  private currentPlayInstanceId(s: ManagedSession): string | undefined {
+    const raw = s.runtime.getSession().slots[SLOT_PLAY_INSTANCE_ID];
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+    if (!s.bookId) return undefined;
+    return this.latestInstanceSnapshot(s.bookId)?.id;
+  }
+
+  playWorkingInstanceId(bookId: string): string | undefined {
+    const working = loadRunSnapshotFile(bookId, PLAY_WORKING_SNAPSHOT_ID);
+    if (!working || working.kind !== "run") return undefined;
+    return working.instanceId;
+  }
+
+  renameGameSnapshot(
+    bookId: string,
+    snapshotId: string,
+    label: string,
+  ): RunSnapshotMeta {
+    if (!getBook(bookId)) throw new Error("Book 不存在");
+    const trimmed = label.trim();
+    if (!trimmed) throw new Error("名称不能为空");
+    const snapshot = loadRunSnapshotFile(bookId, snapshotId);
+    if (!snapshot) throw new Error("存档不存在");
+    const next: RunSnapshot = { ...snapshot, label: trimmed };
+    saveRunSnapshotFile(next);
+    return toRunSnapshotMeta(next);
   }
 
   private latestInstanceSnapshot(bookId: string): RunSnapshot | null {
     const meta = this.listGameSnapshots(bookId).find((s) => s.kind === "instance");
     if (!meta) return null;
     return loadRunSnapshotFile(bookId, meta.id);
+  }
+
+  private loadInstanceSnapshot(bookId: string, snapshotId: string): RunSnapshot {
+    const snapshot = loadRunSnapshotFile(bookId, snapshotId);
+    if (!snapshot) throw new Error("产物不存在");
+    if (snapshot.kind !== "instance") throw new Error("该存档不是产物定稿");
+    return snapshot;
+  }
+
+  private restoreCreationFromDisk(s: ManagedSession): void {
+    const keepId = s.runtime.getSession().id;
+    if (!s.bookId) {
+      this.clearPlayLayerOnSession(s, keepId);
+      return;
+    }
+    const snap = loadBookSession(s.bookId);
+    if (!snap?.runtimeSession) {
+      this.clearPlayLayerOnSession(s, keepId);
+      return;
+    }
+    const runtimeSession = structuredClone(snap.runtimeSession);
+    runtimeSession.id = keepId;
+    runtimeSession.slots = {
+      ...runtimeSession.slots,
+      uiLifecycleStage: "design",
+      [SLOT_PLAY_LAYER_ACTIVE]: undefined,
+    };
+    s.runtime.restoreFromCheckpoint(runtimeSession, snap.blackboardItems);
+    s.messages = snap.messages.map((m) => ({ ...m })) as ChatMessage[];
+    s.branchState = this.deserializeBranchState(snap.messageBranchState);
+  }
+
+  private clearPlayLayerOnSession(s: ManagedSession, keepId: string): void {
+    const runtimeSession = structuredClone(s.runtime.getSession());
+    runtimeSession.id = keepId;
+    runtimeSession.slots = {
+      ...runtimeSession.slots,
+      uiLifecycleStage: "design",
+      [SLOT_PLAY_LAYER_ACTIVE]: undefined,
+    };
+    s.runtime.restoreFromCheckpoint(
+      runtimeSession,
+      s.runtime.getBlackboard().exportItems(),
+    );
   }
 
   private playOpeningMessage(text: string): ChatMessage {
@@ -935,7 +1014,7 @@ export class SessionManager {
     };
   }
 
-  /** 从存档读档：替换当前作品进度，可继续创作 */
+  /** 读档：产物开玩，游玩存档续玩。不覆盖创作过程。 */
   async loadGameSnapshot(bookId: string, snapshotId: string): Promise<SessionView> {
     const snapshot = loadRunSnapshotFile(bookId, snapshotId);
     if (!snapshot) throw new Error("存档不存在");
@@ -946,47 +1025,36 @@ export class SessionManager {
       throw new Error("存档与当前作品 skill 包不匹配，无法读档");
     }
 
-    this.dropBookSessions(bookId);
-
-    const newSessionId = randomUUID();
-    const messages: ChatMessage[] = snapshot.messages.map((m) => ({ ...m })) as ChatMessage[];
-    let runtimeSession = structuredClone(snapshot.runtimeSession);
-    let blackboardItems = snapshot.blackboardItems;
+    let sessionId = this.activeBookSessions.get(bookId);
+    if (!sessionId) {
+      await this.openBook(bookId);
+      sessionId = this.activeBookSessions.get(bookId);
+    }
+    if (!sessionId) throw new Error("无法打开作品");
+    const s = this.require(sessionId);
 
     if (snapshot.kind === "instance") {
-      ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
-        runtimeSession,
-        blackboardItems,
-      }));
-      runtimeSession.slots = {
-        ...runtimeSession.slots,
-        uiLifecycleStage: "design",
-        [SLOT_PLAY_LAYER_ACTIVE]: undefined,
-      };
-    } else {
-      runtimeSession.slots = {
-        ...runtimeSession.slots,
-        uiLifecycleStage: "play",
-        [SLOT_PLAY_LAYER_ACTIVE]: true,
-      };
+      this.persistCreationIfDesign(s);
+      if (isPlayLayerActive(s.runtime.getSession().slots)) {
+        this.archivePlayWorking(bookId);
+      }
+      this.beginNewPlayFromInstance(s, snapshot.id);
+      this.savePlayWorking(s);
+      return this.toView(
+        sessionId,
+        true,
+        `已用产物「${snapshot.label}」开玩。创作流程仍在「创作」里。`,
+      );
     }
 
-    runtimeSession.id = newSessionId;
-
-    const resumeHint =
-      snapshot.kind === "instance"
-        ? `已加载实例「${snapshot.label}」。可开始运行，或调整角色设定后再模拟。`
-        : `已从存档「${snapshot.label}」读档，可继续创作。`;
-
-    return this.mountRestoredSession({
-      sessionId: newSessionId,
-      bookId,
-      skillPackId: runSnapshotSkillPackId(snapshot) ?? "",
-      runtimeSession,
-      blackboardItems,
-      messages,
-      resumeHint,
-    });
+    this.persistCreationIfDesign(s);
+    this.restoreSnapshotInPlace(s, snapshot, "play");
+    this.savePlayWorking(s);
+    return this.toView(
+      sessionId,
+      true,
+      `已从存档「${snapshot.label}」继续游玩。`,
+    );
   }
 
   /** 删除单个存档 */
@@ -1438,9 +1506,6 @@ export class SessionManager {
       ? s.runtime.getSession().artifacts.find((a) => a.id === pendingId)
       : undefined;
     const stageBefore = inferLifecycleStage(s.runtime.getSession());
-    const sealedBefore = Boolean(
-      s.runtime.getSession().slots[SLOT_CREATION_SEALED_BY_OPENING],
-    );
     try {
       const owned = await this.runExclusive(id, s, () =>
         s.runtime.acceptArtifact(undefined, opts),
@@ -1467,8 +1532,6 @@ export class SessionManager {
         foldRunProcessMessages(s.messages, artifact.workerId);
       }
     }
-    this.persist(s);
-    this.maybeSaveOpeningInstance(s, sealedBefore);
     this.persist(s);
     return this.toView(id);
   }
@@ -1862,43 +1925,32 @@ export class SessionManager {
     }
   }
 
-  /** 选定开场后正式保存一份 instance 定稿（可进游玩的规格+开局） */
-  private maybeSaveOpeningInstance(
-    s: ManagedSession,
-    sealedBefore: boolean,
-  ): void {
-    if (sealedBefore) return;
+  /** 游玩中只更新工作副本，不覆盖创作过程 */
+  private persist(s: ManagedSession): void {
     if (!s.bookId) return;
+    const book = getBook(s.bookId);
+    if (!book) return;
     const session = s.runtime.getSession();
-    if (!session.slots[SLOT_CREATION_SEALED_BY_OPENING]) return;
-    if (!canEnterPlay(session)) {
-      s.messages.push(
-        this.msg(
-          "system",
-          "[创作收口] 开场已选定，但 Worker 集尚未验收，未写入创作定稿存档。",
-        ),
-      );
+    if (
+      isPlayLayerActive(session.slots) ||
+      inferLifecycleStage(session) === "play"
+    ) {
+      this.savePlayWorking(s);
+      this.syncBookSkill(s.bookId, session);
+      updateBook(s.bookId, { activeSessionId: session.id });
       return;
     }
-    try {
-      const meta = this.saveGameSnapshot(
-        session.id,
-        INSTANCE_OPENING_SNAPSHOT_LABEL,
-        "instance",
-        "选定开场后自动保存",
-      );
-      s.messages.push(
-        this.msg("system", `[创作收口] 已保存创作定稿「${meta.label}」。`),
-      );
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      s.messages.push(
-        this.msg("system", `[创作收口] 开场已选定，定稿存档未写入：${detail}`),
-      );
-    }
+    this.writeBookSession(s);
   }
 
-  private persist(s: ManagedSession): void {
+  /** 切到游玩前把当前创作过程写入 session.json */
+  private persistCreationIfDesign(s: ManagedSession): void {
+    if (!s.bookId) return;
+    if (isPlayLayerActive(s.runtime.getSession().slots)) return;
+    this.writeBookSession(s);
+  }
+
+  private writeBookSession(s: ManagedSession): void {
     if (!s.bookId) return;
     const book = getBook(s.bookId);
     if (!book) return;
@@ -2545,6 +2597,13 @@ export class SessionManager {
       lifecycleStage,
       playLayerActive: isPlayLayerActive(session.slots),
       playReady: canEnterPlay(session),
+      hasProduct: Boolean(
+        s.bookId &&
+          this.listGameSnapshots(s.bookId).some((item) => item.kind === "instance"),
+      ),
+      playInstanceId: isPlayLayerActive(session.slots)
+        ? this.currentPlayInstanceId(s)
+        : undefined,
       skillCatalog,
       toolTrace: buildToolTrace(messages),
       burst: buildBurstState(messages, session),

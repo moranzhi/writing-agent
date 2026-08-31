@@ -395,7 +395,17 @@ export async function handleBooksApi(
       return true;
     }
     try {
-      const session = await sessionManager.startNewPlayRun(active.id);
+      let instanceId: string | undefined;
+      try {
+        const raw = await readBody(req);
+        if (raw.trim()) {
+          const body = JSON.parse(raw) as { instanceId?: string };
+          instanceId = body.instanceId?.trim() || undefined;
+        }
+      } catch {
+        instanceId = undefined;
+      }
+      const session = await sessionManager.startNewPlayRun(active.id, instanceId);
       json(res, 200, { session });
     } catch (err) {
       json(res, 400, {
@@ -420,7 +430,11 @@ export async function handleBooksApi(
           ...s,
           kindLabel: s.kind === "instance" ? "创作定稿" : "游玩进度",
         }));
-        json(res, 200, { saves });
+        json(res, 200, {
+          saves,
+          playWorkingInstanceId:
+            sessionManager.playWorkingInstanceId(bookId) ?? null,
+        });
       } catch (err) {
         json(res, 400, {
           error: err instanceof Error ? err.message : "读取存档失败",
@@ -485,6 +499,28 @@ export async function handleBooksApi(
       } catch (err) {
         json(res, 400, {
           error: err instanceof Error ? err.message : "读档失败",
+        });
+      }
+      return true;
+    }
+
+    if ((req.method === "PATCH" || req.method === "PUT") && !isLoad) {
+      const body = JSON.parse(await readBody(req)) as { label?: string };
+      try {
+        const save = sessionManager.renameGameSnapshot(
+          bookId,
+          saveId,
+          body.label ?? "",
+        );
+        json(res, 200, {
+          save: {
+            ...save,
+            kindLabel: save.kind === "instance" ? "创作定稿" : "游玩进度",
+          },
+        });
+      } catch (err) {
+        json(res, 400, {
+          error: err instanceof Error ? err.message : "重命名失败",
         });
       }
       return true;

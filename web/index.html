@@ -80,6 +80,10 @@
 
         <footer class="composer" id="composer">
           <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
+          <div class="lifecycle-toggle" id="lifecycle-toggle" hidden role="group" aria-label="创作与游玩">
+            <button type="button" class="lifecycle-btn" data-stage="design">创作</button>
+            <button type="button" class="lifecycle-btn" data-stage="play">游玩</button>
+          </div>
           <div id="composer-main"></div>
           <details class="more-menu">
             <summary class="btn-sm more-menu-sum" title="更多">更多</summary>
@@ -121,7 +125,7 @@
 
     <menu id="book-action-menu" class="context-menu" hidden>
       <button type="button" class="context-menu-item" id="book-menu-open" data-action="open">打开创作</button>
-      <button type="button" class="context-menu-item" id="book-menu-play" data-action="play">进入游玩</button>
+      <button type="button" class="context-menu-item" id="book-menu-play" data-action="play">用产物开玩</button>
       <button type="button" class="context-menu-item" id="book-menu-save-instance" data-action="save-instance">保存定稿</button>
       <button type="button" class="context-menu-item" id="book-menu-save-play" data-action="save-play">保存游玩</button>
       <button type="button" class="context-menu-item" id="book-menu-export" data-action="export">导出</button>

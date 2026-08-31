@@ -3,7 +3,7 @@
  * 契约：docs/play-presentation-shells.md · present.v1
  *
  * 信息层级约定（所有壳共用）：
- *   P0 body  — 最大字号与面积，阅读主轴
+ *   P0 body  — 阅读主轴：字号大于辅助栏，但不做成讲稿大字
  *   P1 actions — 需要决策时醒目，但不压过正文
  *   P2 monitor — 芯片密排，一眼扫完
  *   P3 header / footer / aside — 辅助，紧凑
@@ -66,20 +66,20 @@ export function shellDefaultRegions(shell) {
 }
 
 function formatBlockContent(value) {
+  let text = "";
   if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value
+  if (typeof value === "string") text = value;
+  else if (Array.isArray(value)) {
+    text = value
       .map((x) => (typeof x === "string" ? x : JSON.stringify(x)))
       .filter(Boolean)
       .join("\n");
-  }
-  if (typeof value === "object") {
-    return Object.entries(value)
+  } else if (typeof value === "object") {
+    text = Object.entries(value)
       .map(([k, v]) => `${k}：${typeof v === "string" ? v : JSON.stringify(v)}`)
       .join("\n");
-  }
-  return String(value);
+  } else text = String(value);
+  return text.replace(/\n{3,}/g, "\n\n");
 }
 
 /** 模型常把 tag 名写进正文开头；展示前剥掉 */
@@ -132,7 +132,11 @@ function regionInnerHtml(region, rawValue, esc) {
     if (chips) return chips;
   }
   const text = formatBlockContent(rawValue).trim();
-  return `<div class="present-region-body">${esc(text).replace(/\n/g, "<br>")}</div>`;
+  const paras = text.split(/\n\n+/).filter(Boolean);
+  const inner = paras
+    .map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<div class="present-region-body">${inner}</div>`;
 }
 
 /**
@@ -300,26 +304,28 @@ export function renderPresentShellHtml(packet, esc, opts = {}) {
           ${actionsHtml}
         </div>`;
       break;
-    case "turn_panel":
+    case "turn_panel": {
+      const boardSide = `${by.aside || ""}${by.footer || ""}`;
       layoutHtml = `
         <div class="present-board">
           <div class="present-board-top">${by.monitor || ""}${by.header || ""}</div>
-          <div class="present-board-mid">
+          <div class="present-board-mid${boardSide ? "" : " is-solo"}">
             <div class="present-stage">${by.body || ""}</div>
-            <div class="present-board-side">${by.aside || ""}${by.footer || ""}</div>
+            ${boardSide ? `<div class="present-board-side">${boardSide}</div>` : ""}
           </div>
           ${actionsHtml}
         </div>`;
       break;
+    }
     case "split_board":
       layoutHtml = `
-        <div class="present-split">
+        <div class="present-split${by.aside ? "" : " is-solo"}">
           <div class="present-split-main">
             ${by.header || ""}
             <div class="present-stage">${by.body || ""}</div>
             ${by.footer || ""}
           </div>
-          <div class="present-split-side">${by.aside || ""}</div>
+          ${by.aside ? `<div class="present-split-side">${by.aside}</div>` : ""}
           ${actionsHtml}
         </div>`;
       break;
@@ -334,13 +340,13 @@ export function renderPresentShellHtml(packet, esc, opts = {}) {
       break;
     case "chapter_reader":
       layoutHtml = `
-        <div class="present-reader">
+        <div class="present-reader${by.aside ? "" : " is-solo"}">
           <div class="present-reader-main">
             ${by.header || ""}
             <div class="present-stage present-stage--read">${by.body || ""}</div>
             ${by.footer || ""}
           </div>
-          <div class="present-reader-aside">${by.aside || ""}</div>
+          ${by.aside ? `<div class="present-reader-aside">${by.aside}</div>` : ""}
         </div>`;
       break;
     case "prose":

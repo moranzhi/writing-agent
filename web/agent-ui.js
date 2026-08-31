@@ -76,6 +76,34 @@ function isPlayView(view) {
   return Boolean(view?.playLayerActive || view?.lifecycleStage === "play");
 }
 
+/** 开场已选定、创作收口，仍停在创作层等用户保存产物 */
+export function isCreationSealedWaiting(view) {
+  if (!view || isPlayView(view)) return false;
+  const msg = view.waitingReason?.message;
+  return (
+    view.waitingReason?.kind === "input" &&
+    typeof msg === "string" &&
+    /创作已收口|可保存为产物/.test(msg)
+  );
+}
+
+/** 收口节点已验收（图上「已完成」），即使还停在选节点 */
+export function isCreationCloserDone(view) {
+  if (!view || isPlayView(view)) return false;
+  const steps = view.creationFlowView?.steps;
+  if (!Array.isArray(steps)) return false;
+  return steps.some((s) => s?.closer && s.runState === "done");
+}
+
+export function canOfferSaveProduct(view) {
+  return isCreationSealedWaiting(view) || isCreationCloserDone(view);
+}
+
+export function canOfferEnterPlay(view) {
+  if (!view || isPlayView(view)) return false;
+  return canOfferSaveProduct(view) || Boolean(view.hasProduct);
+}
+
 function renderLiveStreamBody(live, view) {
   const thinking = (live?.thinking || view?.agentThinking || "").trim();
   const output = (live?.output ?? "").trim();
@@ -848,16 +876,19 @@ export function renderLifecycle(view) {
   document.body.dataset.lifecycle = stage;
   const toggle = document.getElementById("lifecycle-toggle");
   if (!toggle) return;
+  const ready = Boolean(view?.playReady || view?.hasProduct);
+  toggle.hidden = !ready;
   toggle.querySelectorAll("[data-stage]").forEach((btn) => {
     const s = btn.getAttribute("data-stage");
     btn.classList.toggle("active", s === stage);
     if (s === "play") {
-      btn.disabled = !view.playReady;
-      btn.title = view.playReady
-        ? "进入游玩 / 写作"
-        : "请先验收 Worker 集（创作定稿）后再切换";
+      btn.disabled = !ready;
+      btn.title = ready
+        ? "用已保存的产物开玩"
+        : "请先保存产物后再开玩";
     } else {
       btn.disabled = false;
+      btn.title = "回到创作";
     }
   });
 }
@@ -4312,7 +4343,12 @@ function renderSpeakWorkspace(view) {
   let hint = "在底栏输入你的想法。";
   let guideHtml = "";
 
-  if (wr?.kind === "pick_creation_step" || isFlowPlanReview(view)) {
+  if (canOfferSaveProduct(view)) {
+    title = "可以落档了";
+    hint = view.hasProduct
+      ? "产物已拆出，可开玩；创作流程还在，补节点或再保存一份新定稿。"
+      : "保存后创作流程仍在；拆出的产物可以单独开玩、存档。";
+  } else if (wr?.kind === "pick_creation_step" || isFlowPlanReview(view)) {
     title = "选要做的节点";
     hint = "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发。";
   } else if (showOpening) {
@@ -4350,13 +4386,8 @@ function renderSpeakWorkspace(view) {
       ? proposedOutputCopy(view.proposedNextStep)
       : view.focus?.detail || "确认执行，或在底栏说明意见。";
   } else if (wr?.kind === "input") {
-    if (wr.message && /创作已收口/.test(wr.message)) {
-      title = "创作已收口";
-      hint = wr.message;
-    } else {
-      title = "继续说";
-      hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
-    }
+    title = "继续说";
+    hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
   } else if (view.uiPrompt && !hasUserMessages(view)) {
     title = "描述你想创作什么";
     hint = String(view.uiPrompt).trim().slice(0, 280);
@@ -4377,9 +4408,23 @@ function renderSpeakWorkspace(view) {
           interactive: flowInteractive,
         })
       : "";
+  const enterPlay = canOfferEnterPlay(view)
+    ? `<div class="workspace-intent-actions">
+        ${
+          canOfferSaveProduct(view)
+            ? `<button type="button" class="btn btn-primary" data-save-product>保存定稿</button>`
+            : ""
+        }
+        <button type="button" class="btn${
+          canOfferSaveProduct(view) ? "" : " btn-primary"
+        }" data-enter-play>${view.hasProduct ? "用产物开玩" : "开玩"}</button>
+      </div>`
+    : "";
   return `<section class="workspace-intent">
     <div class="workspace-intent-head">
-      <span class="workspace-surface-kicker">${flowInteractive ? "流程" : "说话"}</span>
+      <span class="workspace-surface-kicker">${
+        canOfferSaveProduct(view) ? "落档" : flowInteractive ? "流程" : "说话"
+      }</span>
       ${leaveStepControlHtml(view)}
     </div>
     <h2 class="workspace-intent-title">${esc(title)}</h2>
@@ -4388,6 +4433,7 @@ function renderSpeakWorkspace(view) {
     ${guideHtml}
     ${intake}
     ${flowHtml}
+    ${enterPlay}
   </section>`;
 }
 
@@ -4586,6 +4632,12 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     stage.innerHTML = renderSpeakWorkspace(view);
     wireCreationFlowGraph(stage, handlers);
     wireLeaveStepControl(stage, handlers);
+    stage.querySelector("[data-enter-play]")?.addEventListener("click", () => {
+      handlers.onEnterPlay?.();
+    });
+    stage.querySelector("[data-save-product]")?.addEventListener("click", () => {
+      handlers.onSaveProduct?.();
+    });
     if (panelFeed) ensureQuestionsHostIn(panelFeed);
     return;
   }

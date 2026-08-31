@@ -400,8 +400,8 @@ export function buildFocus(
       actorType: "user",
       actorLabel: "你",
       action:
-        reason.message && /创作已收口/.test(reason.message)
-          ? "创作已收口"
+        reason.message && /创作已收口|可保存为产物/.test(reason.message)
+          ? "可保存产物"
           : "补充说明",
       detail: reason.message?.slice(0, 120),
     };

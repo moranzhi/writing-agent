@@ -422,7 +422,7 @@ describe("phase machine", () => {
     ]);
   });
 
-  it("accepting opening-setup seals creation instead of next_intent", () => {
+  it("accepting opening-setup materializes opening then returns to the graph", () => {
     let session = createSession("default");
     const artifact = createArtifact({
       workerId: "design-step",
@@ -441,17 +441,17 @@ describe("phase machine", () => {
       type: "user_accepted_artifact",
       payload: { artifactId: artifact.id },
     });
-    expect(accepted.session.waitingReason?.kind).toBe("input");
-    expect(accepted.session.waitingReason).toMatchObject({
-      kind: "input",
-    });
-    expect(accepted.effects).toEqual([{ type: "seal_creation_opening" }]);
+    expect(accepted.session.phase).toBe("running");
+    expect(accepted.effects).toEqual([
+      { type: "seal_creation_opening" },
+      { type: "propose_next_creation_step" },
+    ]);
     expect(
       accepted.effects.some((e) => e.type === "invoke_main_agent"),
     ).toBe(false);
   });
 
-  it("accepting opening-generator also seals creation", () => {
+  it("accepting opening-generator also materializes opening then returns to the graph", () => {
     let session = createSession("default");
     const artifact = createArtifact({
       workerId: "opening-generator",
@@ -469,11 +469,14 @@ describe("phase machine", () => {
       type: "user_accepted_artifact",
       payload: { artifactId: artifact.id },
     });
-    expect(accepted.session.waitingReason?.kind).toBe("input");
-    expect(accepted.effects).toEqual([{ type: "seal_creation_opening" }]);
+    expect(accepted.session.phase).toBe("running");
+    expect(accepted.effects).toEqual([
+      { type: "seal_creation_opening" },
+      { type: "propose_next_creation_step" },
+    ]);
   });
 
-  it("sealed creation still blocks input until play", () => {
+  it("sealed creation still lets the user keep designing", () => {
     let session = createSession("default");
     session = {
       ...session,
@@ -481,14 +484,13 @@ describe("phase machine", () => {
       waitingReason: { kind: "input" },
       slots: { creationSealedByOpening: true, designInstanceReady: true },
     };
-    const blocked = applyEvent(session, {
+    const continued = applyEvent(session, {
       type: "user_submitted_input",
-      payload: { text: "我买金首饰" },
+      payload: { text: "再补一个 NPC" },
     });
-    expect(blocked.effects).toEqual([
-      { type: "emit_message", message: "创作已收口并保存。请切换到「游玩」开始。" },
-    ]);
-    expect(blocked.effects.some((e) => e.type === "run_play_turn")).toBe(false);
+    expect(continued.session.phase).toBe("running");
+    expect(continued.effects).toEqual([{ type: "invoke_main_agent" }]);
+    expect(continued.effects.some((e) => e.type === "run_play_turn")).toBe(false);
   });
 
   it("play input starts a play turn even after opening seal", () => {

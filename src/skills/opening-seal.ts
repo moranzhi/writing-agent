@@ -1,5 +1,5 @@
 /**
- * 开场白终节点：选定后落库、关 DAG。
+ * 开场白终节点：选定后落库开场。不关 DAG；产物靠用户「保存」拆出。
  * 能力 `opening-setup` 与磁盘 worker `opening-generator` 共用这条收口。
  */
 import {
@@ -22,21 +22,34 @@ export const SLOT_CREATION_SEALED_BY_OPENING = "creationSealedByOpening";
 export const SLOT_OPENING_SELECTED_INDEX = "openingSelectedIndex";
 
 export const CREATION_SEALED_WAITING_MESSAGE =
-  "开场已选定，创作已收口并保存。可切换到「游玩」。";
+  "开场已选定。可保存为产物后开玩，或继续补节点。";
 
-export const INSTANCE_OPENING_SNAPSHOT_LABEL = "创作定稿（开场）";
+export const INSTANCE_OPENING_SNAPSHOT_LABEL = "定稿";
 
 export function isOpeningLockTag(tag: string): boolean {
   const t = tag.trim();
   return t === OPENING_OUTPUT_TAG || t === OPENING_INITIAL_VARS_TAG;
 }
 
+/** 收口步 id / name（含「开场白与开场变量#2」） */
+export function isCloserStepRef(id: string | undefined): boolean {
+  const t = (id ?? "").trim();
+  if (!t) return false;
+  return (
+    t === "开场白与开场变量" ||
+    t.startsWith("开场白与开场变量#") ||
+    t === "开场白"
+  );
+}
+
 export function isOpeningSealArtifact(artifact: {
   workerId?: string;
+  stepId?: string;
   outputTags?: readonly string[];
 }): boolean {
   if ((artifact.workerId ?? "").trim() === "opening-generator") return true;
-  return (artifact.outputTags ?? []).includes(OPENING_SETUP_ARTIFACT_TAG);
+  if ((artifact.outputTags ?? []).includes(OPENING_SETUP_ARTIFACT_TAG)) return true;
+  return isCloserStepRef(artifact.stepId);
 }
 
 export type OpeningVariable = {
