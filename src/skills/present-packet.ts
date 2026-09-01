@@ -197,6 +197,75 @@ export const PLAY_VISIBLE_BODY_INSTRUCTION = [
   "禁止把 tag 名（如「输出.用户展示」）、压缩摘要、过程日志写进正文。",
 ].join("\n");
 
+/** 游玩期把裁决写成用户可见终稿的执行单元 */
+export function isPlayPresentWorker(workerId: string): boolean {
+  const id = workerId.trim();
+  return id === "narrator" || id === "round-present";
+}
+
+/** 按能力探测走 json_schema / forced_tool 时用的 present.v1 形状（全 required，可 strict） */
+export const PRESENT_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema", "shell", "blocks", "meta"],
+  properties: {
+    schema: { type: "string" },
+    shell: { type: "string" },
+    blocks: {
+      type: "object",
+      additionalProperties: false,
+      required: ["body", "monitor", "header", "footer", "aside"],
+      properties: {
+        body: { type: "string" },
+        monitor: { type: "string" },
+        header: { type: "string" },
+        footer: { type: "string" },
+        aside: { type: "string" },
+      },
+    },
+    meta: {
+      type: "object",
+      additionalProperties: false,
+      required: ["suggested_actions"],
+      properties: {
+        suggested_actions: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+/** 游玩转述：按探测到的 structured 投递写出 present.v1，不要创作追问 */
+export function playPresentOutputInstruction(shell: PresentShellId): string {
+  return `
+
+---
+
+## 运行时输出协议（游玩正文）
+
+本步产物是给用户看的终稿。程序按已探测的模型能力用 schema / tool / json_object 投递，你输出 **一个 present.v1 对象**：
+
+{"schema":"present.v1","shell":"${shell}","blocks":{"body":"用户可读正文","monitor":"","header":"","footer":"","aside":""},"meta":{"suggested_actions":[]}}
+
+\`shell\` 必须是 \`${shell}\`。只填该壳已有区域，没有的键留空字符串。
+prose 壳也可直接输出 Markdown，程序会落入 body。
+材料不够也先写一版场面。不要写追问、askUser、自评或「可验收产物」。`;
+}
+
+export function stringifyPresentPacket(packet: PresentPacket): string {
+  return JSON.stringify(packet);
+}
+
+export function presentOutputFromFallback(
+  text: string,
+  shell: PresentShellId = "prose",
+): string {
+  const body = stripPresentSourceFences(text).trim() || "（本轮场面未写完）";
+  return stringifyPresentPacket(presentFromPlainText(body, shell));
+}
+
 export function parsePresentPacket(
   raw: string | undefined | null,
   fallbackShell: PresentShellId = "prose",

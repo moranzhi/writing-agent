@@ -4,6 +4,8 @@ import {
   parsePresentPacket,
   parseShellAdaptationFromReplyFormat,
   presentFromPlainText,
+  presentOutputFromFallback,
+  isPlayPresentWorker,
   shellDefaultRegions,
 } from "../src/skills/present-packet.js";
 
@@ -112,5 +114,20 @@ describe("shell adaptation from reply-format", () => {
       }),
     );
     expect(adapt?.shell_id).toBe("prose");
+  });
+});
+
+describe("play present worker", () => {
+  it("recognizes narrator and round-present", () => {
+    expect(isPlayPresentWorker("narrator")).toBe(true);
+    expect(isPlayPresentWorker("round-present")).toBe(true);
+    expect(isPlayPresentWorker("world-simulator")).toBe(false);
+  });
+
+  it("fallback packet uses the given shell", () => {
+    const raw = presentOutputFromFallback("她点了点头。", "chat_monitor");
+    const view = parsePresentPacket(raw, "prose");
+    expect(view.packet.shell).toBe("chat_monitor");
+    expect(view.packet.blocks.body).toBe("她点了点头。");
   });
 });

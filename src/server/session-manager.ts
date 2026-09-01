@@ -851,7 +851,8 @@ export class SessionManager {
       kind !== "approve_step" &&
       kind !== "revision" &&
       kind !== "next_intent" &&
-      kind !== "pick_creation_step"
+      kind !== "pick_creation_step" &&
+      kind !== "worker_questions"
     ) {
       return;
     }
@@ -1875,12 +1876,23 @@ export class SessionManager {
         this.captureCheckpoint(managed),
       );
       const usage = managed.trackingRef.current.pendingUsage;
-      const thinking = managed.trackingRef.current.pendingReasoning;
+      const sessionId = managed.trackingRef.current.sessionId;
+      const liveThinking = sessionId
+        ? this.workerLive.get(sessionId)?.thinking?.trim()
+        : "";
       managed.trackingRef.current.pendingUsage = undefined;
+      const pendingReasoning = managed.trackingRef.current.pendingReasoning;
       managed.trackingRef.current.pendingReasoning = undefined;
 
       const classified =
         text.trim().length > 0 ? classifyAgentMessage(text) : null;
+      const thinking =
+        pendingReasoning ||
+        (classified?.kind === "worker_output" ||
+        classified?.kind === "worker_questions"
+          ? liveThinking
+          : "") ||
+        undefined;
       const pendingTrace = managed.trackingRef.current.pendingContextTrace;
       let contextTrace: LlmContextTrace | undefined;
       if (

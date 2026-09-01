@@ -25,7 +25,18 @@ import { loadAppSettings } from "../config/settings.js";
 import { resolveActivePreset } from "../preset/store.js";
 import { assemblePlayWorkerMessages } from "../preset/play-frame.js";
 import { worldInfoPackFromSegments } from "../preset/world-info-pack.js";
-import { PRESENT_TAG } from "../skills/present-packet.js";
+import {
+  PRESENT_TAG,
+  PRESENT_JSON_SCHEMA,
+  isPlayPresentWorker,
+  isPresentLikeObject,
+  parsePresentPacket,
+  parseShellAdaptationFromReplyFormat,
+  playPresentOutputInstruction,
+  presentOutputFromFallback,
+  stringifyPresentPacket,
+  type PresentShellId,
+} from "../skills/present-packet.js";
 import {
   coerceToFlatArtifact,
   flatArtifactToFragmentDoc,
@@ -44,6 +55,7 @@ import {
   extractFragmentAskSidecar,
   isUsableContextFragment,
   looksLikeFragmentDoc,
+  parseContextFragment,
 } from "../skills/context-fragment.js";
 import {
   isProgressPointerTag,
@@ -200,13 +212,66 @@ function existingOutputIsProduct(text: string | undefined): boolean {
   if (!text?.trim()) return false;
   if (isUsableContextFragment(text)) return true;
   const parsed = tryParseJsonDoc(text);
-  return looksLikeCreationFlowDoc(parsed) || looksLikeFragmentDoc(parsed);
+  return (
+    looksLikeCreationFlowDoc(parsed) ||
+    looksLikeFragmentDoc(parsed) ||
+    isPresentLikeObject(parsed)
+  );
+}
+
+function usablePlayFallbackText(raw?: string): string {
+  if (!raw?.trim()) return "";
+  if (isQuestionOnlyText(raw)) return "";
+  const parsed = tryParseJsonDoc(raw);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return "";
+  }
+  return raw.trim();
+}
+
+function playVisibleTarget(outputTags: string[]): string | undefined {
+  return productOutputTags(outputTags).find((t) => PLAY_FEED_OUTPUT_TAGS.has(t));
+}
+
+function canonicalizePresentOutput(
+  value: unknown,
+  fallbackShell: PresentShellId,
+): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") {
+    const view = parsePresentPacket(value, fallbackShell);
+    if (!view.packet.blocks.body && view.fallbackPlain && !value.trim()) {
+      return undefined;
+    }
+    return stringifyPresentPacket(view.packet);
+  }
+  if (typeof value === "object") {
+    if (isPresentLikeObject(value)) {
+      const view = parsePresentPacket(JSON.stringify(value), fallbackShell);
+      return stringifyPresentPacket(view.packet);
+    }
+    const view = parsePresentPacket(JSON.stringify(value), fallbackShell);
+    if (!view.fallbackPlain) return stringifyPresentPacket(view.packet);
+  }
+  return undefined;
+}
+
+function fragmentSceneText(doc: unknown): string | undefined {
+  const frag =
+    typeof doc === "string"
+      ? parseContextFragment(doc)
+      : parseContextFragment(JSON.stringify(doc));
+  if (!frag) return undefined;
+  if (typeof frag.正文 === "string" && frag.正文.trim()) return frag.正文.trim();
+  if (typeof frag.brief === "string" && frag.brief.trim()) return frag.brief.trim();
+  return undefined;
 }
 
 function recoverFragmentOutputs(
   obj: Record<string, unknown>,
   outputs: Record<string, string>,
   outputTags: string[],
+  fallbackShell: PresentShellId = "prose",
 ): void {
   const target = productOutputTags(outputTags)[0];
   if (!target) return;
@@ -225,7 +290,8 @@ function recoverFragmentOutputs(
       if (
         isUsableContextFragment(text) ||
         looksLikeFragmentDoc(val) ||
-        looksLikeCreationFlowDoc(val)
+        looksLikeCreationFlowDoc(val) ||
+        isPresentLikeObject(val)
       ) {
         outputs[target] = text;
         return;
@@ -237,6 +303,14 @@ function recoverFragmentOutputs(
   const rest: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (!protocolKeys.has(k)) rest[k] = v;
+  }
+  if (isPresentLikeObject(obj) || isPresentLikeObject(rest)) {
+    const source = isPresentLikeObject(obj) ? obj : rest;
+    const present = canonicalizePresentOutput(source, fallbackShell);
+    if (present) {
+      outputs[target] = present;
+      return;
+    }
   }
   if (looksLikeFragmentDoc(obj) || looksLikeFragmentDoc(rest)) {
     const source = looksLikeFragmentDoc(obj) ? obj : rest;
@@ -267,6 +341,7 @@ function looksLikeStructuredDraft(text: string): boolean {
   if (t.startsWith("{") || t.startsWith("[")) return true;
   if (/```(?:json)?/i.test(t) && t.includes("{")) return true;
   if (/"schema"\s*:/.test(t)) return true;
+  if (/"blocks"\s*:/.test(t) && /"body"\s*:/.test(t)) return true;
   if (/"技能"\s*:/.test(t) || /"正文"\s*:/.test(t)) return true;
   if (/"inserts"\s*:/.test(t) || /"agents"\s*:/.test(t) || /"play_slots"\s*:/.test(t)) {
     return true;
@@ -321,10 +396,26 @@ function lookupOutputValue(
 function parseWorkerResponse(
   raw: string,
   outputTags: string[],
+  opts?: { fallbackShell?: PresentShellId },
 ): WorkerRunResult {
+  const fallbackShell = opts?.fallbackShell ?? "prose";
+  const playTarget = playVisibleTarget(outputTags);
+
   const parsed = tryParseJsonDoc(raw);
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    const target = productOutputTags(outputTags)[0] ?? outputTags[0];
+    const target = playTarget ?? productOutputTags(outputTags)[0] ?? outputTags[0];
+    if (playTarget) {
+      const body =
+        raw.trim() && !isQuestionOnlyText(raw)
+          ? raw
+          : "";
+      return finalizeParsedOutputs(
+        { [playTarget]: presentOutputFromFallback(body, fallbackShell) },
+        { summary: body.slice(0, 80) || "游玩正文" },
+        outputTags,
+        { playVisible: true, fallbackShell },
+      );
+    }
     if (target && looksLikeStructuredDraft(raw)) {
       return finalizeParsedOutputs(
         { [target]: raw },
@@ -357,6 +448,18 @@ function parseWorkerResponse(
 
   const obj = parsed as Record<string, unknown>;
 
+  if (playTarget && isPresentLikeObject(obj)) {
+    const present = canonicalizePresentOutput(obj, fallbackShell);
+    if (present) {
+      return finalizeParsedOutputs(
+        { [playTarget]: present },
+        obj,
+        outputTags,
+        { playVisible: true, fallbackShell },
+      );
+    }
+  }
+
   // 创作流程 DAG：根对象就是产物，不能先收成扁形（brief 会被当成稿、steps 丢掉）
   if (looksLikeCreationFlowDoc(obj)) {
     const target = productOutputTags(outputTags)[0] ?? outputTags[0];
@@ -369,8 +472,21 @@ function parseWorkerResponse(
     }
   }
 
+  // 游玩正文：片段里的场面字收成 present，不要扁形成创作稿
+  if (playTarget && !isPresentLikeObject(obj)) {
+    const scene = fragmentSceneText(obj);
+    if (scene) {
+      return finalizeParsedOutputs(
+        { [playTarget]: presentOutputFromFallback(scene, fallbackShell) },
+        obj,
+        outputTags,
+        { playVisible: true, fallbackShell },
+      );
+    }
+  }
+
   // 扁形产物 → 旧 fragment 外壳。已是 context-fragment 深树则原样收下（保留自评与嵌套正文）。
-  if (!looksLikeFragmentDoc(obj)) {
+  if (!looksLikeFragmentDoc(obj) && !isPresentLikeObject(obj) && !playTarget) {
     const asFlat = coerceToFlatArtifact(obj);
     if (asFlat) {
       const frag = flatArtifactToFragmentDoc(asFlat);
@@ -391,68 +507,115 @@ function parseWorkerResponse(
   if (outputsRaw && typeof outputsRaw === "object" && !Array.isArray(outputsRaw)) {
     const bag = outputsRaw as Record<string, unknown>;
     for (const tag of productOutputTags(outputTags)) {
-      assignOutput(outputs, tag, lookupOutputValue(bag, tag));
+      const val = lookupOutputValue(bag, tag);
+      if (playTarget && tag === playTarget) {
+        const present = canonicalizePresentOutput(val, fallbackShell);
+        if (present) {
+          outputs[tag] = present;
+          continue;
+        }
+        const scene = fragmentSceneText(val);
+        if (scene) {
+          outputs[tag] = presentOutputFromFallback(scene, fallbackShell);
+          continue;
+        }
+      }
+      assignOutput(outputs, tag, val);
     }
   }
-  recoverFragmentOutputs(obj, outputs, outputTags);
+  recoverFragmentOutputs(obj, outputs, outputTags, fallbackShell);
 
-  return finalizeParsedOutputs(outputs, obj, outputTags);
+  if (playTarget && outputs[playTarget]) {
+    const present = canonicalizePresentOutput(outputs[playTarget], fallbackShell);
+    if (present) outputs[playTarget] = present;
+  }
+
+  return finalizeParsedOutputs(outputs, obj, outputTags, {
+    playVisible: Boolean(playTarget),
+    fallbackShell,
+    rawFallback: raw,
+  });
 }
 
 function finalizeParsedOutputs(
   outputs: Record<string, string>,
   obj: Record<string, unknown>,
-  _outputTags: string[],
+  outputTags: string[],
+  opts?: {
+    playVisible?: boolean;
+    fallbackShell?: PresentShellId;
+    rawFallback?: string;
+  },
 ): WorkerRunResult {
   const isMetaAskToken = (s: string) => /^ask[_-]?user$/i.test(s.trim());
+  const playTarget = playVisibleTarget(outputTags);
+  const playVisible = Boolean(opts?.playVisible || playTarget);
+  const fallbackShell = opts?.fallbackShell ?? "prose";
 
   let askUser: QuestionItem[] | undefined;
-  if (Array.isArray(obj.askUser)) {
-    askUser = normalizeQuestions(
-      obj.askUser.filter((q) => {
-        if (typeof q === "string") return q.trim() && !isMetaAskToken(q);
-        return true;
-      }),
-    );
-  } else if (typeof obj.askUser === "string" && obj.askUser.trim()) {
-    const q = obj.askUser.trim();
-    askUser = isMetaAskToken(q) ? undefined : normalizeQuestions([q]);
-  }
-  if ((!askUser || askUser.length === 0) && Object.keys(outputs).length === 0) {
-    const summaryText =
-      typeof obj.summary === "string" ? obj.summary.trim() : "";
-    if (
-      summaryText &&
-      !isMetaAskToken(summaryText) &&
-      summaryText.length > 8 &&
-      /[？?]/.test(summaryText)
-    ) {
-      askUser = normalizeQuestions([summaryText]);
-    } else if (isMetaAskToken(summaryText)) {
-      askUser = normalizeQuestions([
-        "请补充当前步骤所需的信息（情境、参数或你的具体设想）。",
-      ]);
+  if (!playVisible) {
+    if (Array.isArray(obj.askUser)) {
+      askUser = normalizeQuestions(
+        obj.askUser.filter((q) => {
+          if (typeof q === "string") return q.trim() && !isMetaAskToken(q);
+          return true;
+        }),
+      );
+    } else if (typeof obj.askUser === "string" && obj.askUser.trim()) {
+      const q = obj.askUser.trim();
+      askUser = isMetaAskToken(q) ? undefined : normalizeQuestions([q]);
+    }
+    if ((!askUser || askUser.length === 0) && Object.keys(outputs).length === 0) {
+      const summaryText =
+        typeof obj.summary === "string" ? obj.summary.trim() : "";
+      if (
+        summaryText &&
+        !isMetaAskToken(summaryText) &&
+        summaryText.length > 8 &&
+        /[？?]/.test(summaryText)
+      ) {
+        askUser = normalizeQuestions([summaryText]);
+      } else if (isMetaAskToken(summaryText)) {
+        askUser = normalizeQuestions([
+          "请补充当前步骤所需的信息（情境、参数或你的具体设想）。",
+        ]);
+      }
     }
   }
 
   // 先抽追问；半残稿仍留在 outputs，追问挂验收卡（不因缺字段丢掉正文）
   let askAssessment: string | undefined;
   const fragQuestions: QuestionItem[] = [];
-  for (const content of Object.values(outputs)) {
-    const side = extractFragmentAskSidecar(content);
-    if (side.assessment && !askAssessment) askAssessment = side.assessment;
-    for (const q of side.questions) {
-      if (!fragQuestions.some((x) => x.prompt === q.prompt)) {
-        fragQuestions.push(q);
+  if (!playVisible) {
+    for (const content of Object.values(outputs)) {
+      const side = extractFragmentAskSidecar(content);
+      if (side.assessment && !askAssessment) askAssessment = side.assessment;
+      for (const q of side.questions) {
+        if (!fragQuestions.some((x) => x.prompt === q.prompt)) {
+          fragQuestions.push(q);
+        }
       }
     }
-  }
-  if (fragQuestions.length) {
-    askUser = mergeQuestionsPreferFragment(askUser, fragQuestions);
+    if (fragQuestions.length) {
+      askUser = mergeQuestionsPreferFragment(askUser, fragQuestions);
+    }
   }
 
   dropProgressPointerOutputs(outputs);
   canonicalizeKnownOutputs(outputs);
+
+  if (playVisible && playTarget && !outputs[playTarget]?.trim()) {
+    const scene = fragmentSceneText(obj);
+    const summaryText =
+      typeof obj.summary === "string" && !/[？?]/.test(obj.summary)
+        ? obj.summary.trim()
+        : "";
+    const fallback =
+      scene ||
+      summaryText ||
+      usablePlayFallbackText(opts?.rawFallback);
+    outputs[playTarget] = presentOutputFromFallback(fallback, fallbackShell);
+  }
 
   if (Object.keys(outputs).length === 0 && (!askUser || askUser.length === 0)) {
     askUser = normalizeQuestions(INCOMPLETE_FRAGMENT_ASK);
@@ -470,8 +633,8 @@ function finalizeParsedOutputs(
     outputs,
     summary,
     preview,
-    askUser: askUser?.length ? askUser : undefined,
-    askAssessment,
+    askUser: playVisible ? undefined : askUser?.length ? askUser : undefined,
+    askAssessment: playVisible ? undefined : askAssessment,
   });
 }
 
@@ -618,9 +781,20 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       )?.play_slots,
     );
 
+  const playPresent =
+    isPlayLayerActive(params.slots) && isPlayPresentWorker(worker.id);
+  const playShell: PresentShellId | undefined = playPresent
+    ? parseShellAdaptationFromReplyFormat(
+        params.blackboard.getContentByTag("设计.正文组成") ??
+          params.blackboard.getContentByTag("设计.回复格式"),
+      )?.shell_id ?? "prose"
+    : undefined;
+
   const systemContent =
     promptBody +
-    WORKER_OUTPUT_INSTRUCTION +
+    (playPresent && playShell
+      ? playPresentOutputInstruction(playShell)
+      : WORKER_OUTPUT_INSTRUCTION) +
     (useGmHarness ? GM_CHANCE_HARNESS_INSTRUCTION : "");
   const playPreset = isPlayLayerActive(params.slots)
     ? resolveActivePreset(loadAppSettings().activePresetId)
@@ -663,7 +837,9 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       stream: params.stream,
       caller: `worker:${worker.id}`,
     });
-    return parseWorkerResponse(selectJsonPayload(harness.content), worker.outputTags);
+    return parseWorkerResponse(selectJsonPayload(harness.content), worker.outputTags, {
+      fallbackShell: playShell,
+    });
   }
 
   const streamCallbacks: StreamCallbacks | undefined = params.stream
@@ -674,12 +850,12 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     : undefined;
 
   const result = await completeStructured(params.llm, messages, {
-    schema: {
+    schema: playPresent ? PRESENT_JSON_SCHEMA : {
       type: "object",
       additionalProperties: true,
     },
-    name: "submit_worker_result",
-    schemaIsLoose: true,
+    name: playPresent ? "submit_present_packet" : "submit_worker_result",
+    schemaIsLoose: !playPresent,
     capabilities: resolveActiveProfile()?.capabilities,
     caller: `worker:${worker.id}`,
     stream: streamCallbacks,
@@ -692,6 +868,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
   return parseWorkerResponse(
     selectJsonPayload(raw, result.reasoning) || raw,
     worker.outputTags,
+    { fallbackShell: playShell },
   );
 }
 
@@ -699,8 +876,9 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
 export function parseWorkerResponseForTest(
   raw: string,
   outputTags: string[],
+  opts?: { fallbackShell?: PresentShellId },
 ): WorkerRunResult {
-  return parseWorkerResponse(raw, outputTags);
+  return parseWorkerResponse(raw, outputTags, opts);
 }
 
 /** @internal 供单测验证 inputTags → inputs 拼接 */

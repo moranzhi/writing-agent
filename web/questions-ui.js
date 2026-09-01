@@ -81,6 +81,7 @@ function normalizeQuestions(raw) {
 
 /** @returns {{ questions: any[], workerId?: string, pageSize: number, assessment?: string, optional?: boolean, skipLabel?: string } | null} */
 export function getActiveQuestions(view) {
+  if (view?.playLayerActive || view?.lifecycleStage === "play") return null;
   const wr = view?.waitingReason;
   if (!wr) return null;
   // 默认每页 1 题，左右切换；勿一次堆多题

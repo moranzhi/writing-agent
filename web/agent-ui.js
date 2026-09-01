@@ -647,7 +647,19 @@ function formatPlayPresentHtml(body, view) {
   if (presentView) {
     return renderPresentShellHtml(presentView.packet, esc, { tweaks });
   }
-  return renderPresentShellHtml(presentFromPlain(trimmed, fallbackShell), esc, {
+  const scene =
+    parsed && typeof parsed === "object"
+      ? typeof parsed.正文 === "string"
+        ? parsed.正文
+        : typeof parsed.body === "string"
+          ? parsed.body
+          : typeof parsed.brief === "string"
+            ? parsed.brief
+            : ""
+      : "";
+  const plain = (scene || (!parsed ? trimmed : "")).trim();
+  if (!plain) return `<p class="empty-sm">（无正文）</p>`;
+  return renderPresentShellHtml(presentFromPlain(plain, fallbackShell), esc, {
     tweaks,
   });
 }
@@ -702,6 +714,16 @@ function wireCoordRailChrome() {
   }
 }
 
+function isWorkspaceNav() {
+  const level = document.body.dataset.navLevel;
+  return level === "book" || level === "product";
+}
+
+function syncExpandLabel() {
+  const label = document.getElementById("rail-expand-label");
+  if (label) label.textContent = activeRailTab === "log" ? "志" : "书";
+}
+
 export function setRailTab(tab, { expand = false } = {}) {
   activeRailTab = tab === "log" ? "log" : "books";
   if (expand) railUserExpanded = true;
@@ -717,6 +739,7 @@ export function setRailTab(tab, { expand = false } = {}) {
     panel.classList.toggle("active", active);
     panel.toggleAttribute("hidden", !active);
   });
+  syncExpandLabel();
   syncRailCollapse();
 }
 
@@ -728,25 +751,23 @@ function wireRailChrome() {
       const btn = e.target.closest(".rail-tab");
       if (!btn) return;
       const tab = btn.getAttribute("data-rail-tab") ?? "books";
-      const collapsed = document.body.classList.contains("rail-collapsed");
-      setRailTab(tab, { expand: collapsed });
+      setRailTab(tab);
     });
   }
-  const toggle = document.getElementById("btn-rail-toggle");
-  if (toggle && !toggle.dataset.wired) {
-    toggle.dataset.wired = "1";
-    toggle.addEventListener("click", () => {
-      const inBook = document.body.dataset.navLevel === "book";
-      const collapsed = document.body.classList.contains("rail-collapsed");
-      if (inBook && !collapsed) {
-        window.dispatchEvent(new CustomEvent("wa:nav-root"));
-        return;
-      }
-      if (document.body.dataset.railCanCollapse !== "1") {
-        railUserExpanded = true;
-      } else {
-        railUserExpanded = !railUserExpanded;
-      }
+  const expand = document.getElementById("btn-rail-expand");
+  if (expand && !expand.dataset.wired) {
+    expand.dataset.wired = "1";
+    expand.addEventListener("click", () => {
+      railUserExpanded = true;
+      syncRailCollapse();
+    });
+  }
+  const collapse = document.getElementById("btn-rail-collapse");
+  if (collapse && !collapse.dataset.wired) {
+    collapse.dataset.wired = "1";
+    collapse.addEventListener("click", () => {
+      if (document.body.dataset.railCanCollapse !== "1") return;
+      railUserExpanded = false;
       syncRailCollapse();
     });
   }
@@ -762,7 +783,7 @@ function hasStartedCreation(view) {
 }
 
 function syncRailCollapse(view) {
-  const inBook = document.body.dataset.navLevel === "book";
+  const inBook = isWorkspaceNav();
   if (!inBook) {
     document.body.dataset.railCanCollapse = "0";
     railUserExpanded = true;
@@ -772,18 +793,12 @@ function syncRailCollapse(view) {
   const canCollapse = document.body.dataset.railCanCollapse === "1";
   const collapsed = canCollapse && !railUserExpanded;
   document.body.classList.toggle("rail-collapsed", collapsed);
-  const toggle = document.getElementById("btn-rail-toggle");
-  if (toggle) {
-    if (inBook && !collapsed) {
-      toggle.title = "返回作品目录";
-      toggle.setAttribute("aria-label", "返回作品目录");
-      toggle.textContent = "‹";
-    } else {
-      toggle.title = collapsed ? "展开侧栏" : "收起侧栏";
-      toggle.setAttribute("aria-label", collapsed ? "展开侧栏" : "收起侧栏");
-      toggle.textContent = collapsed ? "›" : "‹";
-    }
+  const expand = document.getElementById("btn-rail-expand");
+  if (expand) {
+    expand.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    expand.title = collapsed ? "展开侧栏" : "收起侧栏";
   }
+  syncExpandLabel();
 }
 
 export function resetRailChrome() {
@@ -831,6 +846,7 @@ function shouldShowInFeed(msg, view) {
   if (FEED_HIDDEN_KINDS.has(kind)) return false;
   if (msg.compressed) return false;
   if (isPlayView(view) && isPlayHousekeepingMessage(msg)) return false;
+  if (isPlayView(view) && kind === "worker_questions") return false;
   if (isSkillSelectionMessage(msg)) return false;
   if (isReviewSidecarQuestionStub(msg)) return false;
   if (
@@ -852,7 +868,7 @@ function shouldShowInFeed(msg, view) {
 }
 
 function maybeSyncRail(view) {
-  if (document.body.dataset.navLevel !== "book") {
+  if (!isWorkspaceNav()) {
     railUserExpanded = true;
     document.body.dataset.railCanCollapse = "0";
     syncRailCollapse(view);

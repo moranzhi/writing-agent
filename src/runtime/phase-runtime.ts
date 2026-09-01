@@ -130,7 +130,14 @@ import {
 import {
   readPlayTurnQueue,
   withPlayTurnQueue,
+  isPlayLayerActive,
 } from "../skills/play-turn.js";
+import {
+  PRESENT_TAG,
+  isPlayPresentWorker,
+  parseShellAdaptationFromReplyFormat,
+  presentOutputFromFallback,
+} from "../skills/present-packet.js";
 import { debugLog, labelAction, logStateChange, sessionSnap } from "../log.js";
 import {
   executeChance,
@@ -1001,6 +1008,37 @@ export class PhaseRuntime {
     return true;
   }
 
+  /**
+   * 游玩层不走创作 HITL：转述必须交出用户可见正文，其它执行单元空产物也继续。
+   */
+  private settlePlayWorkerResult(
+    workerId: string,
+    result: import("../worker/executor.js").WorkerRunResult,
+  ): import("../worker/executor.js").WorkerRunResult {
+    if (!isPlayLayerActive(this.session.slots)) return result;
+    const outputs = { ...result.outputs };
+    if (Object.keys(outputs).length === 0 && isPlayPresentWorker(workerId)) {
+      const shell =
+        parseShellAdaptationFromReplyFormat(
+          this.blackboard.getContentByTag("设计.正文组成") ??
+            this.blackboard.getContentByTag("设计.回复格式"),
+        )?.shell_id ?? "prose";
+      const preview = result.preview?.trim() ?? "";
+      const looksAsk =
+        /可验收|追问|请再补|askUser/.test(preview) || /^\s*-\s/.test(preview);
+      outputs[PRESENT_TAG] = presentOutputFromFallback(
+        looksAsk ? "" : preview,
+        shell,
+      );
+    }
+    return {
+      ...result,
+      outputs,
+      askUser: undefined,
+      askAssessment: undefined,
+    };
+  }
+
   /** worker 调用 ask_user 能力时，由外层触发此事件（仅无产物时阻塞） */
   async workerAsk(
     questions: import("../types/questions.js").QuestionItem[] | string[],
@@ -1802,20 +1840,22 @@ export class PhaseRuntime {
         },
       });
 
-    if (result.askUser?.length && Object.keys(result.outputs).length === 0) {
+    const settled = this.settlePlayWorkerResult(workerId, result);
+
+    if (settled.askUser?.length && Object.keys(settled.outputs).length === 0) {
       // 无产物：阻塞追问（信息不足，必须补）
-      if (await this.restoreRevisionTargetForReview(workerId, result.askUser)) {
+      if (await this.restoreRevisionTargetForReview(workerId, settled.askUser)) {
         return;
       }
-      await this.workerAsk(result.askUser);
+      await this.workerAsk(settled.askUser);
       return;
     }
     if (
       workerId === "design-step" &&
-      Object.keys(result.outputs).length === 0
+      Object.keys(settled.outputs).length === 0
     ) {
-      const retryQuestions = result.askUser?.length
-        ? result.askUser
+      const retryQuestions = settled.askUser?.length
+        ? settled.askUser
         : [
             {
               id: "design-step-retry",
@@ -1834,7 +1874,7 @@ export class PhaseRuntime {
 
     slots = { ...this.session.slots };
     const writtenTags: string[] = [];
-    for (const [tag, content] of Object.entries(result.outputs)) {
+    for (const [tag, content] of Object.entries(settled.outputs)) {
       if (isProgressPointerTag(tag)) continue;
       const written = this.writeWorkerTagContent(tag, content, workerId);
       slots[tag] = written;
@@ -1848,16 +1888,16 @@ export class PhaseRuntime {
       outputTags: (writtenTags.length > 0 ? writtenTags : worker.outputTags).filter(
         (t) => !isProgressPointerTag(t),
       ),
-      summary: result.summary,
+      summary: settled.summary,
     });
     this.session = { ...this.session, artifacts: [...this.session.artifacts, artifact] };
 
-    const hasPlayVisible = Object.keys(result.outputs).some(
+    const hasPlayVisible = Object.keys(settled.outputs).some(
       (t) => t === "输出.用户展示" || t === "输出.开场白",
     );
     this.onMessage(
-      `[Worker] ${workerId} 已完成\n\n${result.preview}${
-        !hasPlayVisible && result.preview.length >= 4000 ? "\n\n…" : ""
+      `[Worker] ${workerId} 已完成\n\n${settled.preview}${
+        !hasPlayVisible && settled.preview.length >= 4000 ? "\n\n…" : ""
       }`,
     );
 
@@ -1866,8 +1906,8 @@ export class PhaseRuntime {
       payload: {
         artifactId: artifact.id,
         // 有产物时 askUser 挂到验收态，不阻断 Accept
-        questions: this.freshSidecarQuestions(result.askUser),
-        assessment: result.askAssessment?.trim() || undefined,
+        questions: this.freshSidecarQuestions(settled.askUser),
+        assessment: settled.askAssessment?.trim() || undefined,
       },
     });
     this.maybeCompressAcceptedArtifact(artifact.id);

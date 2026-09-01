@@ -15,36 +15,52 @@
   <body data-lifecycle="design" data-nav-level="root">
     <div class="layout">
       <aside class="panel panel-rail" id="panel-books">
-        <header class="panel-head rail-head">
-          <div class="rail-head-row">
-            <button type="button" class="rail-toggle btn-sm" id="btn-rail-toggle" title="返回作品目录" aria-label="返回作品目录">‹</button>
-            <h1 class="rail-context" id="rail-context">作品</h1>
-            <div class="panel-head-actions rail-head-actions">
-              <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
-              <span class="burst-badge" id="burst-badge" hidden></span>
+        <button
+          type="button"
+          class="rail-expand"
+          id="btn-rail-expand"
+          aria-expanded="true"
+          aria-controls="rail-body"
+          title="展开侧栏"
+        >
+          <span class="rail-expand-label" id="rail-expand-label">书</span>
+        </button>
+        <div class="rail-body" id="rail-body">
+          <header class="panel-head rail-head">
+            <div class="rail-head-row">
+              <nav class="path-bar rail-path" id="book-path-bar" aria-label="位置">
+                <ol class="path-bar-list">
+                  <li class="path-bar-item path-bar-item-current">
+                    <span class="path-seg current" aria-current="page">目录</span>
+                  </li>
+                </ol>
+              </nav>
+              <div class="panel-head-actions rail-head-actions">
+                <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
+                <span class="burst-badge" id="burst-badge" hidden></span>
+                <button type="button" class="btn-sm rail-collapse" id="btn-rail-collapse" title="收起侧栏" aria-label="收起侧栏">‹</button>
+              </div>
             </div>
-          </div>
-          <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="本书侧栏" hidden>
-            <button type="button" class="rail-tab active" data-rail-tab="books" role="tab" aria-selected="true" title="本书">
-              <span class="rail-tab-icon" aria-hidden="true">书</span>
-              <span class="rail-tab-label">本书</span>
-            </button>
-            <button type="button" class="rail-tab" data-rail-tab="log" role="tab" aria-selected="false" title="调度">
-              <span class="rail-tab-icon" aria-hidden="true">志</span>
-              <span class="rail-tab-label">调度</span>
-            </button>
-          </nav>
-        </header>
+            <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="本书侧栏" hidden>
+              <button type="button" class="rail-tab active" data-rail-tab="books" role="tab" aria-selected="true" title="本书">
+                <span class="rail-tab-label">本书</span>
+              </button>
+              <button type="button" class="rail-tab" data-rail-tab="log" role="tab" aria-selected="false" title="调度">
+                <span class="rail-tab-label">调度</span>
+              </button>
+            </nav>
+          </header>
 
-        <div class="rail-panels">
-          <div class="rail-tab-panel active" id="rail-panel-books" role="tabpanel" data-rail-panel="books">
-            <div class="book-list" id="book-list"></div>
-            <div id="book-box-overlay" class="book-box-overlay" hidden aria-hidden="true"></div>
-          </div>
-          <div class="rail-tab-panel" id="rail-panel-log" role="tabpanel" data-rail-panel="log" hidden>
-            <div id="agent-focus" class="agent-focus"></div>
-            <div id="tool-trace" class="tool-trace" hidden></div>
-            <div id="agent-timeline" class="agent-timeline"></div>
+          <div class="rail-panels">
+            <div class="rail-tab-panel active" id="rail-panel-books" role="tabpanel" data-rail-panel="books">
+              <div class="book-list" id="book-list"></div>
+              <div id="book-box-overlay" class="book-box-overlay" hidden aria-hidden="true"></div>
+            </div>
+            <div class="rail-tab-panel" id="rail-panel-log" role="tabpanel" data-rail-panel="log" hidden>
+              <div id="agent-focus" class="agent-focus"></div>
+              <div id="tool-trace" class="tool-trace" hidden></div>
+              <div id="agent-timeline" class="agent-timeline"></div>
+            </div>
           </div>
         </div>
       </aside>

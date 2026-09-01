@@ -2,6 +2,7 @@ import {
   renderWorkspace,
   updateLiveStreamPanel,
   resetRailChrome,
+  setRailTab,
   fillStepArtifactDialog,
   canOfferSaveProduct,
   canOfferEnterPlay,
@@ -32,7 +33,6 @@ let selectedBookIds = new Set();
 let activePlaySaveId = null;
 const playSavesByBook = new Map();
 const playWorkingInstanceByBook = new Map();
-const expandedProductsByBook = new Map();
 const playSavesLoading = new Set();
 let bookMenuBookId = null;
 let livePollTimer = null;
@@ -99,7 +99,7 @@ function resolveUserTask(view, loading) {
   const hasQuestions = Boolean(getActiveQuestions(view)?.questions?.length);
   const moduleOpening = isModuleOpeningWaiting(view);
 
-  if (isPlayView(view) && wr?.kind !== "worker_questions") {
+  if (isPlayView(view)) {
     return {
       id: "speak",
       label: USER_TASK.speak.label,
@@ -1019,20 +1019,6 @@ function runsForProduct(bookId, instanceId, products) {
   );
 }
 
-function isProductExpanded(bookId, instanceId, fallback) {
-  const set = expandedProductsByBook.get(bookId);
-  if (set) return set.has(instanceId);
-  return Boolean(fallback);
-}
-
-function toggleProductExpanded(bookId, instanceId) {
-  const open = isProductExpanded(bookId, instanceId, false);
-  const next = new Set();
-  if (!open) next.add(instanceId);
-  expandedProductsByBook.set(bookId, next);
-  renderBookList();
-}
-
 function bookPlayReady(bookId) {
   if (lastView?.bookId === bookId && Boolean(lastView?.playReady || lastView?.hasProduct)) {
     return true;
@@ -1070,7 +1056,7 @@ async function fetchPlaySavesForBook(bookId, force = false) {
 }
 
 function setBookSelectMode(on, { keepSelection = false } = {}) {
-  if (on && sidebarNav.level === "book") return;
+  if (on && sidebarNav.level !== "root") return;
   bookSelectMode = on;
   if (!on) selectedBookIds = new Set();
   else if (!keepSelection) selectedBookIds = new Set();
@@ -1134,26 +1120,93 @@ function showBookMenu(bookId, x, y) {
 }
 
 function isCatalogNav() {
-  return sidebarNav.level !== "book";
+  return sidebarNav.level === "root";
+}
+
+function isWorkspaceNav() {
+  return sidebarNav.level === "book" || sidebarNav.level === "product";
 }
 
 function getNavBook() {
-  if (sidebarNav.level !== "book") return null;
+  if (!isWorkspaceNav() || !sidebarNav.bookId) return null;
   return books.find((b) => b.id === sidebarNav.bookId) ?? null;
 }
 
-function syncRailContext() {
-  const el = $("rail-context");
-  if (!el) return;
+function getNavProduct() {
+  if (sidebarNav.level !== "product" || !sidebarNav.productId || !sidebarNav.bookId) return null;
+  return productInstancesForBook(sidebarNav.bookId).find((p) => p.id === sidebarNav.productId) ?? null;
+}
+
+function pathSep() {
+  const li = document.createElement("li");
+  li.className = "path-bar-item";
+  li.setAttribute("aria-hidden", "true");
+  const sep = document.createElement("span");
+  sep.className = "path-sep";
+  sep.textContent = "›";
+  li.appendChild(sep);
+  return li;
+}
+
+function pathItem({ label, title, current, onClick }) {
+  const li = document.createElement("li");
+  li.className = current ? "path-bar-item path-bar-item-current" : "path-bar-item";
+  const el = document.createElement(current || !onClick ? "span" : "button");
+  el.className = current ? "path-seg current" : "path-seg";
+  if (el.tagName === "BUTTON") el.type = "button";
+  if (current) el.setAttribute("aria-current", "page");
+  el.textContent = label;
+  if (title) el.title = title;
+  if (!current && onClick) el.addEventListener("click", onClick);
+  li.appendChild(el);
+  return li;
+}
+
+function renderPathBar() {
+  const bar = $("book-path-bar");
+  if (!bar) return;
+  bar.innerHTML = "";
   const book = getNavBook();
-  if (sidebarNav.level === "book" && book) {
-    el.textContent = book.title;
-    el.title = book.title;
-  } else {
-    el.textContent = "作品";
-    el.removeAttribute("title");
+  const product = getNavProduct();
+  const atProduct = sidebarNav.level === "product" && Boolean(book);
+  const inBook = Boolean(book) && (sidebarNav.level === "book" || atProduct);
+
+  $("rail-tabs")?.toggleAttribute("hidden", !isWorkspaceNav());
+
+  const list = document.createElement("ol");
+  list.className = "path-bar-list";
+  list.appendChild(
+    pathItem({
+      label: "目录",
+      title: "作品目录",
+      current: !inBook,
+      onClick: () => showCatalog(),
+    }),
+  );
+  if (inBook) {
+    const bookLabel = book.title?.trim() || "书本";
+    list.appendChild(pathSep());
+    list.appendChild(
+      pathItem({
+        label: bookLabel,
+        title: bookLabel,
+        current: !atProduct,
+        onClick: () => navigateToBook(book.id),
+      }),
+    );
   }
-  $("rail-tabs")?.toggleAttribute("hidden", sidebarNav.level !== "book");
+  if (atProduct) {
+    const productLabel = product?.label?.trim() || "定稿";
+    list.appendChild(pathSep());
+    list.appendChild(
+      pathItem({
+        label: productLabel,
+        title: productLabel,
+        current: true,
+      }),
+    );
+  }
+  bar.appendChild(list);
 }
 
 function navigateToBook(bookId) {
@@ -1162,7 +1215,20 @@ function navigateToBook(bookId) {
   document.body.dataset.navLevel = "book";
   bookSelectMode = false;
   selectedBookIds = new Set();
-  syncRailContext();
+  setRailTab("books", { expand: true });
+  renderPathBar();
+  renderBookList();
+  void fetchPlaySavesForBook(bookId);
+}
+
+function navigateToProduct(bookId, productId) {
+  if (!bookId || !productId) return;
+  sidebarNav = { level: "product", bookId, productId };
+  document.body.dataset.navLevel = "product";
+  bookSelectMode = false;
+  selectedBookIds = new Set();
+  setRailTab("books", { expand: true });
+  renderPathBar();
   renderBookList();
   void fetchPlaySavesForBook(bookId);
 }
@@ -1175,7 +1241,7 @@ function showCatalog() {
   bookSelectMode = false;
   selectedBookIds = new Set();
   closeWorkspace();
-  syncRailContext();
+  renderPathBar();
   renderBookList();
 }
 
@@ -1248,17 +1314,15 @@ function renderExplorerRow({
   return row;
 }
 
-function renderBookBranch(book, list) {
+function playingInstanceIdForBook(book) {
+  const playHere = book.id === activeBookId && isPlayNow();
+  if (playHere && lastView?.playInstanceId) return lastView.playInstanceId;
+  return playWorkingInstanceByBook.get(book.id) ?? null;
+}
+
+function renderProductContents(book, product, list) {
   const loading = playSavesLoading.has(book.id);
   const saves = playSavesByBook.get(book.id);
-  const products = productInstancesForBook(book.id);
-  const playHere = book.id === activeBookId && isPlayNow();
-  const playingInstanceId =
-    playHere && lastView?.playInstanceId
-      ? lastView.playInstanceId
-      : playWorkingInstanceByBook.get(book.id);
-  const latestId = products[0]?.id;
-
   if (loading && saves === undefined) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
@@ -1267,83 +1331,51 @@ function renderBookBranch(book, list) {
     return;
   }
 
-  for (const product of products) {
-    const isLatest = product.id === latestId;
-    const isPlayingHere = playHere && playingInstanceId === product.id;
-    const hasWorking = playingInstanceId === product.id;
-    const expanded = isProductExpanded(book.id, product.id, isPlayingHere);
-    const runs = runsForProduct(book.id, product.id, products);
-    const wrap = document.createElement("div");
-    wrap.className = `explorer-product${expanded ? " is-open" : ""}`;
+  const playHere = book.id === activeBookId && isPlayNow();
+  const playingInstanceId = playingInstanceIdForBook(book);
+  const hasWorking = playingInstanceId === product.id;
+  const runs = runsForProduct(book.id, product.id, productInstancesForBook(book.id));
 
-    const header = renderExplorerRow({
-      name: product.label,
-      meta: isLatest ? "最新" : "",
-      twistie: true,
-      expanded,
-      title: "点开游玩存档，双击改名",
-      onTwistie: () => toggleProductExpanded(book.id, product.id),
-      onClick: () => toggleProductExpanded(book.id, product.id),
-      onRename: () => void renamePlaySave(book.id, product.id, product.label),
-      onDelete: () => void deletePlaySave(book.id, product.id, product.label, "落档"),
-    });
-    header.setAttribute("aria-expanded", expanded ? "true" : "false");
-    wrap.appendChild(header);
-
-    if (expanded) {
-      const drop = document.createElement("div");
-      drop.className = "explorer-drop";
-      drop.setAttribute("role", "group");
-      drop.setAttribute("aria-label", `${product.label} 的游玩存档`);
-
-      if (hasWorking) {
-        drop.appendChild(
-          renderExplorerRow({
-            name: "当前游玩",
-            meta: isPlayingHere && !activePlaySaveId ? "进行中" : "工作副本",
-            active: isPlayingHere && !activePlaySaveId,
-            child: true,
-            onClick: () => void openCurrentPlay(book.id),
-          }),
-        );
-      }
-
-      if (!runs.length && !hasWorking) {
-        const hint = document.createElement("p");
-        hint.className = "explorer-drop-empty";
-        hint.textContent = "还没有游玩存档";
-        drop.appendChild(hint);
-      }
-
-      for (const run of runs) {
-        const runWhen = formatSaveWhen(run.createdAt);
-        drop.appendChild(
-          renderExplorerRow({
-            name: run.label,
-            meta: runWhen || "游玩进度",
-            active: playHere && activePlaySaveId === run.id,
-            child: true,
-            actionClass: "explorer-file",
-            onClick: () => void loadPlaySave(book.id, run.id),
-            onRename: () => void renamePlaySave(book.id, run.id, run.label),
-            onDelete: () => void deletePlaySave(book.id, run.id, run.label, "游玩存档"),
-          }),
-        );
-      }
-
-      drop.appendChild(
-        renderExplorerRow({
-          name: "+ 新开一局",
-          actionClass: "explorer-action",
-          child: true,
-          onClick: () => void startNewPlayForBook(book.id, product.id),
-        }),
-      );
-      wrap.appendChild(drop);
-    }
-
-    list.appendChild(wrap);
+  if (hasWorking) {
+    list.appendChild(
+      renderExplorerRow({
+        name: "当前游玩",
+        meta: playHere && !activePlaySaveId ? "进行中" : "工作副本",
+        active: playHere && !activePlaySaveId,
+        onClick: () => void openCurrentPlay(book.id),
+      }),
+    );
   }
+
+  if (!runs.length && !hasWorking) {
+    const hint = document.createElement("p");
+    hint.className = "explorer-hint";
+    hint.textContent = "还没有游玩存档";
+    list.appendChild(hint);
+  }
+
+  for (const run of runs) {
+    const runWhen = formatSaveWhen(run.createdAt);
+    list.appendChild(
+      renderExplorerRow({
+        name: run.label,
+        meta: runWhen || "游玩进度",
+        active: playHere && activePlaySaveId === run.id,
+        actionClass: "explorer-file",
+        onClick: () => void loadPlaySave(book.id, run.id),
+        onRename: () => void renamePlaySave(book.id, run.id, run.label),
+        onDelete: () => void deletePlaySave(book.id, run.id, run.label, "游玩存档"),
+      }),
+    );
+  }
+
+  list.appendChild(
+    renderExplorerRow({
+      name: "+ 新开一局",
+      actionClass: "explorer-action",
+      onClick: () => void startNewPlayForBook(book.id, product.id),
+    }),
+  );
 }
 
 function renderBookContents(book, list) {
@@ -1356,19 +1388,90 @@ function renderBookContents(book, list) {
       onClick: () => void openBookDesign(book.id),
     }),
   );
-  renderBookBranch(book, list);
+
+  const loading = playSavesLoading.has(book.id);
+  const saves = playSavesByBook.get(book.id);
+  if (loading && saves === undefined) {
+    const hint = document.createElement("p");
+    hint.className = "explorer-hint";
+    hint.textContent = "加载存档…";
+    list.appendChild(hint);
+    return;
+  }
+
+  const products = productInstancesForBook(book.id);
+  if (!products.length) {
+    const hint = document.createElement("p");
+    hint.className = "explorer-hint";
+    hint.textContent = bookPlayReady(book.id)
+      ? "还没有定稿。可在更多菜单里保存定稿。"
+      : "验收后可保存定稿。";
+    list.appendChild(hint);
+    return;
+  }
+
+  const latestId = products[0]?.id;
+  const playingInstanceId = playingInstanceIdForBook(book);
+  const section = document.createElement("p");
+  section.className = "explorer-section-label";
+  section.textContent = "定稿";
+  list.appendChild(section);
+
+  for (const product of products) {
+    const bits = [];
+    if (product.id === latestId) bits.push("最新");
+    if (playingInstanceId === product.id) bits.push("游玩中");
+    list.appendChild(
+      renderExplorerRow({
+        name: product.label,
+        meta: bits.join(" · "),
+        title: "打开定稿，双击改名",
+        onClick: () => navigateToProduct(book.id, product.id),
+        onRename: () => void renamePlaySave(book.id, product.id, product.label),
+        onDelete: () => void deletePlaySave(book.id, product.id, product.label, "定稿"),
+      }),
+    );
+  }
 }
 
 function renderBookList() {
   const list = $("book-list");
   if (!list) return;
-  syncRailContext();
+  renderPathBar();
   if (!books.length) {
     list.innerHTML = `<p class="sidebar-empty">暂无作品<br><button type="button" class="btn-sm" id="btn-new-inline">+ 新建</button></p>`;
     $("btn-new-inline")?.addEventListener("click", openNewBookDialog);
     return;
   }
   list.innerHTML = "";
+
+  if (sidebarNav.level === "product") {
+    const book = getNavBook();
+    if (!book) {
+      sidebarNav = { level: "root" };
+      document.body.dataset.navLevel = "root";
+      renderPathBar();
+    } else {
+      const product = getNavProduct();
+      const loading = playSavesLoading.has(book.id) && !playSavesByBook.has(book.id);
+      if (product) {
+        renderProductContents(book, product, list);
+        return;
+      }
+      if (loading) {
+        const hint = document.createElement("p");
+        hint.className = "explorer-hint";
+        hint.textContent = "加载存档…";
+        list.appendChild(hint);
+        return;
+      }
+      sidebarNav = { level: "book", bookId: book.id };
+      document.body.dataset.navLevel = "book";
+      renderPathBar();
+      renderBookContents(book, list);
+      return;
+    }
+  }
 
   if (sidebarNav.level === "book") {
     const book = getNavBook();
@@ -1378,7 +1481,7 @@ function renderBookList() {
     }
     sidebarNav = { level: "root" };
     document.body.dataset.navLevel = "root";
-    syncRailContext();
+    renderPathBar();
   }
 
   for (const book of books) {
@@ -1396,7 +1499,7 @@ function renderBookList() {
             toggleBookSelection(book.id);
             return;
           }
-          void openBook(book.id);
+          navigateToBook(book.id);
         },
       }),
     );
@@ -1561,7 +1664,11 @@ function setupBookBoxSelect() {
 
 async function loadPlaySave(bookId, saveId) {
   try {
-    navigateToBook(bookId);
+    const products = productInstancesForBook(bookId);
+    const run = playRunsForBook(bookId).find((r) => r.id === saveId);
+    const instanceId = run ? resolveRunInstanceId(run, products) : sidebarNav.productId;
+    if (instanceId) navigateToProduct(bookId, instanceId);
+    else navigateToBook(bookId);
     if (lastView?.bookId === bookId) renderSession(lastView, true);
     const data = await api(
       `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}/load`,
@@ -1600,6 +1707,10 @@ async function deletePlaySave(bookId, saveId, label, kindLabel = "游玩存档")
       { method: "DELETE" },
     );
     if (activePlaySaveId === saveId) activePlaySaveId = null;
+    if (sidebarNav.level === "product" && sidebarNav.productId === saveId) {
+      sidebarNav = { level: "book", bookId };
+      document.body.dataset.navLevel = "book";
+    }
     await fetchPlaySavesForBook(bookId, true);
   } catch (err) {
     alert(err.message);
@@ -1613,16 +1724,14 @@ async function startNewPlayForBook(bookId, instanceId) {
     return;
   }
   try {
-    navigateToBook(bookId);
+    if (instanceId) navigateToProduct(bookId, instanceId);
+    else navigateToBook(bookId);
     if (lastView?.bookId === bookId) renderSession(lastView, true);
     const data = await api(`/api/books/${encodeURIComponent(bookId)}/play/new`, {
       method: "POST",
       body: JSON.stringify(instanceId ? { instanceId } : {}),
     });
     activePlaySaveId = null;
-    if (instanceId) {
-      expandedProductsByBook.set(bookId, new Set([instanceId]));
-    }
     renderSession(data.session, false);
     void fetchPlaySavesForBook(bookId, true);
   } catch (err) {
@@ -1645,7 +1754,9 @@ async function openBookDesign(bookId) {
 }
 
 async function openCurrentPlay(bookId) {
-  navigateToBook(bookId);
+  const instanceId = playingInstanceIdForBook({ id: bookId });
+  if (instanceId) navigateToProduct(bookId, instanceId);
+  else navigateToBook(bookId);
   const alreadyHere =
     activeBookId === bookId &&
     isPlayNow() &&
@@ -2307,10 +2418,7 @@ async function saveCurrentInstance() {
     }
     await fetchPlaySavesForBook(activeBookId, true);
     const newest = productInstancesForBook(activeBookId)[0];
-    if (newest) {
-      expandedProductsByBook.set(activeBookId, new Set([newest.id]));
-      renderBookList();
-    }
+    if (newest) navigateToProduct(activeBookId, newest.id);
   } catch (err) {
     alert(err.message);
   }

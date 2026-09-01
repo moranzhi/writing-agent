@@ -9,6 +9,7 @@ import {
   parseWorkerResponseForTest,
   sanitizeWorkerSetOutputs,
 } from "../src/worker/executor.js";
+import { parsePresentPacket } from "../src/skills/present-packet.js";
 import { selectJsonPayload } from "../src/parse/json-doc.js";
 import { parseCreationFlow } from "../src/skills/creation-flow.js";
 
@@ -395,5 +396,53 @@ describe("sanitizeWorkerSetOutputs", () => {
     expect(result.preview).toBe(body);
     expect(result.preview).not.toContain("### ");
     expect(result.preview.length).toBeGreaterThan(4000);
+  });
+
+  it("play narrator: present root without askUser", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        schema: "present.v1",
+        shell: "prose",
+        blocks: { body: "她端起碗，热气模糊了视线。" },
+        meta: { suggested_actions: [] },
+      }),
+      ["输出.用户展示"],
+      { fallbackShell: "prose" },
+    );
+    expect(result.askUser).toBeUndefined();
+    expect(result.outputs["输出.用户展示"]).toContain("她端起碗");
+    const view = parsePresentPacket(result.outputs["输出.用户展示"], "prose");
+    expect(view.packet.blocks.body).toContain("她端起碗");
+  });
+
+  it("play narrator: fragment with 追问 does not surface askUser", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({
+        schema: "context-fragment.v1",
+        技能: "叙事转述",
+        brief: "吃饭场面",
+        正文: "他决定先吃饭。",
+        追问: {
+          导语: "还差体验",
+          题目: [{ 问: "你要什么节奏？", 建议选项: ["慢", "快"] }],
+        },
+      }),
+      ["输出.用户展示"],
+      { fallbackShell: "prose" },
+    );
+    expect(result.askUser).toBeUndefined();
+    expect(result.outputs["输出.用户展示"]).toContain("他决定先吃饭");
+  });
+
+  it("play narrator: empty output falls back to present body", () => {
+    const result = parseWorkerResponseForTest(
+      JSON.stringify({ askUser: ["这一步还没写出可验收的产物"] }),
+      ["输出.用户展示"],
+      { fallbackShell: "turn_panel" },
+    );
+    expect(result.askUser).toBeUndefined();
+    expect(result.outputs["输出.用户展示"]).toBeTruthy();
+    const view = parsePresentPacket(result.outputs["输出.用户展示"], "prose");
+    expect(view.packet.shell).toBe("turn_panel");
   });
 });

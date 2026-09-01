@@ -12,7 +12,7 @@
   --warn: #ca8a04;
   --danger: #dc2626;
   --books-w: 216px;
-  --books-w-collapsed: 52px;
+  --books-w-collapsed: 40px;
   --coord-w: clamp(280px, 24vw, 340px);
   --coord-w-collapsed: 40px;
   --workspace-pad-x: clamp(24px, 4.5vw, 72px);
@@ -82,46 +82,86 @@ a.link:hover { text-decoration: underline; }
   gap: 2px;
   min-width: 0;
   min-height: 40px;
-  padding: 6px 8px 6px 6px;
+  padding: 6px 8px 6px 10px;
 }
-body[data-nav-level="root"] .rail-head-row {
-  padding-left: 10px;
-}
-.rail-context {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rail-toggle {
+.rail-collapse {
+  display: none;
   flex-shrink: 0;
   width: 28px;
   height: 28px;
   padding: 0;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 16px;
   line-height: 1;
 }
-body.rail-collapsed .rail-toggle { transform: rotate(180deg); }
-body[data-nav-level="root"] .rail-toggle { display: none; }
-body[data-nav-level="book"] .rail-head-actions #btn-new-book,
-body[data-nav-level="root"] .burst-badge { display: none; }
+body[data-rail-can-collapse="1"]:not(.rail-collapsed) .rail-collapse {
+  display: inline-flex;
+}
+.rail-expand {
+  display: none;
+  flex: 1 1 auto;
+  width: 100%;
+  border: none;
+  border-right: 1px solid transparent;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 12px 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.rail-expand:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.rail-expand:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -2px;
+}
+.rail-expand-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.12em;
+  user-select: none;
+}
+.rail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+body.rail-collapsed .rail-expand { display: flex; }
+body.rail-collapsed .rail-body { display: none; }
+.rail-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0 4px 0 0;
+  background: transparent;
+  border-radius: 0;
+  overflow: hidden;
+}
+.rail-path .path-bar-list {
+  width: 100%;
+}
 .rail-tabs {
   display: none;
   gap: 0;
   min-width: 0;
   padding: 0 8px;
 }
-body[data-nav-level="book"] .rail-tabs {
+body:not([data-nav-level="root"]) .rail-tabs {
   display: flex;
 }
+body:not([data-nav-level="root"]) .rail-head-actions #btn-new-book,
+body[data-nav-level="root"] .burst-badge { display: none; }
 .rail-tabs[hidden] { display: none !important; }
 .rail-tab {
   flex: 1 1 0;
@@ -213,40 +253,6 @@ body[data-nav-level="book"] .rail-tabs {
 }
 .rail-tab-panel[hidden] { display: none !important; }
 
-body.rail-collapsed .rail-tab-label,
-body.rail-collapsed .rail-context,
-body.rail-collapsed .rail-head-actions,
-body.rail-collapsed .burst-badge { display: none !important; }
-body.rail-collapsed .rail-tab-icon { display: block; }
-body.rail-collapsed .rail-head {
-  flex-direction: column;
-  align-items: stretch;
-  padding: 6px 4px;
-  gap: 4px;
-}
-body.rail-collapsed .rail-head-row {
-  justify-content: center;
-  padding: 0;
-  min-height: 0;
-}
-body.rail-collapsed[data-nav-level="book"] .rail-tabs:not([hidden]) {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-}
-body.rail-collapsed .rail-tab {
-  flex: 0 0 auto;
-  width: 100%;
-  height: 32px;
-  padding: 0;
-  border-bottom: none;
-  border-radius: 6px;
-}
-body.rail-collapsed .rail-tab.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-body.rail-collapsed .rail-panels { display: none; }
 body.rail-collapsed .panel-rail { align-items: stretch; }
 /* composer æåå®¹èªéåºï¼ä¸­é´åºåæå©ä½é«åº¦ï¼æ´é¡µéå¨è§å£å */
 .panel-main {
@@ -1520,24 +1526,18 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
 .panel-head-actions { display: flex; gap: 4px; align-items: center; }
 .btn-sm.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
-/* Books — pill breadcrumb + list */
+/* Books — breadcrumb + list */
 .path-bar {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
   gap: 0;
-  margin: 8px 8px 0;
-  padding: 7px 10px;
-  border: none;
-  background: var(--bg);
-  border-radius: 10px;
   overflow-x: auto;
   font-size: 12px;
   line-height: 1.35;
   flex-shrink: 0;
   min-width: 0;
 }
-.path-bar[hidden] { display: none; }
 .path-bar-list {
   display: flex;
   align-items: center;
@@ -1578,6 +1578,9 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.rail-path .path-seg.current {
+  font-size: 13px;
 }
 .path-seg:hover { color: var(--accent); }
 .path-seg:focus-visible {
@@ -1737,7 +1740,7 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
   color: var(--muted); letter-spacing: 0.04em;
 }
 .explorer-hint {
-  margin: 4px 8px 4px 28px; font-size: 11px; color: var(--muted); line-height: 1.4;
+  margin: 4px 8px; font-size: 11px; color: var(--muted); line-height: 1.4;
 }
 .explorer-product {
   margin: 2px 0 6px;
@@ -4749,14 +4752,6 @@ body.design-workspace .af-mosaic {
 .field input { padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .dialog-head-row { display: flex; justify-content: space-between; align-items: center; }
-
-@media (max-width: 720px) {
-  .layout { grid-template-columns: var(--books-w-collapsed) 1fr; }
-  body:not(.rail-collapsed) { --books-w: var(--books-w-collapsed); }
-  body:not(.rail-collapsed) .rail-tab-label,
-  body:not(.rail-collapsed) .rail-context { display: none !important; }
-  body:not(.rail-collapsed) .rail-panels { display: none; }
-}
 
 /* —— 游玩呈现壳 present.v1 ——
  * 主工作面 = body（随 500～2000 字撑高）。
