@@ -267,10 +267,20 @@ export function renderPresentShellHtml(packet, esc, opts = {}) {
     typeof tweaks.show_suggested_actions === "boolean"
       ? tweaks.show_suggested_actions
       : ACTIONS_DEFAULT_ON.has(shell);
-  const tone =
+  let tone =
     typeof tweaks.tone_chrome === "string" && tweaks.tone_chrome.trim()
       ? tweaks.tone_chrome.trim()
       : "default";
+  if (opts.applyUserChrome !== false) {
+    try {
+      const pref = document.documentElement.getAttribute("data-present-chrome");
+      if (pref === "messenger" || pref === "book" || pref === "terminal") {
+        tone = pref;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   const blocks = packet.blocks ?? {};
   const regions = shellDefaultRegions(shell);

@@ -4,109 +4,80 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Token 统计 · Writing Agent</title>
-    <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/settings.css" />
-    <style>
-      .stats-page {
-        max-width: 920px;
-        margin: 0 auto;
-        padding: 1.5rem 1.25rem 3rem;
-      }
-      .stats-filters {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem 1rem;
-        align-items: end;
-        margin: 1rem 0 1.25rem;
-      }
-      .stats-filters label {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-        font-size: 0.85rem;
-      }
-      .stats-filters input {
-        min-width: 11rem;
-        padding: 0.35rem 0.5rem;
-      }
-      .stats-summary {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
-        gap: 0.75rem;
-        margin-bottom: 1.25rem;
-      }
-      .stats-metric {
-        border: 1px solid var(--border, #ddd);
-        padding: 0.75rem;
-      }
-      .stats-metric strong {
-        display: block;
-        font-size: 1.25rem;
-      }
-      .stats-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.85rem;
-      }
-      .stats-table th,
-      .stats-table td {
-        border-bottom: 1px solid var(--border, #ddd);
-        padding: 0.4rem 0.5rem;
-        text-align: left;
-        vertical-align: top;
-      }
-      .stats-table th {
-        font-weight: 600;
-      }
-      .stats-muted {
-        color: var(--muted, #666);
-        font-size: 0.85rem;
-      }
-    </style>
+    <link rel="stylesheet" href="/stats.css" />
   </head>
-  <body>
-    <div class="stats-page">
-      <header>
-        <p><a href="/">← 对话</a> · <a href="/modules.html">技能</a> · <a href="/shells.html">呈现壳</a> · <a href="/settings.html">设置</a></p>
-        <h1>Token 统计</h1>
-        <p class="stats-muted">按时间戳筛选调用记录（存于本地 stats/*.jsonl）</p>
-      </header>
+  <body class="settings-page stats-page">
+    <header class="st-top">
+      <a class="st-brand" href="/">Writing Agent</a>
+      <nav class="st-nav" aria-label="主导航">
+        <a href="/">对话</a>
+        <a href="/modules.html">技能</a>
+        <a href="/shells.html">呈现壳</a>
+        <a href="/stats.html" aria-current="page">Token</a>
+        <a href="/settings.html">设置</a>
+      </nav>
+    </header>
 
-      <div class="stats-filters">
-        <label>
-          从
-          <input type="datetime-local" id="from" />
-        </label>
-        <label>
-          到
-          <input type="datetime-local" id="to" />
-        </label>
-        <label>
-          上限条数
-          <input type="number" id="limit" value="200" min="10" max="5000" step="10" />
-        </label>
-        <button type="button" class="btn-sm" id="btn-load">查询</button>
-        <button type="button" class="btn-sm" id="btn-today">今天</button>
-        <button type="button" class="btn-sm" id="btn-7d">近 7 天</button>
-      </div>
+    <div class="st-shell stats-shell">
+      <main class="st-main stats-main">
+        <header class="st-main-head">
+          <div>
+            <h1>Token 统计</h1>
+            <p class="st-sub">按时间筛选本机调用记录（<code>stats/*.jsonl</code>）</p>
+          </div>
+        </header>
 
-      <div class="stats-summary" id="summary"></div>
-      <p class="stats-muted" id="status"></p>
-      <table class="stats-table">
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>caller</th>
-            <th>model</th>
-            <th>prompt</th>
-            <th>completion</th>
-            <th>total</th>
-            <th>cached</th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
+        <div class="stats-toolbar" role="search" aria-label="筛选条件">
+          <div class="stats-toolbar-fields">
+            <label class="stats-field">
+              从
+              <input type="datetime-local" id="from" />
+            </label>
+            <label class="stats-field">
+              到
+              <input type="datetime-local" id="to" />
+            </label>
+            <label class="stats-field">
+              上限条数
+              <input type="number" id="limit" value="200" min="10" max="5000" step="10" />
+            </label>
+          </div>
+          <div class="stats-toolbar-actions">
+            <div class="stats-range" role="group" aria-label="快捷区间">
+              <button type="button" class="btn-secondary" id="btn-today">今天</button>
+              <button type="button" class="btn-secondary" id="btn-7d">近 7 天</button>
+            </div>
+            <button type="button" class="btn-primary" id="btn-load">查询</button>
+          </div>
+        </div>
+
+        <div class="stats-summary" id="summary" aria-live="polite"></div>
+        <p class="stats-status" id="status" data-state="idle" aria-live="polite"></p>
+
+        <div class="stats-table-wrap">
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th scope="col">时间</th>
+                <th scope="col">caller</th>
+                <th scope="col">model</th>
+                <th scope="col" class="num">prompt</th>
+                <th scope="col" class="num">completion</th>
+                <th scope="col" class="num">total</th>
+                <th scope="col" class="num">cached</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div class="stats-empty" id="empty" hidden>
+            <strong>这段时间没有调用记录</strong>
+            换个区间，或先在对话里跑一轮再回来。
+          </div>
+        </div>
+      </main>
     </div>
+
     <script type="module" src="/stats.js"></script>
   </body>
 </html>

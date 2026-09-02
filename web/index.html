@@ -11,6 +11,19 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("wa-color-theme") || "modern";
+          if (!/^(paper|modern|dark|green)$/.test(t)) t = "modern";
+          document.documentElement.setAttribute("data-color-theme", t);
+          document.documentElement.setAttribute("data-theme", t);
+          var c = localStorage.getItem("wa-present-chrome") || "default";
+          if (!/^(default|messenger|book|terminal)$/.test(c)) c = "default";
+          document.documentElement.setAttribute("data-present-chrome", c);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body data-lifecycle="design" data-nav-level="root">
     <div class="layout">
@@ -66,54 +79,100 @@
       </aside>
 
       <main class="panel panel-main">
-        <div class="main-body">
-          <section class="panel-feed" id="panel-feed">
-            <div id="skill-picker" class="skill-picker" hidden></div>
-            <div id="message-feed" class="message-feed"></div>
-            <div id="workspace-stage" class="workspace-stage" hidden aria-label="验收工作面"></div>
-            <div id="questions-card-host" class="questions-card-host" hidden></div>
-          </section>
-          <aside id="coord-rail" class="coord-rail" hidden aria-label="此前对话">
-            <button
-              type="button"
-              class="coord-rail-toggle"
-              id="btn-coord-toggle"
-              aria-expanded="false"
-              title="展开 / 收起此前对话"
-            >
-              <span class="coord-rail-toggle-label">对话</span>
-              <span id="coord-drawer-count" class="coord-drawer-count"></span>
-            </button>
-            <div class="coord-rail-panel">
-              <header class="coord-rail-head">
-                <span class="coord-rail-title">此前对话</span>
-                <button type="button" class="btn-sm coord-rail-collapse" id="btn-coord-collapse" title="收起" aria-label="收起此前对话">›</button>
-              </header>
-              <div id="coord-drawer-body" class="coord-drawer-body"></div>
+        <div class="main-chrome" id="main-chrome">
+          <header class="main-head" id="main-head">
+            <div class="main-head-left" aria-hidden="true"></div>
+            <nav class="main-app-nav" aria-label="应用">
+              <a href="/modules.html">技能</a>
+              <a href="/shells.html">呈现壳</a>
+              <a href="/stats.html">Token</a>
+              <a href="/settings.html">设置</a>
+            </nav>
+            <div class="main-head-right">
+              <button type="button" class="btn-sm main-head-action" id="btn-save-instance" hidden>
+                保存定稿
+              </button>
+              <button type="button" class="btn-sm main-head-action" id="btn-save-play" hidden>
+                保存游玩
+              </button>
+              <button type="button" class="btn-sm main-head-action" id="btn-export" disabled>
+                导出
+              </button>
+              <details class="more-menu theme-menu" id="theme-menu">
+                <summary class="btn-sm more-menu-sum" id="theme-menu-sum" title="主题">
+                  <span class="hamburger-icon" aria-hidden="true"></span>
+                </summary>
+                <div class="more-menu-panel" role="menu">
+                  <div class="more-menu-label">主题</div>
+                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="paper" role="menuitem">
+                    <span class="more-theme-icon" aria-hidden="true">📖</span>
+                    <span class="more-theme-copy"><span class="more-theme-name">仿纸暖黄</span><span class="more-theme-desc">经典护眼</span></span>
+                  </button>
+                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="modern" role="menuitem">
+                    <span class="more-theme-icon" aria-hidden="true">✨</span>
+                    <span class="more-theme-copy"><span class="more-theme-name">现代清爽</span><span class="more-theme-desc">干净明快</span></span>
+                  </button>
+                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="dark" role="menuitem">
+                    <span class="more-theme-icon" aria-hidden="true">🌙</span>
+                    <span class="more-theme-copy"><span class="more-theme-name">夜间暗色</span><span class="more-theme-desc">黑底灰字</span></span>
+                  </button>
+                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="green" role="menuitem">
+                    <span class="more-theme-icon" aria-hidden="true">🍃</span>
+                    <span class="more-theme-copy"><span class="more-theme-name">豆沙绿</span><span class="more-theme-desc">自然疗愈</span></span>
+                  </button>
+                  <div class="more-menu-sep" role="separator"></div>
+                  <div class="more-menu-label">选壳</div>
+                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="default" role="menuitem">
+                    <span class="more-theme-copy"><span class="more-theme-name">默认</span><span class="more-theme-desc">跟随壳本身</span></span>
+                  </button>
+                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="messenger" role="menuitem">
+                    <span class="more-theme-copy"><span class="more-theme-name">讯息</span><span class="more-theme-desc">气泡对话感</span></span>
+                  </button>
+                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="book" role="menuitem">
+                    <span class="more-theme-copy"><span class="more-theme-name">书页</span><span class="more-theme-desc">阅读排版感</span></span>
+                  </button>
+                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="terminal" role="menuitem">
+                    <span class="more-theme-copy"><span class="more-theme-name">终端</span><span class="more-theme-desc">等宽终端感</span></span>
+                  </button>
+                </div>
+              </details>
             </div>
-          </aside>
+          </header>
         </div>
-
-        <footer class="composer" id="composer">
-          <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
-          <div class="lifecycle-toggle" id="lifecycle-toggle" hidden role="group" aria-label="创作与游玩">
-            <button type="button" class="lifecycle-btn" data-stage="design">创作</button>
-            <button type="button" class="lifecycle-btn" data-stage="play">游玩</button>
+        <div class="main-stack">
+          <div class="main-body">
+            <section class="panel-feed" id="panel-feed">
+              <div id="skill-picker" class="skill-picker" hidden></div>
+              <div id="message-feed" class="message-feed"></div>
+              <div id="workspace-stage" class="workspace-stage" hidden aria-label="验收工作面"></div>
+              <div id="questions-card-host" class="questions-card-host" hidden></div>
+            </section>
+            <aside id="coord-rail" class="coord-rail" hidden aria-label="此前对话">
+              <button
+                type="button"
+                class="coord-rail-toggle"
+                id="btn-coord-toggle"
+                aria-expanded="false"
+                title="展开 / 收起此前对话"
+              >
+                <span class="coord-rail-toggle-label">对话</span>
+                <span id="coord-drawer-count" class="coord-drawer-count"></span>
+              </button>
+              <div class="coord-rail-panel">
+                <header class="coord-rail-head">
+                  <span class="coord-rail-title">此前对话</span>
+                  <button type="button" class="btn-sm coord-rail-collapse" id="btn-coord-collapse" title="收起" aria-label="收起此前对话">›</button>
+                </header>
+                <div id="coord-drawer-body" class="coord-drawer-body"></div>
+              </div>
+            </aside>
           </div>
-          <div id="composer-main"></div>
-          <details class="more-menu">
-            <summary class="btn-sm more-menu-sum" title="更多">更多</summary>
-            <div class="more-menu-panel" role="menu">
-              <button type="button" class="more-menu-item" id="btn-save-instance" hidden role="menuitem">保存定稿</button>
-              <button type="button" class="more-menu-item" id="btn-save-play" hidden role="menuitem">保存游玩</button>
-              <button type="button" class="more-menu-item" id="btn-export" disabled role="menuitem">导出</button>
-              <a class="more-menu-item" href="/modules.html" role="menuitem">技能</a>
-              <a class="more-menu-item" href="/shells.html" role="menuitem">呈现壳</a>
-              <a class="more-menu-item" href="/stats.html" role="menuitem">Token</a>
-              <a class="more-menu-item" href="/settings.html" role="menuitem">设置</a>
-            </div>
-          </details>
-        </footer>
+
+          <footer class="composer" id="composer">
+            <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
+            <div id="composer-main"></div>
+          </footer>
+        </div>
       </main>
     </div>
 

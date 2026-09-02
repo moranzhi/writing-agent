@@ -890,23 +890,6 @@ function maybeSyncRail(view) {
 export function renderLifecycle(view) {
   const stage = view.lifecycleStage ?? "design";
   document.body.dataset.lifecycle = stage;
-  const toggle = document.getElementById("lifecycle-toggle");
-  if (!toggle) return;
-  const ready = Boolean(view?.playReady || view?.hasProduct);
-  toggle.hidden = !ready;
-  toggle.querySelectorAll("[data-stage]").forEach((btn) => {
-    const s = btn.getAttribute("data-stage");
-    btn.classList.toggle("active", s === stage);
-    if (s === "play") {
-      btn.disabled = !ready;
-      btn.title = ready
-        ? "用已保存的产物开玩"
-        : "请先保存产物后再开玩";
-    } else {
-      btn.disabled = false;
-      btn.title = "回到创作";
-    }
-  });
 }
 
 /** @deprecated 设计 Tab 已移除；保留空函数以免外部误调用 */

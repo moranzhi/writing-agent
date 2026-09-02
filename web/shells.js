@@ -256,6 +256,7 @@ function render() {
   preview.dataset.shell = state.shell;
   preview.innerHTML = renderPresentShellHtml(packet, esc, {
     tweaks: buildTweaks(),
+    applyUserChrome: false,
   });
 
   document.querySelectorAll("[data-shell]").forEach((btn) => {
