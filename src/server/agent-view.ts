@@ -440,7 +440,7 @@ export function buildFocus(
       actorType: "user",
       actorLabel: "你",
       action: "点选要做的节点",
-      detail: "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发",
+      detail: "点图上可进入的节点即开始；要看技能池点上方「技能」。虚线原型点一下增殖。要改排在底栏写意见再发",
     };
   }
 
@@ -485,7 +485,7 @@ export function buildFocus(
         actorType: "user",
         actorLabel: "你",
         action: "点选要做的节点",
-        detail: "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发",
+        detail: "点图上可进入的节点即开始；要看技能池点上方「技能」。虚线原型点一下增殖。要改排在底栏写意见再发",
       };
     }
     const copy = reviewComposerCopy(art?.workerId, {

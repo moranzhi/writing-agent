@@ -8,6 +8,7 @@
 > **游玩呈现壳**：**`docs/play-presentation-shells.md`**（预览页 `/shells.html`）。  
 > **主世界层↔旁观怎么配合**：**`docs/play-dm-auditor.md`**。  
 > **提示词待改清单**：**`docs/briefs/prompt-revision-inventory.md`**。  
+> **design-flow 提示词人工审查**：**`docs/briefs/design-flow-prompt-review.md`**。  
 > **给外部 AI 的完整泛用规范**：**`docs/briefs/capability-authoring-brief.md`**（含 `context-fragment.v1`）。
 
 ## 两层
@@ -44,7 +45,10 @@
 name: …
 id: …
 artifact: 设计.…
-declaration: …
+declaration: …   # 规划第一眼：解决什么缺口
+when: …          # 对照现场能判定才排
+when_not: …      # 每条指向另一技能或「不排」
+boundary: …
 ```
 
 ## opening
@@ -93,7 +97,18 @@ declaration: …
 | `params` | 可选；普通节点=编排期 `steps[].params` 声明（必填项须在进执行前钉齐）。〔先验产物〕=规划产物字段（可提前填，空则步内钉） |
 | `opening` | 可选覆盖；一般只写在 prompt 的 `opening` 块 |
 
-编排器注入【能力 · 可选工序】时，会读取各能力 `prompt.md` 的 `meta`（`declaration` / `when` / `when_not` / `boundary`），**不是**只看 catalog 短声明。执行全文仍只在 design-step 注入。
+编排器注入【能力 · 可选工序】时，会读取各能力 `prompt.md` 的 `meta`（`declaration` / `when` / `when_not` / `boundary`），**不是**只看 catalog 短声明。执行全文（`task` / `opening` / `output` 等）仍只在 design-step 注入。
+
+**写给规划，不是写给执行：**
+
+| 字段 | 规划用来做什么 | 怎么写 |
+|------|----------------|--------|
+| `declaration` | 扫描池时的第一眼 | 解决什么缺口；不要写产物 JSON 长什么样 |
+| `when` | **现在**要不要进近期 DAG | 对照用户话、已验收步骤、已有产物就能判定的信号（还不能回答哪句 / 已有哪份产物） |
+| `when_not` | 缺口其实该交给谁，或明确跳过 | 每条指向另一个技能或「不排」；不要只写禁止 |
+| `boundary` | 别和邻居排重 | 本步定什么 / 不定什么 / 交给谁 |
+
+`when` 里不要搬 `task` 的执行细则。配方 `process` 只写方法顺序（如收成链、默认槽），**不要再抄各技能调用条件**。
 
 ### 配方 `recipe.yaml`
 
@@ -161,9 +176,10 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
 | 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；**〔先验产物〕**；规划字段 `rule_id` |
 | 叙事指南与故事推进 | `narrative` | **已写**：一份全文双挂；**不**为省 token 拆投影；结构化卡 |
-| 拓扑图谱 | `topology` | 骨架，待细写（拟改为选项小循环或降级） |
-| 设计监控栏 | `status-bar` | **已写**：只盯会变信息；通用 fragment 卡 |
-| 正文组成 | `reply-format` | **已写**：壳适配 + 正文.`示例`（present.v1 预览，看美化）；P2 present 渲染已接 |
+| 拓扑图谱 | `topology` | 必须生成且不适合走生成规则→实例时，用拓扑结构写出（升级路径、地图、人物关系等） |
+| 回复呈现 | `status-bar` | **已写**：每轮终稿看什么（正文/字数/日期/变量）；旧称设计监控栏 |
+| 随机范围整理 | `random-range` | **已写**：汇总检定/对抗等随机项与范围；正文组成之前；替代机遇裁定槽 |
+| 正文组成 | `reply-format` | **已写**：把回复呈现清单展示出来；选壳+美化，可写 CSS/HTML/JS；可接隐藏备用随机区 |
 | 变量设计与更新规则 | `variable-design` | **已写**；专用/结构化卡 |
 | 变量控制上下文 | `variable-context` | **已写**：旁观汇总；mount 含 auditor；通用 fragment 卡 |
 | 开场白与开场变量 | `opening-setup` | **已写**：开场守版式+同真相初值；**〔收口〕**选定后落库并保存定稿 |
@@ -172,13 +188,13 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 
 | 能力 | id | 状态 |
 |------|-----|------|
-| 游玩拓扑 | `worker-spec` | **已写**：勾选固定槽（含旁观维护 auditor）；禁自由发明 worker |
+| 游玩拓扑 | `worker-spec` | **已写**：不能吃默认槽才勾选；主世界必要；有变量开旁观；禁机遇槽与自由发明 worker |
 | 上下文投影排序 | `context-order` | **已写**：扁平投影序（含对话.历史；旁观维护默认无历史）；收成进 `context_order`；Runtime 已拼装 |
 | 细化终稿 | `refine` | **已写**：按 `play_slots`（及排序表）收成 `设计.worker集` |
 
 | 编排器 | 状态 |
 |------|------|
-| 世界模拟器 | 创作链路已写；**play**：`gm → perspective? → narrator → auditor`；gm harness 批量 chance；settlement/maintain 合并变量已接 |
+| 世界模拟器 | 创作链路已写；**play**：`gm → perspective? → narrator → auditor`；真随机改走随机范围表+程序插数（机遇槽弃用）；settlement/maintain 合并变量已接 |
 | 扩写助手 | 方法论已写；起点：美学纲领与交互范式；勿默认套世界模拟全套 |
 
 ---

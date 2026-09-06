@@ -694,9 +694,19 @@ function syncCoordRailChrome() {
   }
 }
 
+function scrollCoordDrawerToLatest() {
+  const body = document.getElementById("coord-drawer-body");
+  if (!body || coordRailCollapsed) return;
+  body.scrollTop = 0;
+}
+
 function setCoordRailCollapsed(collapsed) {
+  const opening = coordRailCollapsed && !collapsed;
   coordRailCollapsed = Boolean(collapsed);
   syncCoordRailChrome();
+  if (opening) {
+    requestAnimationFrame(() => scrollCoordDrawerToLatest());
+  }
 }
 
 function wireCoordRailChrome() {
@@ -4300,6 +4310,87 @@ function wireLeaveStepControl(root, handlers) {
   });
 }
 
+const WORKSPACE_SKILLS_SRC = "/modules.html?embed=1";
+let workspaceSkillsOpen = false;
+let workspaceSkillsWired = false;
+
+function isFlowWorkspace(view) {
+  return (
+    view?.waitingReason?.kind === "pick_creation_step" || isFlowPlanReview(view)
+  );
+}
+
+function workspaceViewSwitchHtml(current) {
+  if (current === "skills") {
+    return `<nav class="workspace-view-switch" aria-label="工作面">
+      <button type="button" data-skills-close>流程</button>
+      <span class="is-current" aria-current="page">技能</span>
+    </nav>`;
+  }
+  return `<nav class="workspace-view-switch" aria-label="工作面">
+    <span class="is-current" aria-current="page">流程</span>
+    <a href="/modules.html" data-open-skills>技能</a>
+  </nav>`;
+}
+
+function closeWorkspaceSkills() {
+  workspaceSkillsOpen = false;
+  const host = document.getElementById("workspace-skills");
+  if (host) host.hidden = true;
+  document.body.classList.remove("workspace-skills-open");
+}
+
+function openWorkspaceSkills() {
+  ensureWorkspaceSkillsChrome();
+  const host = document.getElementById("workspace-skills");
+  const frame = document.getElementById("workspace-skills-frame");
+  if (!host || !frame) {
+    window.location.href = "/modules.html";
+    return;
+  }
+  if (!frame.getAttribute("src")) {
+    frame.setAttribute("src", WORKSPACE_SKILLS_SRC);
+  }
+  workspaceSkillsOpen = true;
+  host.hidden = false;
+  document.body.classList.add("workspace-skills-open");
+  host.querySelector("[data-skills-close]")?.focus();
+}
+
+function ensureWorkspaceSkillsChrome() {
+  if (workspaceSkillsWired) return;
+  const host = document.getElementById("workspace-skills");
+  if (!host) return;
+  workspaceSkillsWired = true;
+  host.addEventListener("click", (e) => {
+    if (!e.target.closest("[data-skills-close]")) return;
+    e.preventDefault();
+    closeWorkspaceSkills();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !workspaceSkillsOpen) return;
+    const typing = e.target?.closest?.("input, textarea, select, [contenteditable=true]");
+    if (typing) return;
+    e.preventDefault();
+    closeWorkspaceSkills();
+  });
+}
+
+function wireWorkspaceSkillsSwitch(root) {
+  ensureWorkspaceSkillsChrome();
+  root?.querySelectorAll("[data-open-skills]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      openWorkspaceSkills();
+    });
+  });
+}
+
+function syncWorkspaceSkills(view) {
+  ensureWorkspaceSkillsChrome();
+  if (workspaceSkillsOpen && !isFlowWorkspace(view)) closeWorkspaceSkills();
+}
+
 function proposedOutputCopy(proposed) {
   const params = proposed?.params;
   const target =
@@ -4349,7 +4440,7 @@ function renderSpeakWorkspace(view) {
       : "保存后创作流程仍在；拆出的产物可以单独开玩、存档。";
   } else if (wr?.kind === "pick_creation_step" || isFlowPlanReview(view)) {
     title = "选要做的节点";
-    hint = "点可进入的节点即确认并开始；虚线原型点一下增殖再进去。要改排在底栏写意见再发。";
+    hint = "点图上可进入的节点即开始；虚线原型点一下增殖。要看技能池点上方「技能」。要改排在底栏写意见再发。";
   } else if (showOpening) {
     title = guide?.stepName || (moduleOpening ? "按引导先说几句" : "开局");
     hint = moduleOpening
@@ -4421,9 +4512,13 @@ function renderSpeakWorkspace(view) {
     : "";
   return `<section class="workspace-intent">
     <div class="workspace-intent-head">
-      <span class="workspace-surface-kicker">${
-        canOfferSaveProduct(view) ? "落档" : flowInteractive ? "流程" : "说话"
-      }</span>
+      ${
+        flowInteractive
+          ? workspaceViewSwitchHtml("flow")
+          : `<span class="workspace-surface-kicker">${
+              canOfferSaveProduct(view) ? "落档" : "说话"
+            }</span>`
+      }
       ${leaveStepControlHtml(view)}
     </div>
     <h2 class="workspace-intent-title">${esc(title)}</h2>
@@ -4458,16 +4553,19 @@ function fillCoordRail(visible, view, handlers) {
   });
   const traceCount = history.filter((message) => message.contextTrace).length;
   const packs = groupCoordTurnPacks(history);
+  // 侧栏是回看档案：打开先看最近一轮，往下才是更早的对话
+  const ordered = [...packs].reverse();
   const hiddenIds = new Set(
     history.filter((message) => !visibleIds.has(message.id)).map((message) => message.id),
   );
   coordRail.hidden = false;
   if (drawerBody) {
-    drawerBody.innerHTML = packs.length
-      ? packs.map((pack) => renderCoordPack(pack, view, { hiddenIds })).join("")
+    drawerBody.innerHTML = ordered.length
+      ? ordered.map((pack) => renderCoordPack(pack, view, { hiddenIds })).join("")
       : `<p class="coord-empty">暂无对话摘要</p>`;
     wireMessageFeedActions(drawerBody, handlers);
     wireMessageContextMenu(drawerBody, handlers);
+    if (!coordRailCollapsed) scrollCoordDrawerToLatest();
   }
   if (drawerCount) {
     drawerCount.textContent = packs.length ? String(packs.length) : "";
@@ -4524,6 +4622,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   }
 
   wireCoordRailChrome();
+  ensureWorkspaceSkillsChrome();
+  syncWorkspaceSkills(view);
 
   const stage = document.getElementById("workspace-stage");
   const panelFeed = document.getElementById("panel-feed");
@@ -4631,6 +4731,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     stage.innerHTML = renderSpeakWorkspace(view);
     wireCreationFlowGraph(stage, handlers);
     wireLeaveStepControl(stage, handlers);
+    wireWorkspaceSkillsSwitch(stage);
     stage.querySelector("[data-enter-play]")?.addEventListener("click", () => {
       handlers.onEnterPlay?.();
     });

@@ -452,5 +452,5 @@ flowchart TB
 | `runtime-state-machine.md` | `waitingReason` 定义 |
 | `worker-skill-format.md` | `ask_user` / 提问侧契约 |
 | `run-snapshot.md` | 快照与分支；左轨/检查器入口 |
-| `implementation-guide.md` | `web/*` 文件职责 |
+| `implementation-guide.md` | 写代码规则与文档地图 |
 | `book-storage.md` | 作品、存档、资产形态 |

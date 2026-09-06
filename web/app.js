@@ -52,11 +52,11 @@ const LIVE_POLL_MS = 280;
 
 const $ = (id) => document.getElementById(id);
 
-const PHASE = { idle: "待命", running: "执行�?, waiting_user: "等待�?, done: "已完�?, error: "出错" };
+const PHASE = { idle: "待命", running: "执行中", waiting_user: "等待你", done: "已完成", error: "出错" };
 
 /** 用户任务三态（表层）；底层 waitingReason 映射进来 */
 const USER_TASK = {
-  speak: { id: "speak", label: "说话", title: "继续�? },
+  speak: { id: "speak", label: "说话", title: "继续说" },
   answer: { id: "answer", label: "答题", title: "回答问题" },
   review: { id: "review", label: "验收", title: "验收产物" },
 };
@@ -73,15 +73,15 @@ function isPlayView(view) {
 }
 
 /**
- * �?waitingReason 收成用户三态：说话 / 答题+自由发挥 / 批阅�?
+ * 把 waitingReason 收成用户三态：说话 / 答题+自由发挥 / 批阅。
  * @returns {{ id: 'speak'|'answer'|'review'|'busy'|'idle'|'error', label: string, title: string, hint: string|null }}
  */
 function resolveUserTask(view, loading) {
   if (loading || isAgentBusy(view, loading)) {
     return {
       id: "busy",
-      label: "执行�?,
-      title: view.focus?.action ?? "总管�?Worker 执行中�?,
+      label: "执行中",
+      title: view.focus?.action ?? "总管或 Worker 执行中…",
       hint: null,
     };
   }
@@ -90,18 +90,18 @@ function resolveUserTask(view, loading) {
       id: "speak",
       label: USER_TASK.speak.label,
       title: "说明意见",
-      hint: "写完发送即可�?,
+      hint: "写完发送即可。",
     };
   }
   if (view.phase === "done") {
-    return { id: "idle", label: "已完�?, title: "会话已结�?, hint: null };
+    return { id: "idle", label: "已完成", title: "会话已结束", hint: null };
   }
   if (view.phase === "error") {
     return {
       id: "error",
       label: "出错",
-      title: "说明后重�?,
-      hint: view.hints?.[0] ?? "执行出错，可在下方重�?,
+      title: "说明后重试",
+      hint: view.hints?.[0] ?? "执行出错，可在下方重试",
     };
   }
 
@@ -113,28 +113,28 @@ function resolveUserTask(view, loading) {
     return {
       id: "speak",
       label: USER_TASK.speak.label,
-      title: "继续�?,
-      hint: "你说一句，世界推进一轮�?,
+      title: "继续说",
+      hint: "你说一句，世界推进一轮。",
     };
   }
 
   if (canOfferSaveProduct(view)) {
     return {
       id: "speak",
-      label: "可保�?,
+      label: "可保存",
       title: "落档产物",
       hint: view.hasProduct
-        ? "可再保存一份新定稿，或用已有产物开玩。补节点仍点图�?
-        : "点「保存定稿」拆出产物。创作流程还在，之后用产物开玩�?,
+        ? "可再保存一份新定稿，或用已有产物开玩。补节点仍点图。"
+        : "点「保存定稿」拆出产物。创作流程还在，之后用产物开玩。",
     };
   }
 
   if (isFlowPlanReview(view) || wr?.kind === "pick_creation_step") {
     return {
       id: "speak",
-      label: "选节�?,
+      label: "选节点",
       title: "选要做的节点",
-      hint: "点可进入的节点即确认并开始；要改排在底栏写意见再发�?,
+      hint: "点图上可进入的节点即开始。要看技能池点上方「技能」。",
     };
   }
 
@@ -148,14 +148,14 @@ function resolveUserTask(view, loading) {
     };
   }
 
-  // 能力默认问题：对齐美学纲领开局 �?说话面，不进「答题�?
+  // 能力默认问题：对齐美学纲领开局 → 说话面，不进「答题」
   if (moduleOpening) {
     const stepName = view.openingGuide?.stepName?.trim();
     return {
       id: "speak",
       label: USER_TASK.speak.label,
-      title: stepName || "按引导先说几�?,
-      hint: "想到什么写什么，不必整齐；写完发送即可�?,
+      title: stepName || "按引导先说几句",
+      hint: "想到什么写什么，不必整齐；写完发送即可。",
     };
   }
 
@@ -164,7 +164,7 @@ function resolveUserTask(view, loading) {
       id: "answer",
       label: USER_TASK.answer.label,
       title: "回答问题",
-      hint: "先点选项作答；也可以在底栏自由补充�?,
+      hint: "先点选项作答；也可以在底栏自由补充。",
     };
   }
 
@@ -176,11 +176,11 @@ function resolveUserTask(view, loading) {
       title: proposed?.name
         ? proposed.mode === "revise"
           ? `回头修改 · ${proposed.name}`
-          : `接下来生�?· ${proposed.name}`
-        : "确认下一�?,
+          : `接下来生成 · ${proposed.name}`
+        : "确认下一步",
       hint: proposed
         ? proposedOutputCopy(proposed)
-        : view.focus?.detail ?? "确认执行，或说明意见�?,
+        : view.focus?.detail ?? "确认执行，或说明意见。",
     };
   }
 
@@ -188,8 +188,8 @@ function resolveUserTask(view, loading) {
     return {
       id: "speak",
       label: USER_TASK.speak.label,
-      title: "下一步想写什�?,
-      hint: "说说接下来想做什么；可留空，也可说回头改某步。发送后会展示下一节点�?,
+      title: "下一步想写什么",
+      hint: "说说接下来想做什么；可留空，也可说回头改某步。发送后会展示下一节点。",
     };
   }
 
@@ -198,7 +198,7 @@ function resolveUserTask(view, loading) {
       id: "speak",
       label: USER_TASK.speak.label,
       title: "说明修改意见",
-      hint: "写清楚要改哪里；发送后在现有产物上修改�?,
+      hint: "写清楚要改哪里；发送后在现有产物上修改。",
     };
   }
 
@@ -207,10 +207,10 @@ function resolveUserTask(view, loading) {
     return {
       id: "speak",
       label: USER_TASK.speak.label,
-      title: hasUser ? "继续补充" : "描述你想创作什�?,
+      title: hasUser ? "继续补充" : "描述你想创作什么",
       hint: hasUser
-        ? "继续说细节，或等信息齐后确认�?
-        : "用几句话说明题材、玩法或爽点即可�?,
+        ? "继续说细节，或等信息齐后确认。"
+        : "用几句话说明题材、玩法或爽点即可。",
     };
   }
 
@@ -218,8 +218,8 @@ function resolveUserTask(view, loading) {
     return {
       id: "speak",
       label: USER_TASK.speak.label,
-      title: "继续�?,
-      hint: view.hints?.[0] ?? "直接输入你的想法或补充�?,
+      title: "继续说",
+      hint: view.hints?.[0] ?? "直接输入你的想法或补充。",
     };
   }
 
@@ -227,7 +227,7 @@ function resolveUserTask(view, loading) {
     return {
       id: "speak",
       label: USER_TASK.speak.label,
-      title: "继续�?,
+      title: "继续说",
       hint: view.hints?.[0] ?? null,
     };
   }
@@ -273,17 +273,17 @@ function proposedOutputCopy(proposed) {
       : "";
   if (proposed?.mode === "revise") {
     if (targetText) {
-      return `将在既有�?{targetText}」的${proposed.name}上继续改，不是从零再生成。`;
+      return `将在既有「${targetText}」的${proposed.name}上继续改，不是从零再生成。`;
     }
-    return `将在既有�?{proposed?.name || "该步"}」上继续改，不是从零再生成。`;
+    return `将在既有「${proposed?.name || "该步"}」上继续改，不是从零再生成。`;
   }
   if (targetText) {
-    return `将生成�?{targetText}」的${proposed.name}。`;
+    return `将生成「${targetText}」的${proposed.name}。`;
   }
-  return `接下来将生成�?{proposed?.name || "下一项内�?}。`;
+  return `接下来将生成：${proposed?.name || "下一项内容"}。`;
 }
 
-/** 确认下一步：给人看「生成什么」；�?target 时顺带露出后�?id，便于改对象时同步�?*/
+/** 确认下一步：给人看「生成什么」；有 target 时顺带露出后台 id，便于改对象时同步。 */
 function proposeVisibleFields(proposed) {
   if (proposed?.kind === "prior-artifact") return [];
   const missing = new Set(proposed?.paramsMissing || []);
@@ -298,7 +298,7 @@ function proposeVisibleFields(proposed) {
 
   if (byKey.has("target")) {
     push("target");
-    // 对象与后�?id 绑定：改女租客→丧尸时，rule_id 也要换成 zombies 一类英�?
+    // 对象与后台 id 绑定：改女租客→丧尸时，rule_id 也要换成 zombies 一类英文
     if (byKey.has("rule_id")) push("rule_id");
   } else if (byKey.has("rule_id") && (missing.has("rule_id") || proposed?.name === "具体实例")) {
     push("rule_id");
@@ -315,7 +315,7 @@ function proposeFieldLabel(field) {
 
 function proposeFieldHint(field, proposed) {
   if (field.key === "rule_id" && proposed?.paramSpecs?.some((s) => s.key === "target")) {
-    return "英文 kebab-case，须与上方对象对应；改对象时一并改（如丧尸→zombies�?;
+    return "英文 kebab-case，须与上方对象对应；改对象时一并改（如丧尸→zombies）";
   }
   return field.hint || field.key;
 }
@@ -324,7 +324,7 @@ function statusFor(view, loading) {
   const task = resolveUserTask(view, loading);
   if (task.id === "busy") return { cls: "running", text: task.title };
   if (task.id === "error") return { cls: "", text: task.label };
-  if (task.id === "idle" && view.phase === "done") return { cls: "done", text: "已完�? };
+  if (task.id === "idle" && view.phase === "done") return { cls: "done", text: "已完成" };
   if (task.id === "speak" || task.id === "answer" || task.id === "review") {
     return { cls: "waiting", text: task.label };
   }
@@ -344,7 +344,7 @@ function resolveComposer(view, loading) {
     return { mode: "waiting", text: task.title, task };
   }
   if (view.phase === "done") {
-    return { mode: "idle", text: "会话已结�?, task };
+    return { mode: "idle", text: "会话已结束", task };
   }
   if (view.phase === "error") {
     const send = view.actions?.find((a) => a.type === "send_message");
@@ -353,7 +353,7 @@ function resolveComposer(view, loading) {
       task,
       taskTitle: task.title,
       taskHint: task.hint,
-      placeholder: send?.placeholder ?? "说明后重试，或直接发送继续�?,
+      placeholder: send?.placeholder ?? "说明后重试，或直接发送继续…",
       hint: null,
     };
   }
@@ -363,11 +363,11 @@ function resolveComposer(view, loading) {
     return {
       mode: "input",
       task,
-      taskTitle: task.title || "继续�?,
+      taskTitle: task.title || "继续说",
       taskHint: task.hint,
-      placeholder: send?.placeholder ?? "说你要做什么�?,
+      placeholder: send?.placeholder ?? "说你要做什么…",
       hint: null,
-      submitLabel: "发�?,
+      submitLabel: "发送",
     };
   }
 
@@ -384,7 +384,7 @@ function resolveComposer(view, loading) {
       intakePrompt: hasUser ? view.intakePrompt : null,
       showIntakePanel: hasUser,
       confirmIntake,
-      placeholder: send?.placeholder ?? "描述你想创作什么�?,
+      placeholder: send?.placeholder ?? "描述你想创作什么…",
     };
   }
 
@@ -418,7 +418,7 @@ function resolveComposer(view, loading) {
       mode: "action",
       task,
       taskTitle: "验收产物",
-      taskHint: "同意就接受；要改可先点「说明意见」�?,
+      taskHint: "同意就接受；要改可先点「说明意见」。",
       primary: accept,
       primaryType: "accept",
       hint: null,
@@ -437,10 +437,10 @@ function resolveComposer(view, loading) {
       mode: "pick_step",
       task,
       taskTitle: "选要做的节点",
-      taskHint: "点可进入的节点即确认并开始；虚线原型点一下增殖。要改排在底栏写意见再发�?,
-      placeholder: send?.placeholder ?? "例如：补舞台骨架、把某步改到开场白之前�?,
+      taskHint: "点图上可进入的节点即开始；虚线原型点一下增殖。要看技能池点上方「技能」。要改排在底栏写意见再发。",
+      placeholder: send?.placeholder ?? "例如：补舞台骨架、把某步改到开场白之前…",
       hint: null,
-      submitLabel: "发�?,
+      submitLabel: "发送",
       requiresText: true,
     };
   }
@@ -477,9 +477,9 @@ function resolveComposer(view, loading) {
       task,
       taskTitle: task.title,
       taskHint: task.hint,
-      placeholder: send?.placeholder ?? "也可在此自由补充�?,
+      placeholder: send?.placeholder ?? "也可在此自由补充…",
       hint: null,
-      submitLabel: "补充并发�?,
+      submitLabel: "补充并发送",
     };
   }
 
@@ -493,27 +493,27 @@ function resolveComposer(view, loading) {
     composerForceInput
   ) {
     const wr = view.waitingReason;
-    let placeholder = send?.placeholder ?? "输入你想说的�?;
-    let submitLabel = "发�?;
+    let placeholder = send?.placeholder ?? "输入你想说的…";
+    let submitLabel = "发送";
     if (wr?.kind === "next_intent") {
-      placeholder = send?.placeholder ?? "下一步想写什么？（可留空）�?;
+      placeholder = send?.placeholder ?? "下一步想写什么？（可留空）…";
       submitLabel = "继续";
     } else if (wr?.kind === "approve_step" && composerForceInput) {
       placeholder =
-        "例如：补开局 NPC、改成丧尸怪物规则（后�?id 也换�?zombies）�?;
-      submitLabel = "发送意�?;
+        "例如：补开局 NPC、改成丧尸怪物规则（后台 id 也换成 zombies）…";
+      submitLabel = "发送意见";
     } else if (wr?.kind === "revision") {
-      placeholder = "说明要改哪里�?;
-      submitLabel = "按意见修�?;
+      placeholder = "说明要改哪里…";
+      submitLabel = "按意见修改";
     } else if (wr?.kind === "worker_questions" && !hasQuestionsCard) {
       placeholder = isModuleOpeningWaiting(view)
-        ? "想到什么写什么�?
-        : "直接回答问题�?;
+        ? "想到什么写什么…"
+        : "直接回答问题…";
     } else if (
       view.openingGuide?.text &&
       !(view.messages ?? []).some((m) => m.role === "user")
     ) {
-      placeholder = "按上方引导写几句�?;
+      placeholder = "按上方引导写几句…";
     }
     return {
       mode: "input",
@@ -546,10 +546,9 @@ function resolveComposer(view, loading) {
 
 function composerModeChip(spec) {
   const id = spec.task?.id;
-  /* 说话由左�?emoji「更多」承担，不再显示文字 chip */
-  if (id !== "answer" && id !== "review") return "";
+  if (id !== "speak" && id !== "answer" && id !== "review") return "";
   const label = spec.task.label || "";
-  const tip = [spec.taskTitle, spec.taskHint].filter(Boolean).join(" �?");
+  const tip = [spec.taskTitle, spec.taskHint].filter(Boolean).join(" — ");
   const tone = spec.acceptAction?.tone ? ` data-tone="${esc(spec.acceptAction.tone)}"` : "";
   return `<span class="composer-mode-chip" data-task="${esc(id)}"${tone} title="${esc(tip)}">${esc(label)}</span>`;
 }
@@ -574,7 +573,7 @@ function syncThemeMenuUi() {
   const chromeMeta = chromeById(chromeId);
   const sum = $("theme-menu-sum");
   if (sum) {
-    sum.title = `主题 · ${colorMeta.name} · ${chromeMeta.name}`;
+    sum.title = `${colorMeta.name} · ${chromeMeta.name}`;
     if (!sum.querySelector(".hamburger-icon")) {
       sum.innerHTML = `<span class="hamburger-icon" aria-hidden="true"></span>`;
     }
@@ -595,7 +594,10 @@ function leaveStepButtonHtml(spec) {
 }
 
 function stashComposerDraftFromDom() {
-  if (skipComposerStash) return;
+  if (skipComposerStash) {
+    skipComposerStash = false;
+    return;
+  }
   const input = $("composer-input");
   if (!input) return;
   const v = String(input.value ?? "");
@@ -617,13 +619,24 @@ function dropComposerDraft() {
   pendingComposerDraftSeq = 0;
 }
 
-/** 发送成功前调用，避�?loading 重绘把已发内容又填回输入�?*/
 function clearComposerInput() {
-  dropComposerDraft();
   const input = $("composer-input");
   if (!input) return;
   input.value = "";
   autosizeComposerInput(input);
+  syncPickReplanButton(input);
+  refreshReviewComposerChrome();
+}
+
+/** 正文已提交：立刻清空底栏，且后续重绘不要把刚发出去的字再塞回来。 */
+function beginComposerSubmit() {
+  dropComposerDraft();
+  clearComposerInput();
+  skipComposerStash = true;
+}
+
+function endComposerSubmit() {
+  skipComposerStash = false;
 }
 
 function renderComposer(view, loading) {
@@ -648,7 +661,7 @@ function renderComposer(view, loading) {
   if (spec.mode === "waiting") {
     root.innerHTML = `<div class="composer-waiting">
       <span>${esc(spec.text)}</span>
-      <button type="button" class="btn" data-act="retry_run" title="停止当前生成并重�?>停止并重�?/button>
+      <button type="button" class="btn" data-act="retry_run" title="停止当前生成并重试">停止并重试</button>
     </div>`;
     root.querySelector("[data-act=retry_run]")?.addEventListener("click", () => retryRun());
     return;
@@ -669,7 +682,7 @@ function renderComposer(view, loading) {
         : "";
     const shell = composerInputShell(spec, {
       textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
-      trailing: `<button type="submit" class="btn btn-primary composer-btn">发�?/button>`,
+      trailing: `<button type="submit" class="btn btn-primary composer-btn">发送</button>`,
     });
     root.innerHTML = `
       ${intakePanel}
@@ -683,7 +696,7 @@ function renderComposer(view, loading) {
 
   if (spec.mode === "action") {
     const reject = spec.showReject
-      ? `<button type="button" class="btn" data-act="reject">${spec.primaryType === "approve" ? "返回节点" : "不接�?}</button>
+      ? `<button type="button" class="btn" data-act="reject">${spec.primaryType === "approve" ? "返回节点" : "不接受"}</button>
          <button type="button" class="btn" data-act="force-input">说明意见</button>`
       : "";
     const chip = composerModeChip(spec);
@@ -728,23 +741,23 @@ function renderComposer(view, loading) {
       .join("");
     const syncHint =
       visible.some((f) => f.key === "target") && visible.some((f) => f.key === "rule_id")
-        ? `<p class="propose-sync-hint">改生成对象时，后�?id 也要改成对应英文（如丧尸怪物 �?zombies）�?/p>`
+        ? `<p class="propose-sync-hint">改生成对象时，后台 id 也要改成对应英文（如丧尸怪物 → zombies）。</p>`
         : "";
     const planHint =
       p.kind === "prior-artifact"
         ? `<p class="propose-plan-hint">${
             originalTarget
-              ? "编排器已规划对象，步骤内可修订�?
-              : "具体写什么在步骤内确定�?
+              ? "编排器已规划对象，步骤内可修订。"
+              : "具体写什么在步骤内确定。"
           }</p>`
         : "";
     const closerHint = p.closer
-      ? `<p class="propose-plan-hint">这是收口步。若还没�?NPC 等前序节点，点「改意见」说明要补什么，会回到流程编排�?/p>`
+      ? `<p class="propose-plan-hint">这是收口步。若还没做 NPC 等前序节点，点「改意见」说明要补什么，会回到流程编排。</p>`
       : "";
     root.innerHTML = `
       <div class="propose-step" id="propose-step" data-step-id="${esc(p.stepId)}">
         <div class="propose-step-head">
-          <span class="propose-kicker">${p.mode === "revise" ? "回头修改" : "下一�?}</span>
+          <span class="propose-kicker">${p.mode === "revise" ? "回头修改" : "下一步"}</span>
           <strong class="propose-name">${esc(p.name)}</strong>
         </div>
         <p class="propose-output" data-propose-output>${esc(proposedOutputCopy(p))}</p>
@@ -755,7 +768,7 @@ function renderComposer(view, loading) {
         <div class="composer-actions">
           <button type="button" class="btn btn-primary" data-act="approve">${esc(spec.primary.label)}</button>
           <button type="button" class="btn" data-act="reject" title="先不写这一步，回到节点选择">返回节点</button>
-          <button type="button" class="btn" data-act="force-input">改意�?/button>
+          <button type="button" class="btn" data-act="force-input">改意见</button>
         </div>
       </div>`;
     const targetInput = root.querySelector('[data-param-key="target"]');
@@ -801,7 +814,7 @@ function renderComposer(view, loading) {
         originalRuleId &&
         nextRuleId === originalRuleId
       ) {
-        alert("生成对象已改，请把后�?id 改成对应英文（例如丧尸怪物 �?zombies），不要沿用�?id�?);
+        alert("生成对象已改，请把后台 id 改成对应英文（例如丧尸怪物 → zombies），不要沿用旧 id。");
         ruleIdInput?.focus();
         markRuleIdSync();
         return;
@@ -824,7 +837,7 @@ function renderComposer(view, loading) {
       : "";
     const enterPlay = canOfferEnterPlay(view)
       ? `<button type="button" class="btn" data-act="enter-play">${
-          view.hasProduct ? "用产物开�? : "开�?
+          view.hasProduct ? "用产物开玩" : "开玩"
         }</button>`
       : "";
     const sendCls =
@@ -833,7 +846,7 @@ function renderComposer(view, loading) {
         : "btn btn-primary composer-btn";
     const shell = composerInputShell(spec, {
       textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
-      trailing: `${saveProduct}${enterPlay}<button type="submit" class="${sendCls}" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进�?>${esc(spec.submitLabel || "发�?)}</button>`,
+      trailing: `${saveProduct}${enterPlay}<button type="submit" class="${sendCls}" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进入">${esc(spec.submitLabel || "发送")}</button>`,
     });
     root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
     wireComposerForm({ requiresText: true });
@@ -854,14 +867,14 @@ function renderComposer(view, loading) {
         acceptTone === "accept" ? " composer-btn-review" : ""
       }${acceptOnEmpty ? " btn-primary" : ""}" data-act="accept" title="${esc(
         spec.acceptAction.disabled
-          ? spec.acceptAction.disabledTitle || "暂不可确�?
+          ? spec.acceptAction.disabledTitle || "暂不可确认"
           : spec.acceptAction.title || spec.acceptAction.label
       )}" ${spec.acceptAction.disabled ? "disabled" : ""}>${esc(spec.acceptAction.label)}</button>`
     : "";
-  const submitLabel = spec.submitLabel || "发�?;
+  const submitLabel = spec.submitLabel || "发送";
   const sendIsPrimary = !acceptOnEmpty;
   const placeholder = acceptOnEmpty
-    ? `${spec.placeholder || "修改意见�?}�?{spec.emptyEnterHint || "�?Enter＝确�?}）`
+    ? `${spec.placeholder || "修改意见…"}（${spec.emptyEnterHint || "空 Enter＝确认"}）`
     : spec.placeholder;
   const shell = composerInputShell(spec, {
     textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(placeholder)}"></textarea>`,
@@ -869,8 +882,8 @@ function renderComposer(view, loading) {
       sendIsPrimary ? " btn-primary" : ""
     }" data-act="revise" title="${esc(
       acceptOnEmpty
-        ? `有字或已选追问时 Enter�?{submitLabel}`
-        : "Enter 发�?
+        ? `有字或已选追问时 Enter＝${submitLabel}`
+        : "Enter 发送"
     )}">${esc(submitLabel)}</button>${acceptBtn}`,
   });
   root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
@@ -887,7 +900,7 @@ function composerTextareaMaxPx(el) {
   return Math.min(window.innerHeight * 0.42, 360);
 }
 
-/** SillyTavern 式：高度随内容上长，触顶后框内滚�?*/
+/** SillyTavern 式：高度随内容上长，触顶后框内滚动 */
 function autosizeComposerInput(el) {
   if (!el) return;
   const max = composerTextareaMaxPx(el);
@@ -918,7 +931,7 @@ function applyPendingComposerDraft() {
   refreshReviewComposerChrome();
 }
 
-/** 无输入框的确认态：Enter = 主按�?*/
+/** 无输入框的确认态：Enter = 主按钮 */
 function wireComposerActionEnter(action, opts = {}) {
   const root = $("composer");
   if (!root) return;
@@ -953,8 +966,8 @@ function refreshReviewComposerChrome() {
   const empty = !String(input.value ?? "").trim();
   const hasAnswers = selectedQuestionAnswers(lastView).answered.length > 0;
   input.placeholder = hasAnswers && empty
-    ? `${copy.placeholder}（Enter�?{copy.submitLabel}）`
-    : `${copy.placeholder}�?{copy.emptyEnterHint}）`;
+    ? `${copy.placeholder}（Enter＝${copy.submitLabel}）`
+    : `${copy.placeholder}（${copy.emptyEnterHint}）`;
 }
 
 function syncDualComposerPrimary(input, acceptBtn, sendBtn) {
@@ -973,7 +986,7 @@ function syncPickReplanButton(input) {
   btn.disabled = !hasText;
   btn.title = hasText
     ? "发送改编排意见"
-    : "写下意见后再发；点图上节点即确认并进�?;
+    : "写下意见后再发；点图上节点即确认并进入";
 }
 
 function wireComposerForm(opts = {}) {
@@ -1140,7 +1153,7 @@ function refreshBookMenuLabels() {
   const del = $("book-menu-delete");
   if (del) del.textContent = n > 1 ? `删除 ${n} 项` : "删除";
   const sel = $("book-menu-select");
-  if (sel) sel.textContent = bookSelectMode ? "取消多�? : "多�?;
+  if (sel) sel.textContent = bookSelectMode ? "取消多选" : "多选";
 }
 
 function showBookMenu(bookId, x, y) {
@@ -1184,7 +1197,7 @@ function pathSep() {
   li.setAttribute("aria-hidden", "true");
   const sep = document.createElement("span");
   sep.className = "path-sep";
-  sep.textContent = "�?;
+  sep.textContent = "›";
   li.appendChild(sep);
   return li;
 }
@@ -1317,7 +1330,7 @@ function renderExplorerRow({
   if (bookId) row.dataset.bookId = bookId;
   if (title) row.title = title;
   row.innerHTML = `
-    ${twistie ? `<span class="explorer-twist" data-twist>${expanded ? "�? : "�?}</span>` : ""}
+    ${twistie ? `<span class="explorer-twist" data-twist>${expanded ? "▾" : "▸"}</span>` : ""}
     <span class="explorer-main">
       <span class="explorer-name" title="${esc(name)}">${esc(name)}</span>
       ${meta ? `<span class="explorer-meta" title="${esc(meta)}">${esc(meta)}</span>` : ""}
@@ -1367,7 +1380,7 @@ function renderProductContents(book, product, list) {
   if (loading && saves === undefined) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
-    hint.textContent = "加载存档�?;
+    hint.textContent = "加载存档…";
     list.appendChild(hint);
     return;
   }
@@ -1381,7 +1394,7 @@ function renderProductContents(book, product, list) {
     list.appendChild(
       renderExplorerRow({
         name: "当前游玩",
-        meta: playHere && !activePlaySaveId ? "进行�? : "工作副本",
+        meta: playHere && !activePlaySaveId ? "进行中" : "工作副本",
         active: playHere && !activePlaySaveId,
         onClick: () => void openCurrentPlay(book.id),
       }),
@@ -1391,7 +1404,7 @@ function renderProductContents(book, product, list) {
   if (!runs.length && !hasWorking) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
-    hint.textContent = "还没有游玩存�?;
+    hint.textContent = "还没有游玩存档";
     list.appendChild(hint);
   }
 
@@ -1424,7 +1437,7 @@ function renderBookContents(book, list) {
   list.appendChild(
     renderExplorerRow({
       name: "继续创作",
-      meta: designing ? "进行�? : "",
+      meta: designing ? "进行中" : "",
       active: designing,
       onClick: () => void openBookDesign(book.id),
     }),
@@ -1435,7 +1448,7 @@ function renderBookContents(book, list) {
   if (loading && saves === undefined) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
-    hint.textContent = "加载存档�?;
+    hint.textContent = "加载存档…";
     list.appendChild(hint);
     return;
   }
@@ -1445,8 +1458,8 @@ function renderBookContents(book, list) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
     hint.textContent = bookPlayReady(book.id)
-      ? "还没有定稿。可在更多菜单里保存定稿�?
-      : "验收后可保存定稿�?;
+      ? "还没有定稿。可在更多菜单里保存定稿。"
+      : "验收后可保存定稿。";
     list.appendChild(hint);
     return;
   }
@@ -1460,13 +1473,13 @@ function renderBookContents(book, list) {
 
   for (const product of products) {
     const bits = [];
-    if (product.id === latestId) bits.push("最�?);
-    if (playingInstanceId === product.id) bits.push("游玩�?);
+    if (product.id === latestId) bits.push("最新");
+    if (playingInstanceId === product.id) bits.push("游玩中");
     list.appendChild(
       renderExplorerRow({
         name: product.label,
         meta: bits.join(" · "),
-        title: "打开定稿，双击改�?,
+        title: "打开定稿，双击改名",
         onClick: () => navigateToProduct(book.id, product.id),
         onRename: () => void renamePlaySave(book.id, product.id, product.label),
         onDelete: () => void deletePlaySave(book.id, product.id, product.label, "定稿"),
@@ -1502,7 +1515,7 @@ function renderBookList() {
       if (loading) {
         const hint = document.createElement("p");
         hint.className = "explorer-hint";
-        hint.textContent = "加载存档�?;
+        hint.textContent = "加载存档…";
         list.appendChild(hint);
         return;
       }
@@ -1611,7 +1624,7 @@ async function deleteSelectedBooks() {
   if (!ids.length) return;
   const label =
     ids.length === 1
-      ? `�?{books.find((b) => b.id === ids[0])?.title ?? "该作�?}」`
+      ? `「${books.find((b) => b.id === ids[0])?.title ?? "该作品"}」`
       : `${ids.length} 个作品`;
   if (!confirm(`删除 ${label}？不可恢复。`)) return;
   try {
@@ -1741,7 +1754,7 @@ async function renamePlaySave(bookId, saveId, currentLabel) {
 }
 
 async function deletePlaySave(bookId, saveId, label, kindLabel = "游玩存档") {
-  if (!confirm(`删除${kindLabel}�?{label}」？`)) return;
+  if (!confirm(`删除${kindLabel}「${label}」？`)) return;
   try {
     await api(
       `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}`,
@@ -1761,7 +1774,7 @@ async function deletePlaySave(bookId, saveId, label, kindLabel = "游玩存档")
 async function startNewPlayForBook(bookId, instanceId) {
   const thisView = lastView?.bookId === bookId ? lastView : null;
   if (!bookPlayReady(bookId) && !thisView?.hasProduct && !canOfferEnterPlay(thisView)) {
-    alert("请先保存产物，或完成收口后再开�?);
+    alert("请先保存产物，或完成收口后再开玩");
     return;
   }
   try {
@@ -1830,7 +1843,7 @@ async function openCurrentPlay(bookId) {
 
 function renderHeader(view, loading) {
   const st = statusFor(view, loading);
-  const title = view.bookTitle ?? "未命名作�?;
+  const title = view.bookTitle ?? "未命名作品";
   document.title = `${title} · Writing Agent`;
   $("status-dot").className = `status-dot ${st.cls}`;
   $("status-text").textContent = st.text;
@@ -1855,13 +1868,15 @@ function closeWorkspace({ emptyCopy = "" } = {}) {
   composerForceInput = false;
   document.title = "Writing Agent";
   $("status-dot").className = "status-dot";
-  $("status-text").textContent = "�?;
+  $("status-text").textContent = "—";
   const btnPlay = $("btn-save-play");
   if (btnPlay) btnPlay.hidden = true;
   const btnInst = $("btn-save-instance");
   if (btnInst) btnInst.hidden = true;
   const btnExport = $("btn-export");
   if (btnExport) btnExport.disabled = true;
+  const toggle = $("lifecycle-toggle");
+  if (toggle) toggle.hidden = true;
   $("message-feed").innerHTML = emptyCopy ? `<p class="empty">${emptyCopy}</p>` : "";
   const stage = $("workspace-stage");
   if (stage) {
@@ -1894,7 +1909,7 @@ function closeWorkspace({ emptyCopy = "" } = {}) {
   hideBookMenu();
   document.body.dataset.lifecycle = "design";
   const composerMain = $("composer-main");
-  if (composerMain) composerMain.innerHTML = `<div class="composer-idle">暂无打开的作�?/div>`;
+  if (composerMain) composerMain.innerHTML = `<div class="composer-idle">暂无打开的作品</div>`;
 }
 
 function renderEmpty() {
@@ -2032,7 +2047,7 @@ async function messageAction(kind, messageId, body = {}) {
   }
 }
 
-/** 询问卡已选中的追问作答（不要求卡仍标 is-open；未选则为空�?*/
+/** 询问卡已选中的追问作答（不要求卡仍标 is-open；未选则为空） */
 function selectedQuestionAnswers(view) {
   const qHost = $("questions-card-host");
   const activeQs = getActiveQuestions(view);
@@ -2046,11 +2061,11 @@ function selectedQuestionAnswers(view) {
   return { collected, answered };
 }
 
-/** �?Enter＝接受；有字或已选追问则按意见改。点「按意见修改」不走这条�?*/
+/** 空 Enter＝接受；有字或已选追问则按意见改。点「按意见修改」不走这条。 */
 async function submitComposer(text, { acceptOnEmpty, requiresText } = {}) {
   const trimmed = String(text ?? "").trim();
   if (requiresText && !trimmed) {
-    alert("点图上节点即确认并进入；要改编排请先写下意见�?);
+    alert("点图上节点即确认并进入；要改编排请先写下意见。");
     return;
   }
   if (acceptOnEmpty && !trimmed) {
@@ -2077,20 +2092,20 @@ async function sendText(text) {
     activeQs?.questions?.length && qHost?.classList.contains("is-open"),
   );
 
-  // 能力默认问题：对齐美学纲领，须自由书写，不能空发/跳过当答�?
+  // 能力默认问题：对齐美学纲领，须自由书写，不能空发/跳过当答复
   if (isModuleOpeningWaiting(lastView) && !trimmed) {
-    alert("请先按主栏引导写几句再发送�?);
+    alert("请先按主栏引导写几句再发送。");
     return;
   }
 
-  // 核对/验收：有选中追问或修改意�?�?写回产物；点「按意见修改」绝不等于接�?
+  // 核对/验收：有选中追问或修改意见 ⇒ 写回产物；点「按意见修改」绝不等于接受
   if (reviewing) {
     const { collected, answered } = selectedQuestionAnswers(lastView);
     if (!trimmed && answered.length === 0) {
       alert(
         isFlowPlanReview(lastView)
-          ? "点图上节点即确认并进入；要改编排请先写下意见�?
-          : "请选择追问选项或填写修改意见；满意请点「接受」收下产物�?,
+          ? "点图上节点即确认并进入；要改编排请先写下意见。"
+          : "请选择追问选项或填写修改意见；满意请点「接受」收下产物。",
       );
       return;
     }
@@ -2100,7 +2115,7 @@ async function sendText(text) {
         body.answers = collected.answers;
       }
       clearQuestionCardState(qHost, lastView);
-      clearComposerInput();
+      beginComposerSubmit();
       renderSession(lastView, true);
       const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: "POST",
@@ -2111,9 +2126,11 @@ async function sendText(text) {
       renderSession(view, false);
     } catch (err) {
       if (isStaleUiRequest(seq)) return;
-      if (trimmed) keepComposerDraft(trimmed);
+      keepComposerDraft(trimmed);
       if (qHost) qHost._qDismissed = null;
       if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+    } finally {
+      endComposerSubmit();
     }
     return;
   }
@@ -2123,7 +2140,7 @@ async function sendText(text) {
     const answered = collected.ok
       ? collected.answers.filter((a) => a.text && a.text !== "（未答）")
       : [];
-    // 必答题未选：拦住发�?
+    // 必答题未选：拦住发送
     if (!collected.ok && !activeQs.optional) {
       if (typeof collected.page === "number" && qHost._qState) {
         qHost._qState.page = collected.page;
@@ -2134,11 +2151,11 @@ async function sendText(text) {
       alert(collected.error);
       return;
     }
-    // 有选中 �?�?答拼接发送，并收起卡
+    // 有选中 → 问+答拼接发送，并收起卡
     if (collected.ok && answered.length) {
       try {
         clearQuestionCardState(qHost, lastView);
-        clearComposerInput();
+        beginComposerSubmit();
         renderSession(lastView, true);
         const body = { answers: collected.answers };
         if (trimmed) body.note = trimmed;
@@ -2151,16 +2168,23 @@ async function sendText(text) {
         renderSession(view, false);
       } catch (err) {
         if (isStaleUiRequest(seq)) return;
-        if (trimmed) keepComposerDraft(trimmed);
+        keepComposerDraft(trimmed);
         if (qHost) qHost._qDismissed = null;
         if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+      } finally {
+        endComposerSubmit();
       }
       return;
     }
-    // 未选中：不带问；点发送仍算答�?�?收起�?
+    // 未选中：不带问；点发送仍算答复 → 收起卡
     if (!trimmed) {
       clearQuestionCardState(qHost, lastView);
-      await runAction("skip_questions");
+      beginComposerSubmit();
+      try {
+        await runAction("skip_questions");
+      } finally {
+        endComposerSubmit();
+      }
       return;
     }
     clearQuestionCardState(qHost, lastView);
@@ -2171,7 +2195,7 @@ async function sendText(text) {
       lastView?.waitingReason?.kind === "pick_creation_step" ||
       isFlowPlanReview(lastView)
     ) {
-      alert("点图上节点即确认并进入；要改编排请先写下意见�?);
+      alert("点图上节点即确认并进入；要改编排请先写下意见。");
       return;
     }
     if (
@@ -2179,7 +2203,7 @@ async function sendText(text) {
       resolveComposer(lastView, false)?.allowEmpty
     ) {
       try {
-        clearComposerInput();
+        beginComposerSubmit();
         renderSession(lastView, true);
         const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
           method: "POST",
@@ -2191,12 +2215,14 @@ async function sendText(text) {
       } catch (err) {
         if (isStaleUiRequest(seq)) return;
         if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+      } finally {
+        endComposerSubmit();
       }
     }
     return;
   }
   try {
-    clearComposerInput();
+    beginComposerSubmit();
     renderSession(lastView, true);
     const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
@@ -2210,6 +2236,8 @@ async function sendText(text) {
     keepComposerDraft(trimmed);
     if (cardOpen && qHost) qHost._qDismissed = null;
     if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+  } finally {
+    endComposerSubmit();
   }
 }
 
@@ -2273,7 +2301,7 @@ async function setLifecycle(stage) {
     }
   }
   if (stage === "play" && !lastView?.playReady && !canOfferEnterPlay(lastView) && !lastView?.hasProduct) {
-    alert("请先保存产物，或完成收口后再开�?);
+    alert("请先保存产物，或完成收口后再开玩");
     return;
   }
   try {
@@ -2315,7 +2343,7 @@ async function populateDirectorSelect() {
       sel.innerHTML = `<option value="">暂无配方</option>`;
       if (desc) {
         desc.hidden = false;
-        desc.textContent = "尚未配置配方选项（recipes/catalog.yaml）�?;
+        desc.textContent = "尚未配置配方选项（recipes/catalog.yaml）。";
       }
       return;
     }
@@ -2348,7 +2376,7 @@ async function populateDirectorSelect() {
 }
 
 async function createBook() {
-  const title = $("input-book-title").value.trim() || "未命名作�?;
+  const title = $("input-book-title").value.trim() || "未命名作品";
   const recipeId = $("select-director")?.value?.trim();
   if (!recipeId) {
     alert("请选择配方");
@@ -2401,7 +2429,7 @@ async function openBook(bookId) {
 async function deleteBookById(bookId) {
   const book = books.find((b) => b.id === bookId);
   if (!book) return;
-  if (!confirm(`删除�?{book.title}」？不可恢复。`)) return;
+  if (!confirm(`删除「${book.title}」？不可恢复。`)) return;
   try {
     await api(`/api/books/${encodeURIComponent(bookId)}`, { method: "DELETE" });
     books = books.filter((b) => b.id !== bookId);
@@ -2422,7 +2450,7 @@ async function deleteBookById(bookId) {
 }
 
 async function saveCurrentPlay() {
-  if (!activeBookId || !lastView?.playReady) return alert("须先验收 Worker �?);
+  if (!activeBookId || !lastView?.playReady) return alert("须先验收 Worker 集");
   if (lastView.lifecycleStage !== "play" || !lastView.playLayerActive) {
     return alert("请先进入游玩");
   }
@@ -2449,7 +2477,7 @@ function defaultArchiveLabel() {
 
 async function saveCurrentInstance() {
   if (!activeBookId || (!lastView?.playReady && !canOfferSaveProduct(lastView))) {
-    return alert("须先完成收口或验�?Worker �?);
+    return alert("须先完成收口或验收 Worker 集");
   }
   const label = prompt("落档名称", defaultArchiveLabel());
   if (!label?.trim()) return;
@@ -2568,6 +2596,11 @@ function exportSession() {
   downloadMarkdown(`${name}.md`, sessionToMarkdown(lastView));
 }
 
+$("lifecycle-toggle")?.addEventListener("click", (e) => {
+  const stage = e.target.closest("[data-stage]")?.getAttribute("data-stage");
+  if (stage === "play") enterPlayNow();
+  else if (stage === "design") void setLifecycle("design");
+});
 $("btn-new-book")?.addEventListener("click", openNewBookDialog);
 $("btn-cancel-new")?.addEventListener("click", () => $("dialog-new-book").close());
 $("book-action-menu")?.addEventListener("click", (e) => {

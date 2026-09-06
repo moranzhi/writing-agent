@@ -450,6 +450,7 @@ body.design-workspace.coord-rail-collapsed .main-body {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  position: relative;
 }
 
 /* 验收态：协调流收窄，产物占主工作面 */
@@ -952,6 +953,9 @@ body.design-workspace .review-worker-set {
   margin-bottom: 8px;
   max-width: 46rem;
 }
+.workspace-intent-head:has(.workspace-view-switch) {
+  align-items: center;
+}
 .workspace-intent-head .workspace-surface-kicker {
   margin-bottom: 0;
 }
@@ -1133,6 +1137,78 @@ body.design-workspace .flow-status {
   margin: 0 0 14px;
   font-size: 12px;
   color: var(--muted);
+}
+.workspace-view-switch {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.workspace-view-switch a,
+.workspace-view-switch button,
+.workspace-view-switch span {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 4px 11px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+}
+.workspace-view-switch span.is-current {
+  cursor: default;
+  color: var(--text);
+  background: var(--surface);
+}
+.workspace-view-switch a:hover,
+.workspace-view-switch button:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.workspace-view-switch a:focus-visible,
+.workspace-view-switch button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.workspace-skills {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+.workspace-skills[hidden] {
+  display: none !important;
+}
+.workspace-skills-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 12px var(--workspace-pad-x, 24px);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.workspace-skills-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
 }
 body.design-workspace .flow-dag {
   position: relative;
@@ -4941,7 +5017,7 @@ body.design-workspace .af-mosaic {
 .dialog-head-row { display: flex; justify-content: space-between; align-items: center; }
 
 /* —— 游玩呈现壳 present.v1 ——
- * 主工作面 = body（随 500～2000 字撑高）。
+ * 主工作面 = body（随 1000～2000 字撑高）。
  * 视觉：少盒子、少渐变；层级靠字号/间距/对比，不靠装饰抢注意力。
  */
 .present-shell {
@@ -5012,7 +5088,7 @@ body.design-workspace .af-mosaic {
 .present-region-body > p:last-child {
   margin-bottom: 0;
 }
-/* P0：正文舞台 —— 随字数伸展（500～2000 靠外层滚动，不塞进小框） */
+/* P0：正文舞台 —— 随字数伸展（1000～2000 靠外层滚动，不塞进小框） */
 .present-stage {
   flex: 1 1 auto;
   min-height: 0;

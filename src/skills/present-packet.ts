@@ -192,7 +192,8 @@ export function stripPresentSourceFences(raw: string): string {
 }
 
 export const PLAY_VISIBLE_BODY_INSTRUCTION = [
-  "用户可见正文（present.v1 的 blocks.body，或纯 Markdown 主读）默认 **500～2000 字**（按汉字计）。",
+  "用户可见正文（present.v1 的 blocks.body，或纯 Markdown 主读）默认 **1000～2000 字**（按汉字计）；以「设计.监控栏／回复呈现」已钉字数为准。",
+  "采用完整长自然段叙述，不要单句成段。",
   "不要写成几句气泡短信就结束，除非用户明确要求极短。",
   "禁止把 tag 名（如「输出.用户展示」）、压缩摘要、过程日志写进正文。",
 ].join("\n");

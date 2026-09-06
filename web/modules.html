@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        try {
+          if (/(?:^|[?&])embed=1(?:&|$)/.test(location.search)) {
+            document.documentElement.setAttribute("data-embed", "1");
+          }
+        } catch (e) {}
+      })();
+    </script>
     <title>技能池 · Writing Agent</title>
     <link rel="stylesheet" href="/settings.css" />
     <link rel="stylesheet" href="/modules.css" />

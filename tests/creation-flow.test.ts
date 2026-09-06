@@ -9,6 +9,7 @@ import {
   deriveFlowStepTitle,
   titleFromSuggestion,
   formatFlowProgressForAgent,
+  listCallableCatalogModules,
   formatModuleCatalogForAgent,
   formatRecipeCatalogForAgent,
   formatSelectedRecipeForAgent,
@@ -328,6 +329,11 @@ describe("creation-flow", () => {
     expect(view.steps[0]?.layer).toBe(0);
     expect(view.steps[0]?.ready).toBe(true);
     expect(view.steps[0]?.selectable).toBe(true);
+    expect(view.availableModules?.map((m) => m.name)).toEqual([
+      "实现机制",
+      "具体实例",
+      "开场白与开场变量",
+    ]);
     expect(view.steps[1]?.runState).toBe("pending");
     expect(view.steps[1]?.layer).toBe(1);
     expect(view.steps[1]?.ready).toBe(false);
@@ -539,7 +545,7 @@ steps:
     const formatted = formatSelectedRecipeForAgent(detail);
     expect(formatted).toContain("用户已选配方");
     expect(formatted).toContain("核心思路");
-    expect(formatted).toContain("增量");
+    expect(formatted).toContain("开局 steps");
 
     const seeded = creationFlowFromRecipeSeed(detail);
     expect(seeded?.steps[0]?.name).toBe("美学纲领与交互范式");
@@ -598,15 +604,7 @@ recipes:
     ]);
   });
 
-  it("injects selected director into design-flow; missing selection warns", async () => {
-    const missing = await loadWorkerSkillWithContext(
-      "world-simulator",
-      "design-flow",
-    );
-    expect(missing.promptBody).toContain("用户尚未手动选择");
-    expect(missing.promptBody).toContain("【能力");
-    expect(missing.promptBody).toContain("禁止自行猜测");
-
+  it("injects selected recipe into design-flow", async () => {
     const selected = await loadWorkerSkillWithContext(
       "world-simulator",
       "design-flow",
@@ -620,9 +618,9 @@ recipes:
     expect(selected.promptBody).toContain("美学纲领与交互范式");
     expect(selected.promptBody).toContain("核心思路");
     expect(selected.promptBody).toContain("何时用");
-    expect(selected.promptBody).toContain("增量");
+    expect(selected.promptBody).toContain("开局 steps");
     expect(selected.promptBody).toContain("【流程进度】");
-    expect(selected.promptBody).not.toContain("【导演】用户尚未手动选择");
+    expect(selected.promptBody).not.toContain("用户尚未手动选择");
   });
 
   it("tells design-flow which steps are done and not to reschedule them", async () => {
@@ -644,8 +642,8 @@ recipes:
     expect(loaded.promptBody).toContain("已完成：");
     expect(loaded.promptBody).toContain("美学纲领与交互范式");
     expect(loaded.promptBody).toContain("已验收");
-    expect(loaded.promptBody).toContain("禁止再排新建");
-    expect(loaded.promptBody).toContain("禁止排 mode=revise");
+    expect(loaded.promptBody).toContain("这一面已覆盖");
+    expect(loaded.promptBody).toContain("要改则用户点该节点重进");
     expect(loaded.promptBody).toContain("生成规则");
   });
 
@@ -662,8 +660,31 @@ recipes:
     });
     expect(text).toContain("草案已有、尚未验收");
     expect(text).toContain("美学纲领与交互范式");
-    expect(text).toContain("不要当作新规划再写一遍");
+    expect(text).toContain("保留原 id");
     expect(text).toContain("目录〔可反复〕：生成规则、具体实例");
+    expect(text).toContain("尚未编入、仍可调用");
+    expect(text).toContain("实现机制");
+    const leftoverAt = text.indexOf("尚未编入、仍可调用");
+    expect(leftoverAt).toBeGreaterThan(-1);
+    expect(text.slice(leftoverAt)).not.toContain("美学纲领与交互范式");
+  });
+
+  it("listCallableCatalogModules skips scheduled names and filled non-repeatable artifacts", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "name": "生成规则", "role": "prototype", "depends_on": ["美学纲领与交互范式"] }
+      ]
+    }`)!;
+    const leftover = listCallableCatalogModules({
+      flow,
+      catalog: sampleCatalog,
+      filledArtifactTags: ["设计.实现机制"],
+    });
+    expect(leftover.map((m) => m.name)).toEqual([
+      "具体实例",
+      "开场白与开场变量",
+    ]);
   });
 
   it("tells design-flow to insert nodes before an unaccepted closer", () => {

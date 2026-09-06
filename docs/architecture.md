@@ -249,11 +249,11 @@ Context Trace 是排查泄漏的主工具（契约已定，实现渐进）。
 | 运行内核 | `runtime-state-machine.md`、`tool-contracts.md`、`context-assembly.md`、`tag-blackboard.md` |
 | 持久化 | `book-storage.md`、`run-snapshot.md` |
 | UI | `ui-design.md`、`ui-glossary.md` |
-| 实现顺序 | `implementation-guide.md` |
+| 写代码规则 / 文档地图 | `implementation-guide.md` |
 | **产品体验路线** | **`px-roadmap.md`**（PX0–PX5 交付与 DoD） |
 | **日常场景 → P0** | **`daily-use-p0.md`**（场景、功能表、P0 工作包） |
 | 外部参考 | `references.md` |
-| **工作流计划 / 创作方法（非系统架构）** | `design-orchestrator-guide.md`、`creation-playbook.md`、`world-simulator-modules.md` |
+| **工作流计划 / 创作方法（非系统架构）** | `design-orchestrator-guide.md`、`creation-playbook.md`、`world-simulator-modules.md`、`progressive-data-design.md`、`context-fragment-design.md`、`play-presentation-shells.md`、`play-dm-auditor.md` |
 | **Skill 包格式（非系统架构）** | `skill-format.md`、`orchestrator-skill-format.md`、`worker-skill-format.md`、`skill-design-guide.md`、`preset-format.md` |
 | **技能撰写交接** | `briefs/capability-authoring-brief.md` |
 

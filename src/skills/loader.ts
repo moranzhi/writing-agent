@@ -503,7 +503,6 @@ export async function loadWorkerSkillWithContext(
     const blocks = formatDesignFlowContentBlocks({
       selectedRecipe,
       modules,
-      missingSelection: !selectedRecipe,
       flow: parseCreationFlow(opts?.flowRaw),
       acceptedStepIds: opts?.acceptedStepNames,
       filledArtifactTags: opts?.filledArtifactTags,
@@ -550,6 +549,19 @@ export async function loadWorkerSkillWithContext(
       if (binding.module.id === "context-order") {
         const { formatPlayAgentRosterForPrompt } = await import("./play-slots.js");
         rosterBlock = `${formatPlayAgentRosterForPrompt()}\n\n`;
+      }
+      if (binding.module.id === "reply-format") {
+        const {
+          loadPresentShellCatalog,
+          formatPresentShellsForPrompt,
+        } = await import("./present-shell-catalog.js");
+        const shells = await loadPresentShellCatalog(
+          skill.skillPackRoot,
+          skillsRoot,
+        );
+        if (shells.length) {
+          rosterBlock = `${formatPresentShellsForPrompt(shells)}\n\n`;
+        }
       }
       modulePromptBlock = `${rosterBlock}${paramsBlock}\n\n## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}${inheritNote}`;
       const depTags = inheritTag

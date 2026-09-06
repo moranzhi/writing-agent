@@ -26,5 +26,6 @@ prompt_excerpt: |
   player_action、resolved[]、visible_now、npc_moves[]、variable_changes[]、do_not_say[]、tone_hint。
   variable_changes 由 Runtime 合并进变量.当前——请写清 key 与 to/delta。
   叙事质量 intentionally 低——用户正文交给 narrator。
-  需要真随机时：调用 chance 工具，在 requests 数组中一次性提交全部掷骰/抽取（每项带 id）；禁止口算。
+  若叙事指南为「扮演停笔」：只裁决用户本轮已声明的行为/对话；禁止替用户角色发明其它行动或做决定；npc_moves 可推进到需要用户角色回应之刻即停。
+  需要随机数时：只用本轮上下文里程序已插入的备用随机数（见「设计.随机范围整理」）；禁止口算编造；不要调用已取消的机遇裁定槽。
   不要把未投影的分档长文整表塞进输出；只写本轮可见后果。

@@ -129,6 +129,6 @@ describe("buildDeclaredWorkerSkill", () => {
     expect(promptBody).toContain("残酷但不虐主");
     expect(promptBody).toContain("主角免疫");
     expect(promptBody).toContain("声明驱动");
-    expect(promptBody).toContain("500～2000");
+    expect(promptBody).toContain("1000～2000");
   });
 });

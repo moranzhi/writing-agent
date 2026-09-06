@@ -145,6 +145,19 @@
               <div id="skill-picker" class="skill-picker" hidden></div>
               <div id="message-feed" class="message-feed"></div>
               <div id="workspace-stage" class="workspace-stage" hidden aria-label="验收工作面"></div>
+              <div id="workspace-skills" class="workspace-skills" hidden>
+                <header class="workspace-skills-head">
+                  <nav class="workspace-view-switch" aria-label="工作面">
+                    <button type="button" data-skills-close>流程</button>
+                    <span class="is-current" aria-current="page">技能</span>
+                  </nav>
+                </header>
+                <iframe
+                  id="workspace-skills-frame"
+                  class="workspace-skills-frame"
+                  title="技能池"
+                ></iframe>
+              </div>
               <div id="questions-card-host" class="questions-card-host" hidden></div>
             </section>
             <aside id="coord-rail" class="coord-rail" hidden aria-label="此前对话">

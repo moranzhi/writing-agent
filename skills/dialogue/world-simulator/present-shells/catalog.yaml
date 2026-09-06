@@ -1,0 +1,19 @@
+# 游玩呈现壳目录
+# 介绍与壳规格写在 present-shells/{id}/prompt.md（```intro / ```shell）
+# 正文组成执行时程序注入【可选呈现壳】；prompt 里不要写死壳清单。
+
+shells:
+  - id: prose
+    name: 纯散文
+  - id: chat_monitor
+    name: 对话+监控
+  - id: spotlight
+    name: 场面主视
+  - id: turn_panel
+    name: 回合面板
+  - id: split_board
+    name: 双栏看板
+  - id: choice_dock
+    name: 选择坞
+  - id: chapter_reader
+    name: 章节阅读

@@ -1,57 +1,52 @@
-# 提示词 / 能力文档修订清单（待你改）
+# 提示词修订清单
 
-> 程序侧已落地：`play_slots`、`settlement.v1`、模板默认契约、前端友好渲染雏形。  
-> **本清单只整理「可能需要你改的提示词/能力文」——此处不改正文，等你确认后再动。**
-
-权威方法：`docs/progressive-data-design.md`、`docs/ui-glossary.md` §5.1。
+> 规划 LLM **不**靠加长 `design-flow` SKILL 学会选型。  
+> 选型权威在各技能 `prompt.md` 的 **`meta.when` / `when_not` / `boundary` / `declaration`**。  
+> 写法：`docs/world-simulator-modules.md`（写给规划，不是写给执行）、`docs/briefs/capability-authoring-brief.md` §4.3。  
+> **人工审查工作簿（含 SKILL / 注入固定句 / 配方 / 全部 meta 全文）**：**`docs/briefs/design-flow-prompt-review.md`**。
 
 ---
 
-## 优先级 P0（与固定槽 + 裁决包强相关）
+## 已改（规划选型）
 
-| 文件 | 状态 |
+全部 15 个技能的 `meta` 已按「对照用户话 + 已有产物就能判定」重写；`catalog.yaml` 声明已对齐；两份配方 `process` 不再抄各技能调用条件。
+
+规划注入见 `formatModuleCatalogForAgent`：含糊或可跳过则不排。
+
+| 技能 | 选型要点 |
+|------|----------|
+| 美学纲领与交互范式 | 三件还不能回答才排；已定稿不重复；产出供后续编排读的开头节点 |
+| 实现机制 | 整体感觉已钉且有既成变造法则才排；无特殊设定或仅身份/开场可覆盖则不排 |
+| 舞台骨架 | 会换区才备案；代入后几乎不移动、只在一处待着（网聊/门卫室）不排 |
+| 生成规则 | 时机 a 精准格式或时机 b 原创会雾且还要生成，满足一条就排 |
+| 具体实例 | 已有 seed 类规则才排；`runtime_only` 不排；本步不改合同（已审查，基本不动） |
+| 叙事指南与故事推进 | 转述仍不知遣词/禁忌/推进才排；默认：长自然段；用户输入＝大纲扩写不越界 |
+| 拓扑图谱 | 必须生成且不适合走生成规则→实例；用拓扑结构描述（升级路径、地图、人物关系等） |
+| 变量设计与更新规则 | 必须跨轮记住否则会糊才排（已审查，用户确认完成） |
+| 变量控制上下文 | 有信息差才排；全员同可见则可不排（已审查，用户确认完成） |
+| 回复呈现 | 几乎都排；必选/可选区域 + 规则；正文默认 1000～2000 字、长自然段 |
+| 随机范围整理 | 有检定/对抗/掷骰才排；正文组成前汇总范围/表达式；替代机遇槽 |
+| 正文组成 | 把回复呈现清单展示出来；选壳+美化；可接隐藏备用随机区；开场白之前 |
+| 游玩拓扑 | **不能吃默认槽**才排；主世界必要；有变量开旁观；禁机遇槽 |
+| 上下文投影排序 | 上下文已多、即将收成时排（程序步）；名册无机遇；随机范围挂 gm |
+| 细化终稿 | 要输出运行规格才排 |
+| 开场白与开场变量 | 收成后、需要第一屏才排（收口） |
+
+---
+
+## 尚未细调（执行全文）
+
+`task` / `opening` / `probe` / `output` 仍是初稿。规划看不见这些；要改产物质量再逐份动。
+
+| 文件 | 备注 |
 |------|------|
-| `modules/worker-spec/prompt.md` | **已改** → 游玩拓扑，只勾选固定槽 |
-| `modules/refine/prompt.md` | **已改** → 按 `play_slots` 收成，禁发明 ref |
-| `modules/catalog.yaml` / 配方 / `design-flow` | **已改**（配方含：挂谁可早、排第几须晚） |
-| `modules/context-order/prompt.md` | **骨架已写**（`context-order.v1`） |
-| `docs/context-fragment-design.md` | **已写**；范例技能已对齐 `context-fragment.v1` |
-| 程序：片段解析 / 扁平投影序 / `对话.历史` 可投影 | **已落地**（非硬双锚） |
-| `orchestrator.md` | **已改**：play 调度 gm → perspective? → narrator → auditor |
+| 其余 `modules/*/prompt.md` 执行块 | 结构齐，未逐句打磨 |
+| `workers/design-flow/SKILL.md` | 怎么排（美学正文 + 已完成 id → 缺口）+ DAG 写法；**不要**把各技能调用条件搬进来 |
+| `worker-templates/*.yaml` `prompt_excerpt` | 游玩人设，与创作选型无关 |
 
-## 优先级 P1（能力归属 feeds）
+---
 
-| 文件 | 建议补什么 |
-|------|------------|
-| `modules/*/prompt.md` 的 `meta` | 统一加 `feeds: gm \| narrator \| runtime \| design_only \| perspective`（约定字段，程序以后可读） |
-| `aesthetics-interaction` | `feeds: design_only`（再压缩进常驻）；呈现要点可摘要给 narrator |
-| `mechanism` | **已改** output→`context-fragment.v1`；`feeds: gm` |
-| `world-blueprint` | **已改**→「舞台骨架」+ `context-fragment.v1`；`feeds: gm` |
-| `generation-rules` / `concrete-instances` | **已改** fragment；生成规则 **mount/feeds 含 auditor（合同级）** |
-| `narrative` | **已改**：一步两块（风格与写法｜推进与决策）+ 双挂；专用 mosaic |
-| `variable-design` | **已写** |
-| `variable-context` | **已改**：mount 含 auditor + 旁观汇总 |
-| `reply-format` / `status-bar` | 已有正文；见 artifact-card-coverage |
-| `topology` | 骨架；等你定「小循环」选项后再写 |
-| `worker-templates/*.yaml` | gm/narrator/auditor 已齐 |
-
-## 优先级 P2（文档口径）
-
-| 文件 | 建议 |
-|------|------|
-| `docs/design-orchestrator-guide.md` | § 三大步 / Worker 创造：改为固定槽 + 创作上下文映射；保留表副作用 |
-| `docs/world-simulator-modules.md` | 清单状态：worker-spec→拓扑；链到本清单 |
-| `docs/tag-blackboard.md` | 强调 `运行.本轮.裁决` = settlement.v1；转述少读 `变量.当前` |
-| `docs/skill-design-guide.md` | 若仍教「创造 worker」，加世界模拟例外 |
-| `ui-glossary.md` | §5.1 已有主世界层；可补「游玩槽位」用户可见词（可选） |
-
-## 明确不必改成「第三 Worker」的
-
-- **变量管理**：保持 `variable-design` / `variable-context` + Runtime `side_effects`，不要新 `variable-update` 必选槽。  
-- **世界观**：常驻挂 GM，不要世界观执行单元。  
-- **性格分档**：Data + Progressive tag，不要性格 agent。
-
-## 程序已做、提示词需跟上的契约
+## 程序契约（提示词需继续遵守）
 
 ```json
 // 设计.worker集（世界模拟）
@@ -62,35 +57,4 @@
 }
 ```
 
-```json
-// 运行.本轮.裁决
-{
-  "schema": "settlement.v1",
-  "player_action": "…",
-  "resolved": ["…"],
-  "visible_now": "…",
-  "npc_moves": [{ "who": "…", "move": "…" }],
-  "variable_changes": [{ "key": "好感", "delta": 8 }],
-  "do_not_say": ["好感数字"],
-  "tone_hint": "…"
-}
-```
-
-```json
-// 运行.本轮.旁观（多数轮空）
-{
-  "schema": "maintain.v1",
-  "need_generate": false,
-  "table_ops": [],
-  "notes": []
-}
-```
-
-## 建议你改的顺序
-
-1. `refine` + `worker-spec`（或新拓扑技能）对齐 `play_slots`  
-2. `world-simulator` 配方 + `orchestrator` 调度顺序  
-3. 各能力 meta 补 `feeds`  
-4. 骨架能力（status-bar / reply-format / topology）按需细写或降级  
-
-改完后告诉我，我可以按你的口径改提示词并加解析 `feeds`（若要程序注入）。
+明确不必改成「第三 Worker」的：变量管理、世界观、性格分档——见旧口径，仍有效。

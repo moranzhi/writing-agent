@@ -1,5 +1,25 @@
 /* 技能池浏览页 — 叠在 settings.css 壳上 */
 
+html[data-embed="1"],
+html[data-embed="1"] body.settings-page {
+  height: 100%;
+  overflow: hidden;
+}
+html[data-embed="1"] .st-top {
+  display: none;
+}
+html[data-embed="1"] .st-shell,
+html[data-embed="1"] .mod-shell {
+  min-height: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+}
+html[data-embed="1"] .st-rail,
+html[data-embed="1"] .st-main {
+  min-height: 100%;
+}
+
 .mod-shell {
   max-width: 1280px;
   --st-rail-w: 260px;

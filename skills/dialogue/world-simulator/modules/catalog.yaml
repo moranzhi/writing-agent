@@ -2,7 +2,7 @@
 # 各【导演】与编排都从这里选型。
 # id = modules/{id}/ 文件夹
 # name = 固定中文名（流程 JSON 的 name；同能力可多次时靠 step.id 区分）
-# declaration = catalog 短声明（可被 prompt.md ```meta 覆盖）
+# declaration = 给人看/兜底的短声明（规划选型以 prompt.md ```meta 为准并覆盖本表）
 # artifact = 执行期产物 tag（程序映射；不写进流程 JSON）
 # repeatable = true 时允许同能力多次**新建**编入增量 DAG（如生成规则、具体实例）。
 # 回头修改已完成节点不是 repeatable：用户在图上点该节点重进，不要排 mode=revise。
@@ -13,8 +13,9 @@
 #          〔先验产物〕=规划产物字段（可提前填，空则步内钉）
 # opening = 可选；覆盖 prompt.md 里 ```opening 默认问题（一般只写在 prompt.md）
 #
-# 编排选型：程序会读取各 modules/{id}/prompt.md 的 meta
-# （declaration / when / when_not / boundary）注入 design-flow；勿只靠本表短声明。
+# 编排选型：程序读取各 modules/{id}/prompt.md 的 meta
+# （declaration / when / when_not / boundary）注入 design-flow。
+# when/when_not 必须是规划对照用户话与已有产物就能判定的信号；调用条件写在技能 meta，不要写进配方 process。
 #
 # 标准范例：aesthetics-interaction（美学纲领与交互范式）
 # 后来写能力：同结构 prompt.md（含默认问题）+ 本表一行索引
@@ -30,16 +31,16 @@ modules:
   - id: aesthetics-interaction
     name: 美学纲领与交互范式
     declaration: >-
-      钉清站位、正文呈现、核心体验与禁忌、何时等用户；
-      询问相近故合为一步，勿拆成「交互」「美学」两步
+      钉清用户会在意的体验承诺：站位、反复感到什么、轮转何时停。
+      询问相近故合为一步。
     artifact: 设计.美学纲领与交互范式
 
   # —— 世界与内容 ——
   - id: world-blueprint
     name: 舞台骨架
     declaration: >-
-      体验需要可引用舞台时：钉尺度、基底与变造、关键舞台区，以及社会结构与世界状况；
-      只细化会上台部分，不做地图百科
+      本局舞台备案：划出玩家实际游玩会换区活动的主要区域并写细；
+      尺度与详细度随体验变。代入后几乎不移动、只在一处待着则不排
     artifact: 设计.舞台骨架
 
   - id: generation-rules
@@ -47,8 +48,8 @@ modules:
     kind: prior-artifact
     repeatable: true
     declaration: >-
-      仅当某类内容既重要又无法凭基底稳定生成时：写出规则
-      （怎么描写/生成 + 产物格式 + 可选多池，池绑 JSON 字段）；可按对象反复调用
+      要精准格式，或本局原创导致知识中无可参考对象、或难以在无指导情况下生成足够可信内容且故事里还要生成时：写出该对象族怎么生成；
+      不填最终实例；可按对象反复
     artifact: 设计.生成规则
     params:
       - key: target
@@ -66,7 +67,7 @@ modules:
     kind: prior-artifact
     repeatable: true
     declaration: >-
-      按预生成规则原样产出实际产物；不设计、不改合同；可按 rule_id/批次反复调用
+      已有预生成规则时：按该规则原样交出 records；不设计、不改合同；可按规则/批次反复
     artifact: 设计.具体实例
     params:
       - key: rule_id
@@ -82,49 +83,59 @@ modules:
   - id: narrative
     name: 叙事指南与故事推进
     declaration: >-
-      一次钉清写法与推进（遣词/笔墨/禁忌/示范 + 故事如何往前）；
-      整份双挂转述与主世界层，不为省 token 拆投影
+      美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与推进方式；
+      不重做体验问卷
     artifact: 设计.叙事指南与故事推进
 
   # —— 机制与数据 ——
   - id: mechanism
     name: 实现机制
     declaration: >-
-      核心体验已明时：识别承重切面（如何支撑 / 缺失后果），产出可挂主世界层的上下文片段；
-      不重定体验、不写百科或执行单元
+      整体感觉已钉，故事里有必须当作既成事实的变造法则时：
+      点出它们如何约束故事，不解释为何存在
     artifact: 设计.实现机制
 
   - id: topology
     name: 拓扑图谱
-    declaration: 钉 worker/表/阶段的依赖、触发与数据流向；一张图说清谁读谁写
+    declaration: >-
+      必须生成、但不适合走「生成规则→具体实例」时：用拓扑结构写出来
+      （升级路径、地图、人物关系等）
     artifact: 设计.拓扑图谱
 
   - id: variable-design
     name: 变量设计与更新规则
     declaration: >-
-      钉真值字段、写入源（执行单元/用户/程序）、更新规则，以及按真值门控的
-      side_effects（Progressive 投影）；与运行规格 tables 对齐
+      体验必须跨轮记住少数状态时：钉真值、谁可写、如何变、维护语句，
+      以及按值换文案的映射索引
     artifact: 设计.变量设计与更新规则
 
   - id: variable-context
     name: 变量控制上下文
     declaration: >-
-      钉真值与投影如何挂进主世界层等上下文：可见性、措辞、未解锁不注入
+      已有真值或映射时：钉谁看见什么（主世界层/转述/旁观）、未解锁不注入；
+      无信息差则可不排
     artifact: 设计.变量控制上下文
 
   # —— 呈现 ——
   - id: status-bar
-    name: 设计监控栏
+    name: 回复呈现
     declaration: >-
-      钉用户可见监控栏字段：只留会变、影响决策或沉浸的信息
-      （主角/攻略目标/场景交互物等）；旧称设计状态栏
+      几乎每局都要：钉每轮终稿的必选/可选区域，以及各区域的简单内容规则
+      （字数、段落、选项怎么组成等）；不排版
     artifact: 设计.监控栏
+
+  - id: random-range
+    name: 随机范围整理
+    declaration: >-
+      上游已有检定/对抗/掷骰需求时：汇总全部要用的随机项与取值范围（含表达式），
+      供程序每轮插入备用随机数；排在正文组成之前
+    artifact: 设计.随机范围整理
 
   - id: reply-format
     name: 正文组成
     declaration: >-
-      基于固定呈现壳做适配微调（选 shell_id + 字段/显示名等）；
-      产出壳适配单，禁止从零发明布局；旧称设计回复格式
+      把「回复呈现」已钉的内容展示给用户：选壳、美化排版，可写 CSS/HTML/JS；
+      排在回复呈现之后、开场白之前；有随机表则一并接到隐藏备用区
     artifact: 设计.正文组成
 
   # —— 开局（创作偏晚） ——
@@ -141,8 +152,8 @@ modules:
     name: 游玩拓扑
     repeatable: false
     declaration: >-
-      勾选固定游玩槽位（主世界层/叙事转述/可选角色视角/可选机遇裁定，或写手大纲+章节）；
-      禁止自由发明执行单元
+      不能吃默认槽时才勾选：主世界层必开；有变量/表才开旁观；转述默认开；
+      强秘密才开视角；写手则大纲+章节；禁止发明执行单元与机遇槽
     artifact: 设计.worker规格
 
   - id: context-order
@@ -150,13 +161,12 @@ modules:
     repeatable: false
     auto: true
     declaration: >-
-      先抄固定执行单元名册，再为每个已启用者写出扁平投影序
-      （含对话.历史与 projection）；不发明槽、不重写长文、不演情节选择题
+      收成前给已启用槽排扁平投影序（含对话.历史）；
+      不发明槽、不重写长文、不演情节选择题
     artifact: 设计.上下文投影排序
 
   - id: refine
     name: 细化终稿
     declaration: >-
-      按已勾选固定槽与投影排序表收成运行规格（play_slots、常驻、表副作用）；
-      不发明新执行单元
+      按已勾选槽（或默认槽）与投影排序表收成运行规格；不发明新执行单元
     artifact: 设计.worker集

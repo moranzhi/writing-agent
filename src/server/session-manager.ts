@@ -2472,7 +2472,7 @@ export class SessionManager {
       });
     } else if (reason?.kind === "pick_creation_step") {
       hints.push(
-        "点可进入的节点即确认并开始。虚线原型点一下会增殖一条实例再进去。要改排在底栏写意见再发。",
+        "点图上可进入的节点即开始。要看技能池点上方「技能」。虚线原型点一下会增殖一条实例再进去。要改排在底栏写意见再发。",
       );
       actions.push({ type: "replan", label: "发送" });
       actions.push({
@@ -2494,7 +2494,7 @@ export class SessionManager {
       });
       if (art?.workerId === DESIGN_FLOW_WORKER_ID) {
         hints.push(
-          "点可进入的节点即确认并开始。虚线原型点一下会增殖一条实例再进去。要改排在底栏写意见再发。",
+          "点图上可进入的节点即开始。要看技能池点上方「技能」。虚线原型点一下会增殖一条实例再进去。要改排在底栏写意见再发。",
         );
         actions.push({
           type: "send_message",

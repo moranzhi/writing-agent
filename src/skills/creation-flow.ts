@@ -269,11 +269,21 @@ export type CreationFlowSpawnView = {
   blockedReason?: string;
 };
 
+/** 目录里尚未编入本局 DAG、仍可追加的技能 */
+export type CreationFlowAvailableModule = {
+  name: string;
+  declaration?: string;
+  repeatable?: boolean;
+  closer?: boolean;
+};
+
 export type CreationFlowUserView = {
   brief?: string;
   status?: CreationFlowStatus;
   /** 规划层建议追加的原型（尚未在 steps 里） */
   suggestions?: CreationFlowPrototypeSuggestion[];
+  /** 技能目录里尚未编入本局、仍可要求追加 */
+  availableModules?: CreationFlowAvailableModule[];
   steps: Array<{
     order: number;
     id: string;
@@ -1244,12 +1254,14 @@ function slugFromName(name: string): string {
     生成规则: "generation-rules",
     具体实例: "concrete-instances",
     拓扑图谱: "topology",
+    回复呈现: "status-bar",
     设计状态栏: "status-bar",
     设计监控栏: "status-bar",
     变量设计与更新规则: "variable-design",
     变量控制上下文: "variable-context",
     设计回复格式: "reply-format",
     正文组成: "reply-format",
+    随机范围整理: "random-range",
     游玩拓扑: "worker-spec",
     "Worker 规格": "worker-spec", // 旧称，等同游玩拓扑
     细化终稿: "refine",
@@ -1318,7 +1330,7 @@ export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
     "按需选用，勿默认全选；步骤名只能从这里选；标〔可反复〕的可多次编入；标〔收口〕的是终节点：排在细化终稿之后作最后一步；尚未选定开场前，用户要补前序节点（如 NPC）时插在收口之前，勿以「收口已排入」拒绝追加；选定后才结束创作并保存；标〔程序步〕的确认编排后直接执行（不抛默认问题、不经同意并开始），产物仍验收。",
     "标〔先验产物〕（生成规则、具体实例）：编排层只排 role=prototype 槽位 + suggestion；禁止在原型写 params、禁止预排 instance。「写什么」在用户点原型增殖后的实例步内钉。",
     "其它有「编排参数」的步骤：确认开干前写齐必填 params；缺参时用 askUser 选项+其它。",
-    "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）。",
+    "选型依据是下方「何时用 / 何时不用 / 边界」（来自各能力 meta）。对照用户表述与已验收产物判定：该排才排；可跳过或条件含糊则不排。不要用执行细则补脑。",
     "〔可反复〕再编入新 id = 彻底新建一条。已完成节点要改：禁止排 mode=revise 新步；用户会在图上点该节点重进。禁止把改旧稿写成又一条 fresh。",
     "不要把能力执行全文塞进本步；执行由 design-step 注入。",
     lines.join("\n"),
@@ -1534,15 +1546,14 @@ export function formatRecipeCatalogForAgent(catalog: RecipeCatalog): string {
   return `【可选配方】（须由用户手动选择）\n${lines.join("\n")}`;
 }
 
-/** 注入 design-flow：用户已选配方（方法论 + 近期起点） */
+/** 注入 design-flow：用户已选配方（方法论 + 开局起点） */
 export function formatSelectedRecipeForAgent(detail: RecipeDetail): string {
   const lines: string[] = [
     `【用户已选配方 · ${detail.name}】`,
-    "这是用户手动选定的设计方法，不是锁死流水线。",
-    "产出**增量工作流计划（DAG）**：只排近期要做的步骤；已验收步保留，可追加同技能多次调用。",
-    "按用户表述与配方方法论增删改未验收步骤与依赖；步骤名只能从【能力】选。",
+    "这是用户手动选定的设计方法。步骤名从【能力】选。",
+    "对照美学卡上用户会在意的部分与配方方法论，增删改未验收步骤与依赖；已验收步保留。",
     "能力「何时用 / 何时不用」以【能力 · 可选工序】为准；本配方不重复罗列各能力调用条件。",
-    "禁止改选其它配方；若用户要换配方，须等用户重新选定后再编排。",
+    "用户要换配方：等用户在界面重新选定后再编排。",
   ];
   if (detail.declaration) lines.push(`简介：${detail.declaration}`);
   if (detail.when) lines.push(`适用：${detail.when}`);
@@ -1571,12 +1582,12 @@ export function formatSelectedRecipeForAgent(detail: RecipeDetail): string {
       null,
       2,
     );
-    lines.push("建议近期 steps（增量起点，可改；勿一次排完全程）：");
+    lines.push("开局 steps（配方预置起点，可按美学卡上的承诺增删）：");
     lines.push("```json");
     lines.push(stepsJson);
     lines.push("```");
   } else {
-    lines.push("建议 steps：（待作者完善 recipe.yaml；可从【能力】自行编排近期 horizon）");
+    lines.push("开局 steps：（recipe.yaml 尚未写 steps；可从【能力】按美学卡上的承诺编排）");
   }
   return lines.join("\n");
 }
@@ -1592,7 +1603,6 @@ function formatRecipeFieldBlock(value: string | string[]): string {
 export function formatDesignFlowContentBlocks(params: {
   selectedRecipe?: RecipeDetail | null;
   modules?: ModuleCatalog | null;
-  missingSelection?: boolean;
   flow?: CreationFlow | null;
   acceptedStepIds?: readonly string[];
   filledArtifactTags?: readonly string[];
@@ -1605,15 +1615,7 @@ export function formatDesignFlowContentBlocks(params: {
       filledArtifactTags: params.filledArtifactTags,
     }),
   ];
-  if (params.missingSelection) {
-    blocks.push(
-      [
-        "【配方】用户尚未手动选择。",
-        "禁止自行猜测或替用户选定配方。",
-        "请 askUser 请用户从可用配方中选择，或等待用户在界面选定后再编排。",
-      ].join("\n"),
-    );
-  } else if (params.selectedRecipe) {
+  if (params.selectedRecipe) {
     blocks.push(formatSelectedRecipeForAgent(params.selectedRecipe));
   }
   if (params.modules) {
@@ -1623,8 +1625,8 @@ export function formatDesignFlowContentBlocks(params: {
 }
 
 /**
- * 编排器必须看见的进度：哪些步已做完、草案里已有什么、哪些能力才允许再编入。
- * 裸 JSON id 列表不够；此块由程序钉死。
+ * 编排 LLM 必须看见的现场进度：已完成、草案已有、原型槽位、尚未编入。
+ * 裸 JSON id 列表不够；此块由程序按现场拼装。
  */
 export function formatFlowProgressForAgent(params: {
   flow?: CreationFlow | null;
@@ -1655,8 +1657,8 @@ export function formatFlowProgressForAgent(params: {
     repeatable: boolean,
   ) => {
     const flag = repeatable
-      ? "〔可反复：mode=fresh 再追加 = 彻底新建〕"
-      : "〔不可反复：禁止再排新建，也禁止排 mode=revise〕";
+      ? "〔可反复：再追加 = 彻底新建；改旧的由用户点该实例重进〕"
+      : "〔一次性：这一面已覆盖；要改则用户点该节点重进〕";
     const idBit = id ? `（id: ${id}）` : "";
     doneLines.push(`- ${name}${idBit} · ${why} ${flag}`);
     doneNames.add(name);
@@ -1702,7 +1704,7 @@ export function formatFlowProgressForAgent(params: {
       if (isPrototypeStep(step)) continue;
       if (doneIds.has(step.id) || isStepAccepted(step, accepted)) continue;
       draftLines.push(
-        `- ${step.name}（id: ${step.id}） · 已在草案，保留原 id；不要当作新规划再写一遍`,
+        `- ${step.name}（id: ${step.id}） · 已在草案，保留原 id`,
       );
     }
   }
@@ -1719,7 +1721,7 @@ export function formatFlowProgressForAgent(params: {
         ? ` · 建议：${step.suggestion.trim()}`
         : "";
       prototypeLines.push(
-        `- ${step.name}（id: ${step.id}，role=prototype）${sug} · 保留；用户在图上点增殖，禁止预排实例或写 params`,
+        `- ${step.name}（id: ${step.id}，role=prototype）${sug} · 保留；用户点此槽增殖 instance`,
       );
     }
   }
@@ -1729,12 +1731,10 @@ export function formatFlowProgressForAgent(params: {
   );
 
   const lines = [
-    "【流程进度】（程序钉死，必须遵守）",
-    "你只排 DAG 骨架：节点 + depends_on +（repeatable 能力）原型槽位 + suggestions。不决定用户先跑哪个。",
-    "〔可反复〕须写 role=prototype，可带 suggestion（建议生成什么）；禁止预排 instance、禁止在原型上写 params。「写什么」在实例步 design-step 里钉。",
-    "已完成的非反复技能：禁止再排新建，禁止排 mode=revise。改已完成节点由用户在图上点选重进，不要在 DAG 里加修订步。",
-    "要改已有实例：用户点该实例重进。点原型增殖 = 全新 instance（role=instance，from=原型 id）。",
-    "草案里已有的步骤：原样保留，不要重排一遍开局。",
+    "【流程进度】程序按现场列出：已完成、草案已有、原型槽位、尚未编入。编排以这份清单为准。",
+    "已完成 = 覆盖标记（原 id 留在 steps）；草案已有 = 保留原 id，在其上追加或改未验收依赖；尚未编入 = 新 name 只从这里选。",
+    "〔可反复〕在 steps 里写一条 role=prototype，带 suggestion（点名这局在意的对象）。「写什么」在用户点原型后的实例步里钉。",
+    "一次性技能已覆盖的那一面：要改则用户点该节点重进。要改已有实例：用户点该实例重进。点原型增殖 = 全新 instance（role=instance，from=原型 id）。",
   ];
   const closerPending =
     catalog && flow
@@ -1747,7 +1747,7 @@ export function formatFlowProgressForAgent(params: {
     lines.push(
       `草案已有〔收口〕${closerPending
         .map((s) => `「${s.name}」`)
-        .join("、")}但尚未选定。用户要求补节点（如 NPC、生成规则、具体实例）时：把新步插在收口之前，保持收口为最后一步，并将 status 改回 open。禁止以「收口已排入」为由拒绝追加。`,
+        .join("、")}但尚未选定。用户要补节点时：把新步插在收口之前，保持收口为最后一步，并将 status 改回 open。收口已排入仍可在它前面加步。`,
     );
   }
   if (doneLines.length) {
@@ -1755,20 +1755,47 @@ export function formatFlowProgressForAgent(params: {
   } else {
     lines.push(
       "",
-      "已完成：尚无已验收步骤。若草案已有开局步，那是配方预置起点，不是你新规划的。",
+      "已完成：尚无已验收步骤。草案里的开局步是配方预置起点，保留原 id。",
     );
   }
   if (draftLines.length) {
-    lines.push("", "草案已有、尚未验收（保留，勿重排）：", ...draftLines);
+    lines.push("", "草案已有、尚未验收（保留原 id）：", ...draftLines);
   }
   if (prototypeLines.length) {
-    lines.push("", "原型槽位（保留，勿改成 instance）：", ...prototypeLines);
+    lines.push("", "原型槽位（保留；用户点增殖）：", ...prototypeLines);
   }
   if (suggestionLines.length) {
     lines.push(
       "",
       "建议追加的原型（可编入 steps 为 role=prototype）：",
       ...suggestionLines,
+    );
+  }
+  const leftover = listCallableCatalogModules({
+    flow,
+    catalog,
+    acceptedStepIds: accepted,
+    filledArtifactTags: params.filledArtifactTags,
+  });
+  if (leftover.length) {
+    lines.push(
+      "",
+      "尚未编入、仍可调用（新 name 只从这里选）：",
+      ...leftover.map((m) => {
+        const flags = [
+          m.repeatable ? "〔可反复〕" : "",
+          m.closer ? "〔收口〕" : "",
+        ]
+          .filter(Boolean)
+          .join("");
+        const decl = m.declaration?.trim() ? `：${m.declaration.trim()}` : "";
+        return `- ${m.name}${flags}${decl}`;
+      }),
+    );
+  } else {
+    lines.push(
+      "",
+      "尚未编入、仍可调用：无。用户只能点图上已有节点，或对〔可反复〕原型增殖。",
     );
   }
   lines.push(
@@ -2071,6 +2098,37 @@ export function deriveFlowStepTitle(params: {
   return raw;
 }
 
+/** 目录里尚未编入本局、且非反复技能也未有产物的条目——用户仍可要求追加。 */
+export function listCallableCatalogModules(params: {
+  flow?: CreationFlow | null;
+  catalog?: ModuleCatalog | null;
+  acceptedStepIds?: readonly string[];
+  filledArtifactTags?: readonly string[];
+}): CreationFlowAvailableModule[] {
+  const catalog = params.catalog ?? null;
+  if (!catalog?.modules.length) return [];
+  const scheduled = new Set((params.flow?.steps ?? []).map((s) => s.name));
+  const filled = new Set(params.filledArtifactTags ?? []);
+  const accepted = new Set(
+    (params.acceptedStepIds ?? []).map((id) => id.trim()).filter(Boolean),
+  );
+  const out: CreationFlowAvailableModule[] = [];
+  for (const mod of catalog.modules) {
+    if (scheduled.has(mod.name)) continue;
+    if (!mod.repeatable) {
+      if (mod.artifact && filled.has(mod.artifact)) continue;
+      if (accepted.has(mod.name)) continue;
+    }
+    out.push({
+      name: mod.name,
+      ...(mod.declaration ? { declaration: mod.declaration } : {}),
+      ...(mod.repeatable ? { repeatable: true } : {}),
+      ...(mod.closer ? { closer: true } : {}),
+    });
+  }
+  return out;
+}
+
 export function formatCreationFlowForUser(
   flow: CreationFlow,
   catalog?: ModuleCatalog | null,
@@ -2092,10 +2150,17 @@ export function formatCreationFlowForUser(
   );
   const filled = new Set(filledArtifactTags);
   const byId = new Map(normalized.steps.map((s) => [s.id, s] as const));
+  const availableModules = listCallableCatalogModules({
+    flow: normalized,
+    catalog,
+    acceptedStepIds,
+    filledArtifactTags,
+  });
   return {
     brief: normalized.brief,
     status: normalized.status,
     ...(pendingSuggestions.length ? { suggestions: pendingSuggestions } : {}),
+    ...(availableModules.length ? { availableModules } : {}),
     steps: normalized.steps.map((s, i) => {
       const revise = isReviseStep(s);
       const proto = isPrototypeStep(s);
