@@ -55,7 +55,10 @@ import {
   extractUnitContentFromDraft,
   isDesignDiskWorker,
   isDesignUnitArtifact,
+  normalizeCreationUnitId,
+  parseAcceptedContentStore,
   parseAcceptedUnits,
+  dropAcceptedUnitContent,
   upsertAcceptedUnitContent,
 } from "../skills/creation-units.js";
 import {
@@ -80,6 +83,8 @@ import {
   spawnRepeatableCreationStep,
   spawnInstanceFromPrototype,
   removeUnstartedInstance,
+  removeRepeatableInstance,
+  pruneRepeatableArtifactContent,
   isPrototypeStep,
   isPrototypeSelectable,
   isInstanceStep,
@@ -93,7 +98,6 @@ import {
   patchCreationFlowStepParams,
   pickRecordedStepId,
   resolveDesignStepBinding,
-  shouldSkipModuleOpening,
   isProgressPointerTag,
   missingRequiredStepParams,
   stepUnitId,
@@ -101,6 +105,7 @@ import {
   stringifyModuleOpeningState,
   finalizeCreationFlow,
   type CreationFlow,
+  type CreationFlowStep,
   type CreationFlowStepParams,
   type ModuleCatalog,
   type ModuleCatalogEntry,
@@ -185,6 +190,7 @@ import type {
   AcceptanceMode,
   ActiveSkillSnapshot,
   ApplyEventResult,
+  ArtifactRecord,
   MainAgentDecision,
   PhaseEffect,
   RuntimeEvent,
@@ -337,6 +343,71 @@ export class PhaseRuntime {
     }
     this.pendingWorkerEffect = null;
     this.lastWorkerRunSnapshot = null;
+  }
+
+  /**
+   * 提前停止当前生成：还原开跑快照，回到生成前的等待面（或分层图）。
+   * 不重跑。
+   */
+  abortCurrentRun(): RuntimeSession {
+    const snap = this.lastWorkerRunSnapshot;
+    if (snap) {
+      this.restoreFromCheckpoint(snap.runtimeSession, snap.blackboardItems);
+    }
+    return this.settleAfterAbort();
+  }
+
+  /** 停止后落到可操作等待态，避免停在 running 空转。 */
+  private settleAfterAbort(): RuntimeSession {
+    const s = this.session;
+    if (s.waitingReason) return s;
+    const pendingId = s.pendingArtifactId?.trim();
+    const revisionTarget =
+      typeof s.slots.revisionTargetArtifactId === "string"
+        ? s.slots.revisionTargetArtifactId.trim()
+        : "";
+    const reviewId =
+      pendingId && s.artifacts.some((a) => a.id === pendingId)
+        ? pendingId
+        : revisionTarget && s.artifacts.some((a) => a.id === revisionTarget)
+          ? revisionTarget
+          : "";
+    if (reviewId) {
+      this.session = {
+        ...s,
+        phase: "waiting_user",
+        waitingReason: { kind: "review_artifact", artifactId: reviewId },
+        pendingArtifactId: reviewId,
+        currentWorkerId: undefined,
+        pendingDecision: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      return this.session;
+    }
+    if (this.hasCreationFlow()) {
+      this.clearProposedStep();
+      this.session = {
+        ...s,
+        phase: "waiting_user",
+        waitingReason: { kind: "pick_creation_step" },
+        pendingDecision: undefined,
+        currentWorkerId: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      return this.session;
+    }
+    if (this.recoverOrphanedRun()) return this.session;
+    if (s.phase === "running") {
+      this.session = {
+        ...s,
+        phase: "waiting_user",
+        waitingReason: { kind: "input", message: "已停止生成，可继续说明。" },
+        currentWorkerId: undefined,
+        pendingDecision: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return this.session;
   }
 
   /**
@@ -711,12 +782,19 @@ export class PhaseRuntime {
    * 可增殖节点刚增殖出、尚未验收的空实例从图上撤掉。
    */
   async leaveCreationStep(): Promise<RuntimeSession> {
+    if (this.session.phase === "running" && !this.session.waitingReason) {
+      this.abortCurrentRun();
+    }
+    if (this.session.waitingReason?.kind === "pick_creation_step") {
+      return this.session;
+    }
     const waiting = this.session.waitingReason?.kind;
     const allowed =
       waiting === "worker_questions" ||
       waiting === "input" ||
       waiting === "revision" ||
-      waiting === "approve_step";
+      waiting === "approve_step" ||
+      waiting === "review_artifact";
     if (!allowed) {
       throw new Error("当前不能返回节点选择");
     }
@@ -724,6 +802,7 @@ export class PhaseRuntime {
       throw new Error("游玩中不能返回创作节点");
     }
     const stepId = this.readPinnedStepId();
+    this.forgetUnansweredModuleOpening(stepId);
     const removed = this.unspawnCurrentInstanceIfEmpty();
     this.clearProposedStep();
     this.clearCurrentStepPointers();
@@ -766,6 +845,42 @@ export class PhaseRuntime {
     this.writeCreationFlow(next);
     debugLog("step", `取消未完成实例 ${step.id}`);
     return { id: step.id, name: step.name };
+  }
+
+  /** 离开节点时若默认问题只展示过、还没答：清状态，下次点进再出引导。 */
+  private forgetUnansweredModuleOpening(stepId: string): void {
+    const id = stepId.trim();
+    if (!id) return;
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    const step = flow ? findStepByRef(flow, id) : null;
+    const key = step ? stepUnitId(step) : id;
+    const state = parseModuleOpeningState(
+      this.session.slots[SLOT_CREATION_MODULE_OPENING_STATE] ??
+        this.blackboard.getContentByTag(CREATION_MODULE_OPENING_STATE_TAG),
+    );
+    if (state[key] !== "shown") return;
+    delete state[key];
+    const raw = stringifyModuleOpeningState(state);
+    this.blackboard.write({
+      tag: CREATION_MODULE_OPENING_STATE_TAG,
+      content: raw,
+      source: "runtime",
+    });
+    this.blackboard.write({
+      tag: CREATION_MODULE_OPENING_TAG,
+      content: "",
+      source: "runtime",
+    });
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [SLOT_CREATION_MODULE_OPENING_STATE]: raw,
+        [CREATION_MODULE_OPENING_TAG]: undefined,
+      },
+    };
   }
 
   private clearCurrentStepPointers(): void {
@@ -854,6 +969,85 @@ export class PhaseRuntime {
     debugLog("step", `新开 ${spawned.step.id}（${spawned.step.name}）`);
     await this.startCreationStep(spawned.step.id);
     return this.session;
+  }
+
+  /** 图上删除可增殖产物（已验收也可）。 */
+  async deleteCreationStep(stepId: string): Promise<RuntimeSession> {
+    const id = stepId.trim();
+    if (!id) throw new Error("请指定要删除的产物");
+    this.syncSlotsToBlackboard(this.session);
+    const catalog = await this.loadActiveModuleCatalog();
+    const flow = this.readNormalizedFlow(catalog);
+    if (!flow) throw new Error("还没有工作流计划");
+    const result = removeRepeatableInstance({ flow, stepId: id, catalog });
+    if ("error" in result) throw new Error(result.error);
+    this.writeCreationFlow(result.flow);
+    this.forgetDeletedCreationStep(result.removed, result.flow, catalog);
+    this.onMessage(`已删除「${result.removed.name}」产物 ${result.removed.id}。`);
+    debugLog("step", `删除产物 ${result.removed.id}`);
+    return this.session;
+  }
+
+  private forgetDeletedCreationStep(
+    step: CreationFlowStep,
+    flow: CreationFlow,
+    catalog: ModuleCatalog | null,
+  ): void {
+    const unitId = step.id;
+    const accepted = this.readAcceptedStepIds().filter((item) => item !== unitId);
+    const acceptedRaw = JSON.stringify(accepted);
+    this.blackboard.write({
+      tag: CREATION_ACCEPTED_UNITS_TAG,
+      content: acceptedRaw,
+      source: "runtime",
+    });
+    const contentRaw = dropAcceptedUnitContent(
+      this.blackboard.getContentByTag(CREATION_ACCEPTED_CONTENT_TAG),
+      unitId,
+    );
+    this.blackboard.write({
+      tag: CREATION_ACCEPTED_CONTENT_TAG,
+      content: contentRaw,
+      source: "runtime",
+    });
+    const now = new Date().toISOString();
+    const artifacts = this.session.artifacts.map((a) =>
+      a.stepId === unitId && a.status !== "rejected"
+        ? { ...a, status: "rejected" as const, updatedAt: now }
+        : a,
+    );
+    const remainingSameModule = accepted.filter((item) => {
+      const other = findStepByRef(flow, item);
+      return other?.name === step.name;
+    }).length;
+    const tag = findModuleByName(catalog, step.name)?.artifact?.trim();
+    if (tag) {
+      const pruned = pruneRepeatableArtifactContent({
+        raw: this.blackboard.getContentByTag(tag) ?? "",
+        step,
+        remainingSameModule,
+      });
+      this.blackboard.write({
+        tag,
+        content: pruned,
+        source: "runtime",
+      });
+    }
+    const pinned = this.readPinnedStepId();
+    this.session = {
+      ...this.session,
+      artifacts,
+      currentStepId: pinned === unitId ? undefined : this.session.currentStepId,
+      slots: {
+        ...this.session.slots,
+        [SLOT_CREATION_ACCEPTED_UNITS]: accepted,
+        [CREATION_ACCEPTED_UNITS_TAG]: acceptedRaw,
+        [CREATION_ACCEPTED_CONTENT_TAG]: contentRaw,
+        ...(tag ? { [tag]: this.blackboard.getContentByTag(tag) ?? "" } : {}),
+      },
+      updatedAt: now,
+    };
+    if (pinned === unitId) this.clearCurrentStepPointers();
   }
 
   private writeCreationFlow(flow: CreationFlow): void {
@@ -1164,7 +1358,7 @@ export class PhaseRuntime {
         case "run_worker":
           if (
             effect.workerId === DESIGN_STEP_WORKER_ID &&
-            !this.hasPinnedReadyStep()
+            !this.canRunPinnedDesignStep()
           ) {
             await this.awaitCreationStepPick();
             break;
@@ -1273,6 +1467,29 @@ export class PhaseRuntime {
     return isStepReady(flow, step, this.readAcceptedStepIds());
   }
 
+  /** 已验收节点回头改：isStepReady 为 false，但仍须跑 worker，不能弹回分层图。 */
+  private canRunPinnedDesignStep(): boolean {
+    if (this.hasPinnedReadyStep()) return true;
+    if (typeof this.session.slots.revisionTargetArtifactId === "string") {
+      return Boolean(this.session.slots.revisionTargetArtifactId.trim());
+    }
+    if (
+      isInheritExistingFlag(
+        this.blackboard.getContentByTag(CREATION_INHERIT_EXISTING_TAG) ??
+          this.session.slots[CREATION_INHERIT_EXISTING_TAG],
+      )
+    ) {
+      return true;
+    }
+    const flow = parseCreationFlow(
+      this.blackboard.getContentByTag(CREATION_FLOW_TAG),
+    );
+    const step = flow
+      ? findStepByRef(flow, this.readPinnedStepId())
+      : null;
+    return Boolean(step && isReviseStep(step));
+  }
+
   private pinCreationStepSnapshot(params: {
     stepId: string;
     name: string;
@@ -1371,15 +1588,24 @@ export class PhaseRuntime {
       };
       flow = spawned.flow;
       step = spawned.step;
-    } else if (reenter) {
-      if (!isStepAccepted(step, accepted)) {
-        throw new Error(`「${step.name}」还没完成，请直接进入而不是回头修改`);
-      }
-    } else if (!isStepReady(flow, step, accepted)) {
+    } else if (!reenter && !isStepReady(flow, step, accepted)) {
       throw new Error(`「${step.name}」的前置节点还没完成，不能开始`);
     }
 
     const pendingModule = findModuleByName(catalog, step.name);
+    if (reenter) {
+      const artTag = pendingModule?.artifact?.trim();
+      const hasArt = Boolean(
+        artTag && this.blackboard.getContentByTag(artTag)?.trim(),
+      );
+      if (
+        !isStepAccepted(step, accepted) &&
+        !hasArt &&
+        !this.findReenterArtifact(step.id, artTag)
+      ) {
+        throw new Error(`「${step.name}」还没完成，请直接进入而不是回头修改`);
+      }
+    }
     const paramSpecs = pendingModule?.params ?? [];
     const auto = pendingModule?.auto === true;
     if (opts?.stepParams && Object.keys(opts.stepParams).length > 0) {
@@ -1417,6 +1643,21 @@ export class PhaseRuntime {
     const waitingPick =
       this.session.waitingReason?.kind === "pick_creation_step";
     const needsParamForm = paramsMissing.length > 0 && !auto;
+
+    if (reenter) {
+      const existing = this.ensureReenterArtifact(
+        pinned.id,
+        pendingModule?.artifact,
+      );
+      if (existing) {
+        this.reopenArtifactForRevision(existing, pinned);
+        return;
+      }
+      throw new Error(
+        `找不到「${pinned.name}」的已有产物，无法回头修改。要新开一条请点原型上的「增殖」。`,
+      );
+    }
+
     if (needsParamForm) {
       const decision = createDecision({
         action: "run_worker",
@@ -1451,6 +1692,101 @@ export class PhaseRuntime {
       type: "main_agent_decision_created",
       payload: { decision },
     });
+  }
+
+  /** 回头修改：打开该步已有产物，让用户像未验收时一样写意见再改。 */
+  private findReenterArtifact(
+    stepId: string,
+    artifactTag?: string,
+  ): ArtifactRecord | undefined {
+    const id = stepId.trim();
+    const tag = artifactTag?.trim();
+    if (!id && !tag) return undefined;
+    const usable = this.session.artifacts.filter(
+      (a) => a.workerId === DESIGN_STEP_WORKER_ID && a.status !== "rejected",
+    );
+    const byStep = id ? usable.filter((a) => a.stepId === id) : [];
+    const byTag = tag
+      ? usable.filter((a) => a.outputTags.includes(tag))
+      : [];
+    const matches = byStep.length ? byStep : byTag;
+    const accepted = matches.filter((a) => a.status === "accepted");
+    const pool = accepted.length ? accepted : matches;
+    return pool.at(-1);
+  }
+
+  private ensureReenterArtifact(
+    stepId: string,
+    artifactTag?: string,
+  ): ArtifactRecord | undefined {
+    const found = this.findReenterArtifact(stepId, artifactTag);
+    if (found) return found;
+    const tag = artifactTag?.trim();
+    let content = tag
+      ? this.blackboard.getContentByTag(tag)?.trim() || ""
+      : "";
+    if (!content) {
+      content = this.readAcceptedUnitSlice(stepId);
+      if (content && tag) {
+        this.blackboard.write({
+          tag,
+          content,
+          source: "runtime",
+        });
+      }
+    }
+    if (!tag || !content) return undefined;
+    const artifact = createArtifact({
+      workerId: DESIGN_STEP_WORKER_ID,
+      stepId,
+      outputTags: [tag],
+      summary: "既有产物",
+    });
+    this.session = {
+      ...this.session,
+      artifacts: [...this.session.artifacts, artifact],
+    };
+    return artifact;
+  }
+
+  private readAcceptedUnitSlice(stepId: string): string {
+    const store = parseAcceptedContentStore(
+      this.blackboard.getContentByTag(CREATION_ACCEPTED_CONTENT_TAG),
+    );
+    const entry = store.units[normalizeCreationUnitId(stepId)];
+    if (!entry || entry.content == null) return "";
+    return typeof entry.content === "string"
+      ? entry.content.trim()
+      : JSON.stringify(entry.content, null, 2).trim();
+  }
+
+  private reopenArtifactForRevision(
+    artifact: ArtifactRecord,
+    step: { id: string; name: string },
+  ): void {
+    const now = new Date().toISOString();
+    this.session = {
+      ...this.session,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+      pendingArtifactId: artifact.id,
+      currentWorkerId: DESIGN_STEP_WORKER_ID,
+      currentStepId: step.id,
+      pendingDecision: undefined,
+      artifacts: this.session.artifacts.map((a) =>
+        a.id === artifact.id
+          ? { ...a, status: "under_review", updatedAt: now }
+          : a,
+      ),
+      slots: {
+        ...this.session.slots,
+        revisionTargetArtifactId: artifact.id,
+      },
+      updatedAt: now,
+    };
+    this.onMessage(
+      `已回到「${step.name}」，可按意见修改现有产物（继承原文），或返回节点再选别的步骤。`,
+    );
   }
 
   /**
@@ -2204,7 +2540,7 @@ export class PhaseRuntime {
     });
     if (!result) {
       this.onMessage(
-        `[旁观维护] need_generate=${need.rule_id}：未找到可抽样的池（请检查设计.生成规则）`,
+        `[旁观维护] need_generate=${need.rule_id}：无可程序抽样的元素池（方向池由填写方按规则自创）`,
       );
       return;
     }
@@ -2350,48 +2686,6 @@ export class PhaseRuntime {
 
     if (phase === "answered") return false;
 
-    // 配方开局模块 + 用户首句已在「用户.需求」→ 默认视为 opening 已做完，直接进 LLM
-    const demand = (
-      this.blackboard.getContentByTag("用户.需求") ??
-      this.session.slots["用户.需求"] ??
-      ""
-    )
-      .toString()
-      .trim();
-    if (
-      shouldSkipModuleOpening({
-        demand,
-        dependsOn: binding.step.depends_on,
-        phase,
-      })
-    ) {
-      state[stepKey] = "answered";
-      const raw = stringifyModuleOpeningState(state);
-      this.blackboard.write({
-        tag: CREATION_MODULE_OPENING_STATE_TAG,
-        content: raw,
-        source: "runtime",
-      });
-      this.blackboard.write({
-        tag: CREATION_MODULE_OPENING_TAG,
-        content: "（已跳过默认问题：用户首句见「用户.需求」）",
-        source: "runtime",
-      });
-      this.session = {
-        ...this.session,
-        slots: {
-          ...this.session.slots,
-          [SLOT_CREATION_MODULE_OPENING_STATE]: raw,
-          [CREATION_MODULE_OPENING_TAG]:
-            "（已跳过默认问题：用户首句见「用户.需求」）",
-        },
-      };
-      this.onMessage(
-        `[系统] ${binding.module.name} · 已坐在配方开局步，首句见「用户.需求」，跳过默认问题`,
-      );
-      return false;
-    }
-
     if (phase === "shown" && this.session.resumeContext) {
       // 用户刚答完默认问题 → 标记已答，继续走 LLM
       state[stepKey] = "answered";
@@ -2412,26 +2706,7 @@ export class PhaseRuntime {
       return false;
     }
 
-    if (phase === "shown" && !this.session.resumeContext) {
-      // 异常重入：开场已发过但未走 resume；避免死循环，直接进 LLM
-      state[stepKey] = "answered";
-      const raw = stringifyModuleOpeningState(state);
-      this.blackboard.write({
-        tag: CREATION_MODULE_OPENING_STATE_TAG,
-        content: raw,
-        source: "runtime",
-      });
-      this.session = {
-        ...this.session,
-        slots: {
-          ...this.session.slots,
-          [SLOT_CREATION_MODULE_OPENING_STATE]: raw,
-        },
-      };
-      return false;
-    }
-
-    // 首次：发出默认问题
+    // 首次，或开场已发出但用户还没答（离开节点 / 恢复丢了 resume）：展示引导，等用户先说一轮
     state[stepKey] = "shown";
     const raw = stringifyModuleOpeningState(state);
     this.blackboard.write({

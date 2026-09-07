@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChanceBatchFromGenerationRule,
+  isElementPool,
   runMaintainNeedGenerateSampling,
 } from "../src/skills/maintain-need-generate.js";
 
@@ -39,5 +40,62 @@ describe("maintain need_generate sampling", () => {
     });
     expect(result?.schema).toBe("chance.batch.v1");
     expect(result?.results[0]?.id).toBe("pool:mood");
+  });
+
+  it("treats 方向池 as non-element even if leftover 条目 exist", () => {
+    expect(
+      isElementPool({
+        池型: "方向",
+        方向: { 冷焰系: "静、刺、余烬不散，如…" },
+        条目: [{ id: "should-not-draw" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("skips 方向池 when building chance batch", () => {
+    const rules = JSON.stringify({
+      正文: {
+        rules: [
+          {
+            rule_id: "stand",
+            池: [
+              {
+                pool_id: "ability",
+                池型: "方向",
+                方向: { 时空操作系: "暂停、加速、回溯。例如 The World" },
+              },
+              {
+                pool_id: "stand-type",
+                池型: "元素",
+                条目: [{ id: "close-range", 权重: 1 }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const batch = buildChanceBatchFromGenerationRule(rules, "stand");
+    expect(batch).toHaveLength(1);
+    expect(batch![0]!.id).toBe("pool:stand-type");
+  });
+
+  it("returns null when a rule only has 方向池", () => {
+    const rules = JSON.stringify({
+      正文: {
+        rules: [
+          {
+            rule_id: "nickname",
+            池: [
+              {
+                pool_id: "nick-style",
+                池型: "方向",
+                方向: { 自然现象系: "以天气、地理命名" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(buildChanceBatchFromGenerationRule(rules, "nickname")).toBeNull();
   });
 });

@@ -29,7 +29,7 @@
 | 块 id | 必填 | 用途 |
 |-------|------|------|
 | `meta` | 建议 | YAML：name / id / artifact / declaration / when / when_not / boundary |
-| `opening` | 可选 | **默认问题**正文。开局：配方 `steps` 已预置进「设计.创作流程」，用户首句即坐在 DAG 第一步；若「用户.需求」已有内容，程序**跳过**再抛 opening，直接进本步 LLM |
+| `opening` | 可选 | **默认问题**正文。点进节点时由程序发给用户（不经本步 LLM），用户先答一轮再产出。整块可省略 = 本步直接 LLM |
 | `task` | 是 | 本步任务与验收边界 |
 | `principles` | 建议 | 原则 |
 | `probe` | 建议 | 追问策略 |
@@ -173,7 +173,7 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写**；前端 mosaic 视图 |
 | 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm`；**专用卡已接** |
 | 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况；**专用卡已接** |
-| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；宽原则 + 严合同键；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
+| 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；方向池优先、元素池仅封闭集合；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
 | 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；**〔先验产物〕**；规划字段 `rule_id` |
 | 叙事指南与故事推进 | `narrative` | **已写**：一份全文双挂；**不**为省 token 拆投影；结构化卡 |
 | 拓扑图谱 | `topology` | 必须生成且不适合走生成规则→实例时，用拓扑结构写出（升级路径、地图、人物关系等） |

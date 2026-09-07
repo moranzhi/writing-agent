@@ -88,12 +88,12 @@ export class Blackboard {
     this.writeSeq += 1;
     const existing = this.getLatestByTag(input.tag);
     const item: BlackboardItem = {
-      id: randomUUID(),
+      id: existing?.id ?? randomUUID(),
       tag: input.tag,
       content: input.content,
       source: input.source,
       scope: input.scope ?? existing?.scope,
-      createdAt: now,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: `${now}#${this.writeSeq}`,
       dependencies: input.dependencies,
       metadata: input.metadata,

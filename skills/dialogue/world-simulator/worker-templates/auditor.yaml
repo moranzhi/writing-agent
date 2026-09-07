@@ -32,4 +32,5 @@ prompt_excerpt: |
   多数轮保持空：need_generate=false、table_ops=[]、notes=[]。
   table_ops 仅在确需改「变量.当前」等表字段时使用（op=set|delta）。
   need_generate 仅在确需按某条 rule_id 补实例时写成 { "rule_id", "reason" }。
+  程序只会抽该规则里的元素池；方向池由主世界层按规则自创，不要指望抽签出标签。
   禁止编造长对话续写；禁止输出用户可见正文；禁止修改未点名的无关字段。

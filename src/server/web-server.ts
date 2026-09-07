@@ -515,6 +515,12 @@ const server = createServer(async (req, res) => {
               typeof body.moduleName === "string" ? body.moduleName : "",
             );
             break;
+          case "delete_step":
+            view = await sessionManager.deleteStep(
+              sessionId,
+              typeof body.stepId === "string" ? body.stepId : "",
+            );
+            break;
           case "run_outline":
             view = await sessionManager.runOutline(sessionId);
             break;
@@ -523,6 +529,9 @@ const server = createServer(async (req, res) => {
             break;
           case "retry_run":
             view = await sessionManager.abortAndRetry(sessionId);
+            break;
+          case "abort_run":
+            view = await sessionManager.abortRun(sessionId);
             break;
           default:
             json(res, 400, { error: "未知 action" });

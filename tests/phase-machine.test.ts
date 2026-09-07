@@ -658,6 +658,32 @@ describe("phase machine", () => {
     expect(left.effects).toEqual([]);
   });
 
+  it("leaving from review_artifact returns to the pick graph", () => {
+    let session = createSession("default");
+    const artifact = createArtifact({
+      workerId: "design-step",
+      stepId: "生成规则#1",
+      outputTags: ["设计.生成规则"],
+    });
+    session = {
+      ...session,
+      phase: "waiting_user",
+      waitingReason: { kind: "review_artifact", artifactId: artifact.id },
+      pendingArtifactId: artifact.id,
+      artifacts: [artifact],
+      currentWorkerId: "design-step",
+      currentStepId: "生成规则#1",
+    };
+    const left = applyEvent(session, {
+      type: "user_left_creation_step",
+      payload: {},
+    });
+    expect(left.session.phase).toBe("waiting_user");
+    expect(left.session.waitingReason?.kind).toBe("pick_creation_step");
+    expect(left.session.pendingArtifactId).toBeUndefined();
+    expect(left.session.currentStepId).toBeUndefined();
+  });
+
   it("replan from the pick graph runs design-flow", () => {
     let session = createSession("default");
     session = {

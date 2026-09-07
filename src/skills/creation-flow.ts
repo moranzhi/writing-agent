@@ -1224,21 +1224,6 @@ export function creationFlowFromRecipeSeed(
   };
 }
 
-/**
- * 已坐在配方开局步（无 depends_on）且「用户.需求」有首句时：
- * 跳过程序再抛模块 opening——首句即该步对话，不是「先开场再进 DAG」。
- */
-export function shouldSkipModuleOpening(opts: {
-  demand: string;
-  dependsOn?: string[] | null;
-  phase?: "shown" | "answered" | null;
-}): boolean {
-  if (opts.phase === "shown" || opts.phase === "answered") return false;
-  if (!String(opts.demand ?? "").trim()) return false;
-  const deps = opts.dependsOn ?? [];
-  return deps.length === 0;
-}
-
 /** 无 id 时的兜底（目录仍应显式写 id） */
 function slugFromName(name: string): string {
   const map: Record<string, string> = {
@@ -2623,15 +2608,108 @@ export function removeUnstartedInstance(
   if (!step || !isInstanceStep(step) || isStepAccepted(step, acceptedStepIds)) {
     return flow;
   }
+  return dropInstanceFromFlow(flow, step.id);
+}
+
+function dropInstanceFromFlow(flow: CreationFlow, stepId: string): CreationFlow {
   return {
     ...flow,
     steps: flow.steps
-      .filter((s) => s.id !== step.id)
+      .filter((s) => s.id !== stepId)
       .map((s) => ({
         ...s,
-        depends_on: s.depends_on.filter((d) => d !== step.id),
+        depends_on: s.depends_on.filter((d) => d !== stepId),
       })),
   };
+}
+
+function repeatableInstanceLabel(step: CreationFlowStep): string {
+  const target = titleFromStepParams(step.params);
+  if (target && target !== step.name) return `${step.name} · ${target}`;
+  return step.id !== step.name ? `${step.name}（${step.id}）` : step.name;
+}
+
+/**
+ * 图上删除可增殖产物：已验收也可删。
+ * 另有实例依赖这条时拒绝；收口等一次性节点只解开依赖。
+ */
+export function removeRepeatableInstance(params: {
+  flow: CreationFlow;
+  stepId: string;
+  catalog?: ModuleCatalog | null;
+}): { flow: CreationFlow; removed: CreationFlowStep } | { error: string } {
+  const step = findStepByRef(params.flow, params.stepId.trim());
+  if (!step) return { error: "找不到节点" };
+  if (!isInstanceStep(step)) {
+    return { error: "只能删除可增殖能力长出来的产物" };
+  }
+  const mod = findModuleByName(params.catalog, step.name);
+  if (mod && mod.repeatable !== true) {
+    return { error: `「${step.name}」不是可增殖能力，不能从图上删` };
+  }
+  if (!mod && !step.from) {
+    return { error: "只能删除可增殖能力长出来的产物" };
+  }
+  const blockers = params.flow.steps.filter(
+    (s) =>
+      s.id !== step.id &&
+      isInstanceStep(s) &&
+      s.depends_on.includes(step.id),
+  );
+  if (blockers.length) {
+    return {
+      error: `还有产物依赖这条：${blockers.map(repeatableInstanceLabel).join("、")}。请先删那些产物。`,
+    };
+  }
+  return { flow: dropInstanceFromFlow(params.flow, step.id), removed: step };
+}
+
+/** 共享产物 tag 里按 rule_id 抽掉已删实例；同能力已无实例则清空。 */
+export function pruneRepeatableArtifactContent(params: {
+  raw: string;
+  step: CreationFlowStep;
+  remainingSameModule: number;
+}): string {
+  if (params.remainingSameModule <= 0) return "";
+  const stripped = stripFragmentRowsMatchingStep(params.raw, params.step);
+  return stripped ?? params.raw;
+}
+
+function stripFragmentRowsMatchingStep(
+  raw: string,
+  step: CreationFlowStep,
+): string | null {
+  const parsed = tryParseJsonDoc(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const doc = structuredClone(parsed) as Record<string, unknown>;
+  const bodyRaw = doc.正文;
+  if (!bodyRaw || typeof bodyRaw !== "object" || Array.isArray(bodyRaw)) {
+    return null;
+  }
+  const body = bodyRaw as Record<string, unknown>;
+  const ruleId = flowParamText(step.params, "rule_id");
+  if (!ruleId) return null;
+  let changed = false;
+  for (const key of ["rules", "records"] as const) {
+    const rows = body[key];
+    if (!Array.isArray(rows)) continue;
+    const next = rows.filter((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return true;
+      return (
+        String((item as Record<string, unknown>).rule_id ?? "").trim() !==
+        ruleId
+      );
+    });
+    if (next.length !== rows.length) {
+      body[key] = next;
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  doc.正文 = body;
+  return JSON.stringify(doc, null, 2);
 }
 
 /** 实例步 depends_on：具体实例钉最近已验收规则实例；其余跟原型。 */

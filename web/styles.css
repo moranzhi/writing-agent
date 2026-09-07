@@ -479,11 +479,14 @@ body.design-workspace.coord-rail-collapsed .main-body {
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
+}
+.workspace-review-head .workspace-leave-step {
+  flex-shrink: 0;
+  margin-right: 2px;
 }
 .workspace-review-titles {
   display: flex;
@@ -491,9 +494,11 @@ body.design-workspace.coord-rail-collapsed .main-body {
   gap: 10px;
   flex-wrap: wrap;
   min-width: 0;
+  flex: 1 1 auto;
 }
 .workspace-review-nav {
   flex-shrink: 0;
+  margin-left: auto;
 }
 .workspace-review-nav .msg-variant-nav {
   margin: 0;
@@ -860,6 +865,9 @@ body.design-workspace .workspace-pending {
   margin-bottom: 6px;
   font-size: 12px;
 }
+.workspace-pending-head .workspace-leave-step {
+  margin-right: 4px;
+}
 .workspace-pending-head .msg-action {
   margin-left: auto;
 }
@@ -948,7 +956,7 @@ body.design-workspace .review-worker-set {
 .workspace-intent-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   margin-bottom: 8px;
   max-width: 46rem;
@@ -979,7 +987,7 @@ body.design-workspace .review-worker-set {
   outline-offset: 2px;
 }
 .workspace-answer-head--slim .workspace-leave-step {
-  margin-left: auto;
+  margin-right: 4px;
 }
 .workspace-intent,
 .workspace-answer {
@@ -1213,7 +1221,7 @@ body.design-workspace .flow-status {
 body.design-workspace .flow-dag {
   position: relative;
   overflow: auto;
-  padding: 4px 2px 8px;
+  padding: 8px 8px 16px;
 }
 body.design-workspace .flow-dag-edges {
   position: absolute;
@@ -1225,23 +1233,41 @@ body.design-workspace .flow-dag-edges {
   overflow: visible;
 }
 body.design-workspace .flow-dag-edge {
-  stroke: color-mix(in srgb, var(--border) 80%, var(--muted));
+  stroke: color-mix(in srgb, var(--text) 32%, var(--border));
   stroke-width: 1.5;
-  opacity: 0.85;
-}
-body.design-workspace .flow-dag-edge.is-lit {
-  stroke: color-mix(in srgb, var(--accent) 55%, var(--border));
-  opacity: 1;
+  opacity: 0.55;
+  stroke-linecap: round;
 }
 body.design-workspace .flow-dag-arrowhead {
-  fill: color-mix(in srgb, var(--accent) 50%, var(--border));
+  fill: color-mix(in srgb, var(--text) 38%, var(--border));
+}
+body.design-workspace .flow-dag.is-tracing .flow-dag-edge {
+  opacity: 0.12;
+}
+body.design-workspace .flow-dag.is-tracing .flow-dag-edge.is-trace-in,
+body.design-workspace .flow-dag.is-tracing .flow-dag-edge.is-trace-out {
+  opacity: 1;
+}
+body.design-workspace .flow-dag-edge.is-trace-in {
+  stroke: var(--accent);
+  stroke-width: 2.35;
+}
+body.design-workspace .flow-dag-edge.is-trace-out {
+  stroke: color-mix(in srgb, var(--text) 72%, var(--accent));
+  stroke-width: 2.1;
+}
+body.design-workspace .flow-dag-arrowhead--in {
+  fill: var(--accent);
+}
+body.design-workspace .flow-dag-arrowhead--out {
+  fill: color-mix(in srgb, var(--text) 72%, var(--accent));
 }
 body.design-workspace .flow-dag-rows {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 44px;
   min-width: 0;
 }
 body.design-workspace .flow-dag-row {
@@ -1262,8 +1288,96 @@ body.design-workspace .flow-dag-row-nodes {
   flex-wrap: wrap;
   justify-content: center;
   align-items: flex-start;
-  gap: 12px;
+  gap: 24px 104px;
   min-width: 0;
+  padding: 0 28px;
+}
+body.design-workspace .flow-dag.is-tracing .flow-node {
+  opacity: 0.4;
+}
+body.design-workspace .flow-dag.is-tracing .flow-node.is-trace-root,
+body.design-workspace .flow-dag.is-tracing .flow-node.is-trace-related,
+body.design-workspace .flow-dag.is-tracing .flow-node.is-locked.is-trace-root,
+body.design-workspace .flow-dag.is-tracing .flow-node.is-locked.is-trace-related {
+  opacity: 1;
+}
+body.design-workspace .flow-dag.is-tracing .flow-node.is-trace-root {
+  position: relative;
+  z-index: 2;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+body.design-workspace .flow-dag-hint {
+  position: absolute;
+  z-index: 4;
+  width: max-content;
+  max-width: min(240px, calc(100% - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--text) 12%, transparent);
+  pointer-events: none;
+  color: var(--text);
+}
+body.design-workspace .flow-dag-hint[hidden] {
+  display: none !important;
+}
+body.design-workspace .flow-dag-hint-kicker {
+  margin: 0 0 2px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+body.design-workspace .flow-dag-hint-name {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+body.design-workspace .flow-dag-hint-sec + .flow-dag-hint-sec {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+body.design-workspace .flow-dag-hint-label {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+body.design-workspace .flow-dag-hint-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+body.design-workspace .flow-dag-hint-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+body.design-workspace .flow-dag-hint-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+body.design-workspace .flow-dag-hint-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.design-workspace .flow-dag-hint-item-run {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 body.design-workspace .flow-node {
   display: flex;
@@ -1321,10 +1435,13 @@ body.design-workspace .flow-node-menu-btn {
   line-height: 1;
   color: var(--muted);
   opacity: 0.55;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: context-menu;
 }
 body.design-workspace .flow-node.is-done-menu:hover .flow-node-menu-btn,
-body.design-workspace .flow-node.is-done-menu:focus-visible .flow-node-menu-btn {
+body.design-workspace .flow-node.is-done-menu:focus-visible .flow-node-menu-btn,
+body.design-workspace .flow-node.is-selectable:hover .flow-node-menu-btn,
+body.design-workspace .flow-node.is-selectable:focus-visible .flow-node-menu-btn {
   opacity: 1;
 }
 .step-artifact-body {
@@ -1349,14 +1466,12 @@ body.design-workspace .flow-node.is-selectable {
     0 4px 12px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 body.design-workspace .flow-node.is-selectable:hover {
-  transform: translateY(-2px);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),
     0 8px 18px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 body.design-workspace .flow-node.is-selectable:active {
-  transform: translateY(0) scale(0.98);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
     0 2px 6px color-mix(in srgb, var(--accent) 12%, transparent);
@@ -1465,6 +1580,7 @@ body.design-workspace .flow-spawn-meta {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
 }
 body.design-workspace .flow-spawn-meta .flow-action {
   min-height: 24px;
@@ -1495,7 +1611,11 @@ body.design-workspace .flow-dag-edge--belong {
   stroke-width: 1.25;
 }
 body.design-workspace .flow-dag-arrowhead--belong {
-  fill: color-mix(in srgb, var(--accent) 38%, var(--border));
+  fill: color-mix(in srgb, var(--text) 28%, var(--border));
+}
+body.design-workspace .flow-dag.is-tracing .flow-dag-edge--belong.is-trace-in,
+body.design-workspace .flow-dag.is-tracing .flow-dag-edge--belong.is-trace-out {
+  stroke-dasharray: 4 4;
 }
 body.design-workspace .flow-suggestion-inline {
   font-size: 12px;
@@ -1604,6 +1724,8 @@ body.design-workspace .flow-spawn.is-blocked {
   body.design-workspace .flow-dag-row-nodes {
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
+    padding: 0;
   }
   body.design-workspace .flow-node,
   body.design-workspace .flow-family {
@@ -3559,8 +3681,21 @@ body.design-workspace .af-mosaic {
   color: var(--muted);
   font-weight: 600;
 }
-.skill-pool-desc {
-  margin: 6px 0 0;
+.skill-pool-card.is-direction {
+  grid-column: 1 / -1;
+}
+.skill-pool-dirs {
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.skill-pool-dir dt {
+  font-size: 12px;
+  font-weight: 600;
+}
+.skill-pool-dir dd {
+  margin: 2px 0 0;
   font-size: 12px;
   color: var(--muted);
   line-height: 1.4;
@@ -4821,7 +4956,7 @@ body.design-workspace .af-mosaic {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   padding-bottom: 2px;
 }
 .composer-mode-chip {
@@ -4860,6 +4995,10 @@ body.design-workspace .af-mosaic {
 .composer-mode-chip[data-task="review"][data-tone="plan"],
 .composer-input-shell[data-task="review"][data-tone="plan"] .composer-mode-chip {
   color: var(--accent);
+}
+.composer-mode-chip[data-task="busy"],
+.composer-input-shell[data-task="busy"] .composer-mode-chip {
+  color: var(--muted);
 }
 .composer-input-shell textarea {
   flex: 1;
@@ -4917,6 +5056,7 @@ body.design-workspace .af-mosaic {
 .composer-shell-actions > .btn-primary,
 .composer-shell-actions > .composer-btn,
 .composer-shell-actions > .composer-btn-accept,
+.composer-shell-actions > .composer-btn-icon,
 .composer-form > .btn,
 .composer-form > .btn-primary,
 .composer-form > .composer-btn,
@@ -4932,6 +5072,13 @@ body.design-workspace .af-mosaic {
   justify-content: center;
   white-space: nowrap;
   font-size: 13px;
+}
+.composer-btn-icon {
+  width: calc(var(--composer-control-h) - 8px);
+  min-width: calc(var(--composer-control-h) - 8px);
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
 }
 /* 验收态：主按钮承接原「批阅」语义 */
 .composer-btn-review {

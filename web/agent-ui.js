@@ -197,8 +197,10 @@ function hideFlowNodeMenu() {
 const flowMenuState = {
   stepId: null,
   name: "",
+  label: "",
   hasArtifact: false,
   canReenter: false,
+  canDelete: false,
   node: null,
   handlers: null,
 };
@@ -224,18 +226,25 @@ function showFlowNodeMenu(node, x, y, handlers) {
   if (!stepId) return;
   flowMenuState.stepId = stepId;
   flowMenuState.name = node.getAttribute("data-flow-done-name") || "";
+  flowMenuState.label =
+    node.getAttribute("data-flow-label") || flowMenuState.name || stepId;
   flowMenuState.hasArtifact = node.getAttribute("data-has-artifact") === "1";
   flowMenuState.canReenter = node.getAttribute("data-can-reenter") === "1";
+  flowMenuState.canDelete = node.getAttribute("data-can-delete") === "1";
   flowMenuState.node = node;
   flowMenuState.handlers = handlers;
   const viewBtn = document.getElementById("flow-menu-view");
   const reenterBtn = document.getElementById("flow-menu-reenter");
+  const deleteBtn = document.getElementById("flow-menu-delete");
   if (viewBtn) {
     viewBtn.disabled = !flowMenuState.hasArtifact;
     viewBtn.title = flowMenuState.hasArtifact ? "" : "这一步还没有产物";
   }
   if (reenterBtn) {
     reenterBtn.toggleAttribute("hidden", !flowMenuState.canReenter);
+  }
+  if (deleteBtn) {
+    deleteBtn.toggleAttribute("hidden", !flowMenuState.canDelete);
   }
   placeMenu(menu, x, y);
 }
@@ -248,11 +257,13 @@ function wireFlowNodeMenu() {
     const action = e.target.closest("[data-flow-menu-action]")?.getAttribute("data-flow-menu-action");
     const stepId = flowMenuState.stepId;
     const name = flowMenuState.name;
+    const label = flowMenuState.label || name;
     const handlers = flowMenuState.handlers;
     hideFlowNodeMenu();
     if (!stepId || !action) return;
     if (action === "view") handlers?.onViewStepArtifact?.(stepId, name);
     if (action === "reenter") handlers?.onReenterCreationStep?.(stepId);
+    if (action === "delete") handlers?.onDeleteCreationStep?.(stepId, label);
   });
 }
 
@@ -2406,6 +2417,17 @@ function renderOneGenerationRuleCard(rule, index) {
   </header>`;
 
   const blocks = [];
+  if (rule.设计判断 && typeof rule.设计判断 === "object") {
+    const d = rule.设计判断;
+    const unlist = (v) =>
+      Array.isArray(v) && v.length ? v.map(String).join("、") : "";
+    blocks.push(
+      `<div class="skill-sub"><div class="skill-sub-title">设计判断</div>${skillChipRow([
+        unlist(d.不可穷举项) && `不可穷举 · ${unlist(d.不可穷举项)}`,
+        unlist(d.封闭集合) && `封闭 · ${unlist(d.封闭集合)}`,
+      ])}${d.正交字段依据 ? `<p class="skill-pool-desc">${esc(String(d.正交字段依据))}</p>` : ""}</div>`,
+    );
+  }
   if (rule.上下文策略 && typeof rule.上下文策略 === "object") {
     const flags = Object.entries(rule.上下文策略)
       .map(([k, v]) => `<span class="ws-slot-chip ${v ? "ws-slot-on" : "ws-slot-off"}">${esc(k)}</span>`)
@@ -2424,9 +2446,13 @@ function renderOneGenerationRuleCard(rule, index) {
   }
   if (rule.生成与描写 && typeof rule.生成与描写 === "object") {
     const g = rule.生成与描写;
-    const methodKeys = ["依据", "方法", "硬约束", "字段间约束", "变化维度", "禁止项", "去重规则", "校验"];
+    const methodKeys = ["依据", "工作流", "方法", "硬约束", "字段间约束", "变化维度", "禁止项", "去重规则", "反模式", "校验"];
+    const extra = [
+      renderGenerationRecipeHtml(g.配方),
+      renderGenerationExpressHtml(g.表现),
+    ].filter(Boolean);
     blocks.push(
-      `<div class="skill-sub"><div class="skill-sub-title">生成与描写</div>${methodKeys
+      `<div class="skill-sub"><div class="skill-sub-title">生成与描写</div>${extra.join("")}${methodKeys
         .filter((k) => Array.isArray(g[k]) && g[k].length)
         .map(
           (k) =>
@@ -2435,6 +2461,9 @@ function renderOneGenerationRuleCard(rule, index) {
         .join("")}</div>`,
     );
   }
+  if (Array.isArray(rule.分级表现) && rule.分级表现.length) {
+    blocks.push(renderGenerationGradeHtml(rule.分级表现));
+  }
   if (rule.产物格式 && typeof rule.产物格式 === "object") {
     blocks.push(renderProductSchemaCard(rule.产物格式));
   }
@@ -2442,24 +2471,143 @@ function renderOneGenerationRuleCard(rule, index) {
   if (pools.length) {
     blocks.push(
       `<div class="skill-sub"><div class="skill-sub-title">池（${pools.length}）</div><div class="skill-pool-grid">${pools
-        .map((p) => {
-          if (!p || typeof p !== "object") return "";
-          const n = Array.isArray(p.条目) ? p.条目.length : 0;
-          return `<article class="skill-pool-card">
-            <div class="skill-pool-name">${esc(String(p.名称 || p.pool_id || "池"))}</div>
-            ${skillChipRow([
-              p.绑定字段 && `绑 · ${p.绑定字段}`,
-              p.用途 && String(p.用途),
-              n ? `${n} 条` : "",
-            ])}
-            ${p.说明 ? `<p class="skill-pool-desc">${esc(clampPreviewText(String(p.说明), 120))}</p>` : ""}
-          </article>`;
-        })
+        .map((p) => renderGenerationPoolCard(p))
         .join("")}</div></div>`,
     );
   }
 
   return `<article class="skill-rule-card">${head}${blocks.join("")}</article>`;
+}
+
+function renderGenerationRecipeHtml(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const cards = rows
+    .map((row) => {
+      if (!row || typeof row !== "object") return "";
+      const comps = Array.isArray(row.组件) ? row.组件.map(String).join(" × ") : "";
+      return `<article class="skill-pool-card is-direction">
+        <div class="skill-pool-name">配方 · ${esc(String(row.目标字段 || "字段"))}</div>
+        ${skillChipRow([comps && `组件 · ${comps}`])}
+        ${row.组装 ? `<p class="skill-pool-desc">${esc(String(row.组装))}</p>` : ""}
+      </article>`;
+    })
+    .filter(Boolean);
+  return cards.length
+    ? `<div class="skill-method"><span class="skill-method-label">配方</span><div class="skill-pool-grid">${cards.join("")}</div></div>`
+    : "";
+}
+
+function renderGenerationExpressHtml(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const cards = rows
+    .map((row) => {
+      if (!row || typeof row !== "object") return "";
+      const ex = Array.isArray(row.例子) ? row.例子.filter(Boolean) : [];
+      return `<article class="skill-pool-card is-direction">
+        <div class="skill-pool-name">${esc(String(row.针对 || "表现"))}</div>
+        ${row.概括 ? `<p class="skill-pool-desc">${esc(String(row.概括))}</p>` : ""}
+        ${
+          ex.length
+            ? `<ul class="artifact-list">${ex.map((x) => `<li>${esc(String(x))}</li>`).join("")}</ul>`
+            : ""
+        }
+      </article>`;
+    })
+    .filter(Boolean);
+  return cards.length
+    ? `<div class="skill-method"><span class="skill-method-label">表现</span><div class="skill-pool-grid">${cards.join("")}</div></div>`
+    : "";
+}
+
+function renderGenerationGradeHtml(rows) {
+  const blocks = rows
+    .map((row) => {
+      if (!row || typeof row !== "object") return "";
+      const grades = Array.isArray(row.档位) ? row.档位 : [];
+      const tr = grades
+        .map((g) => {
+          if (!g || typeof g !== "object") return "";
+          return `<tr>
+            <td><code>${esc(String(g.值 || ""))}</code></td>
+            <td>${esc(String(g.概括 || ""))}</td>
+            <td>${esc(String(g.表象 || ""))}</td>
+          </tr>`;
+        })
+        .join("");
+      return `<div class="skill-sub">
+        <div class="skill-sub-title">分级表现 · ${esc(String(row.字段 || ""))}</div>
+        ${row.说明 ? `<p class="skill-pool-desc">${esc(String(row.说明))}</p>` : ""}
+        ${
+          tr
+            ? `<div class="skill-table-wrap"><table class="skill-field-table"><thead><tr><th>档</th><th>概括</th><th>表象</th></tr></thead><tbody>${tr}</tbody></table></div>`
+            : ""
+        }
+      </div>`;
+    })
+    .filter(Boolean);
+  return blocks.join("");
+}
+
+function generationPoolKind(pool) {
+  const raw = String(pool?.池型 || pool?.kind || pool?.类型 || "").trim();
+  if (/方向|类型|type/i.test(raw)) return "方向";
+  if (/元素|枚举|enum/i.test(raw)) return "元素";
+  if (pool?.方向 && typeof pool.方向 === "object") return "方向";
+  if (Array.isArray(pool?.条目) && pool.条目.length) return "元素";
+  return "";
+}
+
+function generationPoolDirections(pool) {
+  const dirs = pool?.方向;
+  if (!dirs) return [];
+  if (Array.isArray(dirs)) {
+    return dirs
+      .map((row) => {
+        if (typeof row === "string") return { name: row, text: "" };
+        if (!row || typeof row !== "object") return null;
+        return {
+          name: String(row.名 || row.name || row.方向 || "").trim(),
+          text: String(row.说明 || row.description || row.内容 || "").trim(),
+        };
+      })
+      .filter((x) => x && (x.name || x.text));
+  }
+  if (typeof dirs === "object") {
+    return Object.entries(dirs).map(([name, text]) => ({
+      name,
+      text: text == null ? "" : String(text),
+    }));
+  }
+  return [];
+}
+
+function renderGenerationPoolCard(p) {
+  if (!p || typeof p !== "object") return "";
+  const kind = generationPoolKind(p);
+  const dirs = generationPoolDirections(p);
+  const n = Array.isArray(p.条目) ? p.条目.length : 0;
+  const dirHtml = dirs.length
+    ? `<dl class="skill-pool-dirs">${dirs
+        .map(
+          (d) =>
+            `<div class="skill-pool-dir"><dt>${esc(d.name || "方向")}</dt>${
+              d.text ? `<dd>${esc(clampPreviewText(d.text, 160))}</dd>` : ""
+            }</div>`,
+        )
+        .join("")}</dl>`
+    : "";
+  return `<article class="skill-pool-card${kind === "方向" ? " is-direction" : ""}">
+            <div class="skill-pool-name">${esc(String(p.名称 || p.pool_id || "池"))}</div>
+            ${skillChipRow([
+              kind && `${kind}池`,
+              p.绑定字段 && `绑 · ${p.绑定字段}`,
+              p.用途 && String(p.用途),
+              kind === "元素" && n ? `${n} 条` : "",
+              kind === "方向" && dirs.length ? `${dirs.length} 向` : "",
+            ])}
+            ${p.说明 ? `<p class="skill-pool-desc">${esc(clampPreviewText(String(p.说明), 160))}</p>` : ""}
+            ${dirHtml}
+          </article>`;
 }
 
 function renderProductSchemaCard(fmt) {
@@ -2474,6 +2622,9 @@ function renderProductSchemaCard(fmt) {
           const req = spec.required === true ? "必填" : spec.required === false ? "可选" : "—";
           const desc = spec.description != null ? clampPreviewText(String(spec.description), 80) : "";
           const extra = [];
+          if (spec.粒度) extra.push(`粒度 ${spec.粒度}`);
+          if (spec.创作) extra.push(`创作 ${spec.创作}`);
+          if (spec.地板) extra.push(clampPreviewText(String(spec.地板), 60));
           if (Array.isArray(spec.allowed_values) && spec.allowed_values.length) {
             extra.push(
               `枚举 ${spec.allowed_values
@@ -3576,6 +3727,7 @@ function renderCreationFlowView(flowView, opts = {}) {
     <div class="flow-dag" data-flow-dag>
       <svg class="flow-dag-edges" aria-hidden="true"></svg>
       <div class="flow-dag-rows">${rows}</div>
+      <aside class="flow-dag-hint" hidden role="status"></aside>
     </div>
     ${suggestionHtml}
   </section>`;
@@ -3670,6 +3822,11 @@ function renderFlowGraphNode(s, interactive, opts = {}) {
   const selectable = Boolean(s.selectable) && interactive;
   const doneMenu = !isProto && runState === "done";
   const canReenter = doneMenu && interactive;
+  const canDelete =
+    doneMenu &&
+    interactive &&
+    s.role === "instance" &&
+    Boolean(s.repeatable);
   const runLabel = isProto
     ? selectable
       ? "可增殖"
@@ -3685,22 +3842,28 @@ function renderFlowGraphNode(s, interactive, opts = {}) {
     ? isProto
       ? "增殖"
       : "进入"
-    : "";
+    : canReenter
+      ? "进入"
+      : "";
   const actionHtml = actionLabel
     ? `<span class="flow-action">${esc(actionLabel)}</span>`
     : "";
   const doneMenuBtn = doneMenu
     ? `<span class="flow-node-menu-btn" data-flow-menu-trigger aria-hidden="true">⋯</span>`
     : "";
+  const blockedBy = Array.isArray(s.blockedBy) ? s.blockedBy : [];
+  const blockedAttr = blockedBy.length
+    ? ` data-flow-blocked="${escAttr(JSON.stringify(blockedBy))}"`
+    : "";
   const blocked =
-    !selectable && !doneMenu && s.blockedBy?.length
-      ? ` title="还差：${esc(s.blockedBy.join("、"))}"`
+    !selectable && !doneMenu && blockedBy.length
+      ? ` title="还差：${esc(blockedBy.join("、"))}"`
       : isProto && selectable
         ? ` title="确认当前编排，点一下新开一条产物再进入"`
         : selectable
           ? ` title="确认当前编排并进入"`
-          : doneMenu
-            ? ` title="查看产物或重新进入修改"`
+          : canReenter
+            ? ` title="进入这条产物继续改，继承原文；新开一条请点原型上的「增殖」"`
             : "";
   const currentAttr = runState === "current" ? ' aria-current="step"' : "";
   const clickable = selectable || doneMenu;
@@ -3708,9 +3871,9 @@ function renderFlowGraphNode(s, interactive, opts = {}) {
   const typeAttr = clickable ? ' type="button"' : "";
   const pickAttr = selectable ? ` data-flow-pick="${esc(s.id)}"` : "";
   const doneAttr = doneMenu
-    ? ` data-flow-done="${esc(s.id)}" data-flow-done-name="${escAttr(s.name)}" data-has-artifact="${s.hasArtifact ? "1" : "0"}" data-can-reenter="${canReenter ? "1" : "0"}" aria-haspopup="menu" aria-label="已完成：${escAttr(s.title || s.name)}"`
+    ? ` data-flow-done="${esc(s.id)}" data-flow-done-name="${escAttr(s.name)}" data-flow-label="${escAttr([s.name, s.title].filter(Boolean).join(" · ") || s.id)}" data-has-artifact="${s.hasArtifact ? "1" : "0"}" data-can-reenter="${canReenter ? "1" : "0"}" data-can-delete="${canDelete ? "1" : "0"}" aria-haspopup="menu" aria-label="${canReenter ? "进入继续修改" : "已完成"}：${escAttr(s.title || s.name)}"`
     : "";
-  const clickableClass = selectable
+  const clickableClass = selectable || canReenter
     ? " is-selectable"
     : doneMenu
       ? " is-done-menu"
@@ -3724,9 +3887,9 @@ function renderFlowGraphNode(s, interactive, opts = {}) {
   const originAttr =
     origin?.fromId ? ` data-flow-origin="${escAttr(origin.fromId)}"` : "";
   const metaHtml = compact
-    ? `<span class="flow-spawn-meta">${actionHtml || doneMenuBtn || `<span class="flow-run">${esc(runLabel)}</span>`}</span>`
+    ? `<span class="flow-spawn-meta">${actionHtml}${doneMenuBtn || (!actionHtml ? `<span class="flow-run">${esc(runLabel)}</span>` : "")}</span>`
     : `${actionHtml}${doneMenuBtn}`;
-  return `<${tag} class="flow-node${protoClass}${spawnClass}${clickableClass}${lockedClass}" data-flow-id="${escAttr(s.id)}" data-flow-name="${escAttr(s.name)}" data-flow-deps="${depsJson}" data-run="${escAttr(runState)}"${fromAttr}${originAttr}${currentAttr}${typeAttr}${pickAttr}${doneAttr}${blocked}>
+  return `<${tag} class="flow-node${protoClass}${spawnClass}${clickableClass}${lockedClass}" data-flow-id="${escAttr(s.id)}" data-flow-name="${escAttr(s.name)}" data-flow-deps="${depsJson}" data-run="${escAttr(runState)}"${fromAttr}${originAttr}${blockedAttr}${currentAttr}${typeAttr}${pickAttr}${doneAttr}${blocked}>
     <span class="flow-node-main">
       ${compact ? "" : `<span class="flow-run">${esc(runLabel)}</span>`}
       <span class="flow-name">${nameLabel}${occ}</span>
@@ -3741,6 +3904,47 @@ function renderFlowGraphNode(s, interactive, opts = {}) {
   </${tag}>`;
 }
 
+function parseFlowJsonList(raw) {
+  try {
+    const list = JSON.parse(raw || "[]");
+    return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function flowNodeHintName(el) {
+  if (!el) return "";
+  return (
+    el.getAttribute("data-flow-label") ||
+    el.querySelector(".flow-title")?.textContent?.trim() ||
+    el.getAttribute("data-flow-name") ||
+    el.getAttribute("data-flow-id") ||
+    ""
+  );
+}
+
+function flowNodeRunLabel(el) {
+  const run = el?.getAttribute("data-run");
+  if (run === "done") return "已完成";
+  if (run === "current") return "进行中";
+  if (el?.classList.contains("is-selectable")) return "可进入";
+  if (el?.classList.contains("is-locked")) return "待前置";
+  return "未执行";
+}
+
+function flowDagNodeIndex(dag) {
+  const byId = new Map();
+  const byName = new Map();
+  for (const el of dag.querySelectorAll("[data-flow-id]")) {
+    const id = el.getAttribute("data-flow-id");
+    const name = el.getAttribute("data-flow-name");
+    if (id) byId.set(id, el);
+    if (name && !byName.has(name)) byName.set(name, el);
+  }
+  return (ref) => byId.get(String(ref)) || byName.get(String(ref)) || null;
+}
+
 function paintFlowDagEdges(dag) {
   if (!dag) return;
   const svg = dag.querySelector(".flow-dag-edges");
@@ -3750,15 +3954,6 @@ function paintFlowDagEdges(dag) {
     svg.replaceChildren();
     return;
   }
-  const byId = new Map();
-  const byName = new Map();
-  for (const el of nodes) {
-    const id = el.getAttribute("data-flow-id");
-    const name = el.getAttribute("data-flow-name");
-    if (id) byId.set(id, el);
-    if (name && !byName.has(name)) byName.set(name, el);
-  }
-  const findNode = (ref) => byId.get(ref) || byName.get(ref) || null;
   const dagRect = dag.getBoundingClientRect();
   const w = Math.max(dag.scrollWidth, dag.clientWidth, 1);
   const h = Math.max(dag.scrollHeight, dag.clientHeight, 1);
@@ -3766,20 +3961,17 @@ function paintFlowDagEdges(dag) {
   svg.setAttribute("height", String(h));
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
 
+  const findNode = flowDagNodeIndex(dag);
   const paths = [];
   for (const el of nodes) {
-    let deps = [];
-    try {
-      deps = JSON.parse(el.getAttribute("data-flow-deps") || "[]");
-    } catch {
-      deps = [];
-    }
-    if (!Array.isArray(deps) || !deps.length) continue;
+    const deps = parseFlowJsonList(el.getAttribute("data-flow-deps"));
+    if (!deps.length) continue;
+    const toId = el.getAttribute("data-flow-id") || "";
     const toRect = el.getBoundingClientRect();
     const x2 = toRect.left - dagRect.left + toRect.width / 2 + dag.scrollLeft;
     const y2 = toRect.top - dagRect.top + dag.scrollTop;
     for (const ref of deps) {
-      const from = findNode(String(ref));
+      const from = findNode(ref);
       if (!from || from === el) continue;
       const fromId = from.getAttribute("data-flow-id") || "";
       if (el.getAttribute("data-flow-from") === fromId) continue;
@@ -3787,19 +3979,15 @@ function paintFlowDagEdges(dag) {
       const x1 =
         fromRect.left - dagRect.left + fromRect.width / 2 + dag.scrollLeft;
       const y1 = fromRect.bottom - dagRect.top + dag.scrollTop;
-      const dy = Math.max(24, (y2 - y1) * 0.45);
+      const dy = Math.max(28, (y2 - y1) * 0.42);
       const d = `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${x1.toFixed(1)} ${(y1 + dy).toFixed(1)}, ${x2.toFixed(1)} ${(y2 - dy).toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`;
       const belong = el.getAttribute("data-flow-origin") === fromId;
-      const active =
-        from.classList.contains("is-selectable") ||
-        el.classList.contains("is-selectable") ||
-        from.getAttribute("data-run") === "done";
-      const cls = `flow-dag-edge${active ? " is-lit" : ""}${belong ? " flow-dag-edge--belong" : ""}`;
+      const cls = `flow-dag-edge${belong ? " flow-dag-edge--belong" : ""}`;
       const marker = belong
         ? "url(#flow-dag-arrow-belong)"
         : "url(#flow-dag-arrow)";
       paths.push(
-        `<path class="${cls}" d="${d}" fill="none" marker-end="${marker}" />`,
+        `<path class="${cls}" d="${d}" fill="none" marker-end="${marker}" data-from="${escAttr(fromId)}" data-to="${escAttr(toId)}" />`,
       );
     }
   }
@@ -3807,10 +3995,210 @@ function paintFlowDagEdges(dag) {
     <marker id="flow-dag-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1 L 8 5 L 0 9 z" class="flow-dag-arrowhead" />
     </marker>
+    <marker id="flow-dag-arrow-in" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" class="flow-dag-arrowhead flow-dag-arrowhead--in" />
+    </marker>
+    <marker id="flow-dag-arrow-out" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" class="flow-dag-arrowhead flow-dag-arrowhead--out" />
+    </marker>
     <marker id="flow-dag-arrow-belong" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M 0 1 L 8 5 L 0 9 z" class="flow-dag-arrowhead flow-dag-arrowhead--belong" />
     </marker>
   </defs>${paths.join("")}`;
+
+  const traceId = dag.getAttribute("data-flow-trace");
+  if (traceId) {
+    const node = nodes.find((el) => el.getAttribute("data-flow-id") === traceId);
+    if (node) applyFlowDagTrace(dag, node);
+    else clearFlowDagTrace(dag);
+  }
+}
+
+function flowHintItemsHtml(items, emptyText) {
+  if (!items.length) {
+    return `<p class="flow-dag-hint-empty">${esc(emptyText)}</p>`;
+  }
+  return `<ul class="flow-dag-hint-list">${items
+    .map(
+      (item) =>
+        `<li><span class="flow-dag-hint-item-name">${esc(item.name)}</span><span class="flow-dag-hint-item-run">${esc(item.run)}</span></li>`,
+    )
+    .join("")}</ul>`;
+}
+
+function placeFlowDagHint(dag, node) {
+  const hint = dag.querySelector(".flow-dag-hint");
+  if (!hint || hint.hidden) return;
+  const dagRect = dag.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  const hintW = hint.offsetWidth;
+  const hintH = hint.offsetHeight;
+  const pad = 8;
+  let left = nodeRect.right - dagRect.left + dag.scrollLeft + 12;
+  let top = nodeRect.top - dagRect.top + dag.scrollTop;
+  const maxLeft = Math.max(pad, dag.scrollWidth - hintW - pad);
+  if (left > maxLeft) {
+    left = nodeRect.left - dagRect.left + dag.scrollLeft - hintW - 12;
+  }
+  left = Math.min(maxLeft, Math.max(pad, left));
+  const maxTop = Math.max(pad, dag.scrollHeight - hintH - pad);
+  if (top > maxTop) top = maxTop;
+  if (top < pad) top = pad;
+  hint.style.left = `${left}px`;
+  hint.style.top = `${top}px`;
+}
+
+function applyFlowDagTrace(dag, node) {
+  const findNode = flowDagNodeIndex(dag);
+  const nodeId = node.getAttribute("data-flow-id") || "";
+  const nodeName = node.getAttribute("data-flow-name") || "";
+  const refs = new Set([nodeId, nodeName].filter(Boolean));
+  const depRefs = parseFlowJsonList(node.getAttribute("data-flow-deps"));
+  const blocked = new Set(parseFlowJsonList(node.getAttribute("data-flow-blocked")));
+  const relatedIds = new Set([nodeId]);
+
+  dag.querySelectorAll(".flow-dag-edge").forEach((path) => {
+    const fromId = path.getAttribute("data-from") || "";
+    const toId = path.getAttribute("data-to") || "";
+    const isIn = toId === nodeId;
+    const isOut = fromId === nodeId;
+    path.classList.toggle("is-trace-in", isIn);
+    path.classList.toggle("is-trace-out", isOut && !isIn);
+    if (isIn) {
+      path.setAttribute("marker-end", "url(#flow-dag-arrow-in)");
+      relatedIds.add(fromId);
+    } else if (isOut) {
+      path.setAttribute("marker-end", "url(#flow-dag-arrow-out)");
+      relatedIds.add(toId);
+    } else {
+      path.setAttribute(
+        "marker-end",
+        path.classList.contains("flow-dag-edge--belong")
+          ? "url(#flow-dag-arrow-belong)"
+          : "url(#flow-dag-arrow)",
+      );
+    }
+  });
+
+  dag.querySelectorAll("[data-flow-id]").forEach((el) => {
+    const id = el.getAttribute("data-flow-id") || "";
+    el.classList.toggle("is-trace-root", el === node);
+    el.classList.toggle("is-trace-related", el !== node && relatedIds.has(id));
+  });
+
+  const deps = depRefs
+    .map((ref) => {
+      const el = findNode(ref);
+      if (el && el.getAttribute("data-flow-from") === nodeId) return null;
+      return {
+        name: el ? flowNodeHintName(el) : ref,
+        run: el
+          ? flowNodeRunLabel(el)
+          : blocked.has(ref)
+            ? "未齐"
+            : "",
+      };
+    })
+    .filter(Boolean);
+
+  const downstream = [...dag.querySelectorAll("[data-flow-id]")]
+    .filter((el) => {
+      if (el === node) return false;
+      if (el.getAttribute("data-flow-from") === nodeId) return false;
+      return parseFlowJsonList(el.getAttribute("data-flow-deps")).some((ref) =>
+        refs.has(ref),
+      );
+    })
+    .map((el) => ({
+      name: flowNodeHintName(el),
+      run: flowNodeRunLabel(el),
+    }));
+
+  const hint = dag.querySelector(".flow-dag-hint");
+  if (hint) {
+    hint.innerHTML = `<p class="flow-dag-hint-kicker">依赖关系</p>
+      <p class="flow-dag-hint-name">${esc(flowNodeHintName(node))}</p>
+      <div class="flow-dag-hint-sec">
+        <div class="flow-dag-hint-label">依赖</div>
+        ${flowHintItemsHtml(deps, "无前置")}
+      </div>
+      <div class="flow-dag-hint-sec">
+        <div class="flow-dag-hint-label">下游</div>
+        ${flowHintItemsHtml(downstream, "无下游")}
+      </div>`;
+    hint.hidden = false;
+    placeFlowDagHint(dag, node);
+  }
+  dag.classList.add("is-tracing");
+  dag.setAttribute("data-flow-trace", nodeId);
+}
+
+function clearFlowDagTrace(dag) {
+  if (!dag) return;
+  dag.classList.remove("is-tracing");
+  dag.removeAttribute("data-flow-trace");
+  dag.querySelectorAll(".flow-dag-edge").forEach((path) => {
+    path.classList.remove("is-trace-in", "is-trace-out");
+    path.setAttribute(
+      "marker-end",
+      path.classList.contains("flow-dag-edge--belong")
+        ? "url(#flow-dag-arrow-belong)"
+        : "url(#flow-dag-arrow)",
+    );
+  });
+  dag.querySelectorAll("[data-flow-id]").forEach((el) => {
+    el.classList.remove("is-trace-root", "is-trace-related");
+  });
+  const hint = dag.querySelector(".flow-dag-hint");
+  if (hint) {
+    hint.hidden = true;
+    hint.replaceChildren();
+  }
+}
+
+function setFlowDagTrace(dag, node) {
+  if (!dag || !node) return;
+  if (dag.getAttribute("data-flow-trace") === node.getAttribute("data-flow-id")) {
+    return;
+  }
+  applyFlowDagTrace(dag, node);
+}
+
+function wireFlowDagTrace(dag) {
+  dag.addEventListener("pointerover", (e) => {
+    const node = e.target.closest("[data-flow-id]");
+    if (node && dag.contains(node)) setFlowDagTrace(dag, node);
+  });
+  dag.addEventListener("pointerleave", () => {
+    const focused = dag.querySelector("[data-flow-id]:focus");
+    if (focused) {
+      applyFlowDagTrace(dag, focused);
+      return;
+    }
+    clearFlowDagTrace(dag);
+  });
+  dag.addEventListener("focusin", (e) => {
+    const node = e.target.closest("[data-flow-id]");
+    if (node && dag.contains(node)) setFlowDagTrace(dag, node);
+  });
+  dag.addEventListener("focusout", (e) => {
+    const next = e.relatedTarget;
+    if (next && dag.contains(next) && next.closest("[data-flow-id]")) return;
+    if (dag.matches(":hover")) return;
+    clearFlowDagTrace(dag);
+  });
+  dag.addEventListener(
+    "scroll",
+    () => {
+      const id = dag.getAttribute("data-flow-trace");
+      if (!id) return;
+      const node = [...dag.querySelectorAll("[data-flow-id]")].find(
+        (el) => el.getAttribute("data-flow-id") === id,
+      );
+      if (node) placeFlowDagHint(dag, node);
+    },
+    { passive: true },
+  );
 }
 
 function wireCreationFlowGraph(root, handlers) {
@@ -3825,16 +4213,40 @@ function wireCreationFlowGraph(root, handlers) {
     });
   });
   root.querySelectorAll("[data-flow-done]").forEach((el) => {
+    const stepId = el.getAttribute("data-flow-done");
+    const canReenter = el.getAttribute("data-can-reenter") === "1";
     const openMenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
       showFlowNodeMenu(el, e.clientX, e.clientY, handlers);
     };
-    el.addEventListener("click", openMenu);
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.target.closest("[data-flow-menu-trigger]")) {
+        openMenu(e);
+        return;
+      }
+      if (canReenter && stepId) {
+        handlers.onReenterCreationStep?.(stepId);
+        return;
+      }
+      openMenu(e);
+    });
     el.addEventListener("contextmenu", openMenu);
     el.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" && e.key !== " " && e.key !== "ContextMenu") return;
+      if (e.key === "ContextMenu") {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        showFlowNodeMenu(el, rect.left, rect.bottom + 4, handlers);
+        return;
+      }
+      if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
+      if (canReenter && stepId) {
+        handlers.onReenterCreationStep?.(stepId);
+        return;
+      }
       const rect = el.getBoundingClientRect();
       showFlowNodeMenu(el, rect.left, rect.bottom + 4, handlers);
     });
@@ -3863,6 +4275,7 @@ function wireCreationFlowGraph(root, handlers) {
       dag.querySelectorAll(".flow-family").forEach((n) => ro.observe(n));
     }
     window.addEventListener("resize", paint, { passive: true });
+    wireFlowDagTrace(dag);
   });
 }
 
@@ -3995,6 +4408,7 @@ function renderReviewWorkspace(review, opts = {}) {
   return `
     <section class="workspace-review" data-review="1" data-review-kind="${esc(copy.kind)}" data-message-id="${esc(contextId)}" data-can-edit="0" data-has-context="${hasContext}">
       <header class="workspace-review-head workspace-review-head--slim">
+        ${opts.leaveStepHtml || ""}
         <div class="workspace-review-titles">
           <span class="workspace-review-kicker">${esc(copy.kicker)}</span>
           <h2 class="workspace-review-title">${esc(label)}</h2>
@@ -4512,6 +4926,7 @@ function renderSpeakWorkspace(view) {
     : "";
   return `<section class="workspace-intent">
     <div class="workspace-intent-head">
+      ${leaveStepControlHtml(view)}
       ${
         flowInteractive
           ? workspaceViewSwitchHtml("flow")
@@ -4519,7 +4934,6 @@ function renderSpeakWorkspace(view) {
               canOfferSaveProduct(view) ? "落档" : "说话"
             }</span>`
       }
-      ${leaveStepControlHtml(view)}
     </div>
     <h2 class="workspace-intent-title">${esc(title)}</h2>
     <p class="workspace-intent-hint">${esc(hint)}</p>
@@ -4534,9 +4948,9 @@ function renderSpeakWorkspace(view) {
 function renderAnswerWorkspaceShell(view) {
   return `<section class="workspace-answer" id="workspace-answer-slot">
     <header class="workspace-answer-head workspace-answer-head--slim">
+      ${leaveStepControlHtml(view)}
       <span class="workspace-surface-kicker">答题</span>
       <p class="workspace-answer-hint">点字母选中，文案可改；点卡片展开，点顶条收起。</p>
-      ${leaveStepControlHtml(view)}
     </header>
   </section>`;
 }
@@ -4602,10 +5016,12 @@ function mountReviewWorkspace(stage, view, handlers, opts = {}) {
     renderReviewWorkspace(view.reviewArtifact, {
       hideAskSidecar: opts.hideAskSidecar === true,
       sourceMessage: resolveReviewSourceMessage(view),
+      leaveStepHtml: leaveStepControlHtml(view),
     }) + askSlot;
   wireMessageFeedActions(stage, handlers);
   wireMessageContextMenu(stage, handlers);
   wireCreationFlowGraph(stage, handlers);
+  wireLeaveStepControl(stage, handlers);
   wireOpeningPicker();
   if (opts.mountAskCard) {
     const askHost = document.getElementById("workspace-review-ask");
@@ -4696,13 +5112,13 @@ export function renderMessageFeed(view, loading, handlers = {}) {
       stage.innerHTML = `
         <div class="workspace-pending" id="msg-live-pending">
           <header class="workspace-pending-head">
+            ${leaveStepControlHtml(view)}
             <span class="msg-tag">${esc(label)}</span>
             <span class="msg-live-indicator">流式输出中</span>
-            ${renderRetryRunButton()}
           </header>
           <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
         </div>`;
-      wireRetryRun(stage, handlers);
+      wireLeaveStepControl(stage, handlers);
       return;
     }
 

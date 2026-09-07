@@ -546,7 +546,7 @@ function resolveComposer(view, loading) {
 
 function composerModeChip(spec) {
   const id = spec.task?.id;
-  if (id !== "speak" && id !== "answer" && id !== "review") return "";
+  if (id !== "speak" && id !== "answer" && id !== "review" && id !== "busy") return "";
   const label = spec.task.label || "";
   const tip = [spec.taskTitle, spec.taskHint].filter(Boolean).join(" — ");
   const tone = spec.acceptAction?.tone ? ` data-tone="${esc(spec.acceptAction.tone)}"` : "";
@@ -584,13 +584,6 @@ function syncThemeMenuUi() {
   document.querySelectorAll("[data-present-chrome].more-theme-item").forEach((btn) => {
     btn.classList.toggle("is-active", btn.getAttribute("data-present-chrome") === chromeMeta.id);
   });
-}
-
-function leaveStepButtonHtml(spec) {
-  if (!spec.leaveStep) return "";
-  return `<button type="button" class="btn" data-act="leave_step" title="${esc(
-    spec.leaveStep.title || "先不写这一步，回到节点选择",
-  )}">${esc(spec.leaveStep.label)}</button>`;
 }
 
 function stashComposerDraftFromDom() {
@@ -650,20 +643,22 @@ function renderComposer(view, loading) {
     host._enterHandler = null;
   }
   const spec = resolveComposer(view, loading);
-  const leaveAct = view.actions?.find((a) => a.type === "leave_step");
-  if (leaveAct && spec.mode !== "waiting" && spec.mode !== "idle") {
-    spec.leaveStep = {
-      label: leaveAct.label || "返回节点",
-      title: "先不写这一步，回到节点选择",
-    };
-  }
-
   if (spec.mode === "waiting") {
-    root.innerHTML = `<div class="composer-waiting">
-      <span>${esc(spec.text)}</span>
-      <button type="button" class="btn" data-act="retry_run" title="停止当前生成并重试">停止并重试</button>
-    </div>`;
+    const shell = composerInputShell(
+      { ...spec, task: { ...(spec.task || {}), id: "busy", label: spec.task?.label || "生成中" } },
+      {
+        textareaHtml: `<textarea id="composer-input" rows="1" placeholder="生成中…可提前停止或重roll"></textarea>`,
+        trailing: `<button type="button" class="btn composer-btn-icon" data-act="abort_run" title="提前停止" aria-label="提前停止">□</button>
+          <button type="button" class="btn composer-btn-icon" data-act="retry_run" title="重roll" aria-label="重roll">🔄</button>`,
+      },
+    );
+    root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
+    root.querySelector("#composer-form")?.addEventListener("submit", (e) => e.preventDefault());
+    root.querySelector("[data-act=abort_run]")?.addEventListener("click", () => abortRun());
     root.querySelector("[data-act=retry_run]")?.addEventListener("click", () => retryRun());
+    applyPendingComposerDraft();
+    const input = $("composer-input");
+    if (input) autosizeComposerInput(input);
     return;
   }
   if (spec.mode === "idle") {
@@ -878,7 +873,7 @@ function renderComposer(view, loading) {
     : spec.placeholder;
   const shell = composerInputShell(spec, {
     textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(placeholder)}"></textarea>`,
-    trailing: `${leaveStepButtonHtml(spec)}<button type="button" class="btn composer-btn${
+    trailing: `<button type="button" class="btn composer-btn${
       sendIsPrimary ? " btn-primary" : ""
     }" data-act="revise" title="${esc(
       acceptOnEmpty
@@ -889,7 +884,6 @@ function renderComposer(view, loading) {
   root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
   wireComposerForm({ acceptOnEmpty });
   root.querySelector("[data-act=accept]")?.addEventListener("click", () => runAction("accept"));
-  root.querySelector("[data-act=leave_step]")?.addEventListener("click", () => runAction("leave_step"));
   applyPendingComposerDraft();
 }
 
@@ -1953,6 +1947,23 @@ async function retryRun() {
   }
 }
 
+async function abortRun() {
+  if (!sessionId) return;
+  const seq = beginUiRequest();
+  try {
+    renderSession(lastView, true);
+    const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/actions`, {
+      method: "POST",
+      body: JSON.stringify({ action: "abort_run" }),
+    });
+    if (isStaleUiRequest(seq)) return;
+    renderSession(view, false);
+  } catch (err) {
+    if (isStaleUiRequest(seq)) return;
+    if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+  }
+}
+
 function startLivePoll() {
   stopLivePoll();
   if (!sessionId) return;
@@ -2009,6 +2020,11 @@ function renderSession(view, loading = false) {
     onReenterCreationStep: (stepId) =>
       runAction("pick_step", { stepId, reenter: true }),
     onViewStepArtifact: (stepId, name) => showStepArtifactDialog(stepId, name),
+    onDeleteCreationStep: (stepId, name) => {
+      const label = name ? `${name}` : stepId;
+      if (!confirm(`删除「${label}」这条产物？会从图上拿掉，不可恢复。`)) return;
+      void runAction("delete_step", { stepId });
+    },
     onSpawnCreationStep: (moduleName) => runAction("spawn_step", { moduleName }),
     onLeaveCreationStep: () => runAction("leave_step"),
     onEnterPlay: () => enterPlayNow(),

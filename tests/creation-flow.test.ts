@@ -28,6 +28,8 @@ import {
   hasSelectableCreationWork,
   hasAcceptedCloserStep,
   removeUnstartedInstance,
+  removeRepeatableInstance,
+  pruneRepeatableArtifactContent,
   looksLikeCreationFlowDoc,
   parseCreationFlow,
   pickRecordedStepId,
@@ -37,7 +39,6 @@ import {
   parseRecipeYaml,
   parseSelectedRecipeRef,
   resolveDesignStepBinding,
-  shouldSkipModuleOpening,
   isProgressPointerTag,
   stringifyCreationFlow,
   stripReviseSteps,
@@ -776,31 +777,6 @@ modules:
       美学纲领与交互范式: "shown",
     });
 
-    expect(
-      shouldSkipModuleOpening({
-        demand: "丧尸世界只有我不会被感染",
-        dependsOn: [],
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipModuleOpening({
-        demand: "丧尸世界只有我不会被感染",
-        dependsOn: ["美学纲领与交互范式"],
-      }),
-    ).toBe(false);
-    expect(
-      shouldSkipModuleOpening({
-        demand: "",
-        dependsOn: [],
-      }),
-    ).toBe(false);
-    expect(
-      shouldSkipModuleOpening({
-        demand: "已有需求",
-        dependsOn: [],
-        phase: "shown",
-      }),
-    ).toBe(false);
     expect(isProgressPointerTag("创作.当前步骤")).toBe(true);
     expect(isProgressPointerTag("设计.美学纲领与交互范式")).toBe(false);
     expect(isProgressPointerTag("设计.创作流程")).toBe(false);
@@ -1251,6 +1227,93 @@ modules:
     expect(kept.steps.map((s) => s.id)).toEqual(next.steps.map((s) => s.id));
     const accepted = removeUnstartedInstance(flow, "生成规则#1", ["生成规则#1"]);
     expect(accepted.steps.some((s) => s.id === "生成规则#1")).toBe(true);
+  });
+
+  it("removeRepeatableInstance drops accepted spawn and closer dep", () => {
+    const flow = parseCreationFlow(`{
+      "status": "open",
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "id": "生成规则", "name": "生成规则", "role": "prototype", "depends_on": ["美学纲领与交互范式"] },
+        { "id": "生成规则#1", "name": "生成规则", "role": "instance", "from": "生成规则", "depends_on": ["美学纲领与交互范式"], "params": { "rule_id": "core-female-roles" } },
+        { "name": "开场白与开场变量", "depends_on": ["美学纲领与交互范式", "生成规则#1"] }
+      ]
+    }`)!;
+    const dropped = removeRepeatableInstance({
+      flow,
+      stepId: "生成规则#1",
+      catalog: sampleCatalog,
+    });
+    expect("error" in dropped).toBe(false);
+    if ("error" in dropped) return;
+    expect(dropped.flow.steps.map((s) => s.id)).toEqual([
+      "美学纲领与交互范式",
+      "生成规则",
+      "开场白与开场变量",
+    ]);
+    expect(
+      dropped.flow.steps.find((s) => s.name === "开场白与开场变量")?.depends_on,
+    ).toEqual(["美学纲领与交互范式"]);
+  });
+
+  it("removeRepeatableInstance blocks when another instance depends on it", () => {
+    const flow = parseCreationFlow(`{
+      "steps": [
+        { "name": "美学纲领与交互范式", "depends_on": [] },
+        { "id": "生成规则", "name": "生成规则", "role": "prototype", "depends_on": ["美学纲领与交互范式"] },
+        { "id": "生成规则#1", "name": "生成规则", "role": "instance", "from": "生成规则", "depends_on": ["美学纲领与交互范式"], "params": { "target": "4位核心女性", "rule_id": "core-female-roles" } },
+        { "id": "具体实例", "name": "具体实例", "role": "prototype", "depends_on": ["生成规则"] },
+        { "id": "具体实例#1", "name": "具体实例", "role": "instance", "from": "具体实例", "depends_on": ["生成规则#1"] }
+      ]
+    }`)!;
+    const blocked = removeRepeatableInstance({
+      flow,
+      stepId: "生成规则#1",
+      catalog: sampleCatalog,
+    });
+    expect(blocked).toMatchObject({ error: expect.stringContaining("具体实例") });
+    const ok = removeRepeatableInstance({
+      flow,
+      stepId: "具体实例#1",
+      catalog: sampleCatalog,
+    });
+    expect("error" in ok).toBe(false);
+  });
+
+  it("pruneRepeatableArtifactContent strips the deleted rule_id", () => {
+    const raw = JSON.stringify({
+      schema: "context-fragment.v1",
+      技能: "生成规则",
+      brief: "两条规则",
+      正文: {
+        rules: [
+          { rule_id: "core-female-roles", 对象: "女臣" },
+          { rule_id: "zombies", 对象: "丧尸" },
+        ],
+      },
+    });
+    const step = {
+      id: "生成规则#1",
+      name: "生成规则",
+      role: "instance" as const,
+      depends_on: [],
+      params: { rule_id: "core-female-roles" },
+    };
+    const pruned = JSON.parse(
+      pruneRepeatableArtifactContent({
+        raw,
+        step,
+        remainingSameModule: 1,
+      }),
+    );
+    expect(pruned.正文.rules.map((r) => r.rule_id)).toEqual(["zombies"]);
+    expect(
+      pruneRepeatableArtifactContent({
+        raw,
+        step,
+        remainingSameModule: 0,
+      }),
+    ).toBe("");
   });
 
   it("blocks 具体实例 spawn until a 生成规则 instance is accepted", () => {

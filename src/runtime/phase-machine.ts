@@ -421,7 +421,8 @@ export function canApplyEvent(
         reason?.kind === "approve_step" ||
         reason?.kind === "worker_questions" ||
         reason?.kind === "input" ||
-        reason?.kind === "revision"
+        reason?.kind === "revision" ||
+        reason?.kind === "review_artifact"
       );
     case "creation_step_pick_awaited":
       return session.phase === "running";

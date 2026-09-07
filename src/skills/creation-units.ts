@@ -622,6 +622,17 @@ export function extractUnitContentFromDraft(
   return null;
 }
 
+/** 从图上删除产物时拿掉该单位的验收切片 */
+export function dropAcceptedUnitContent(
+  existingRaw: unknown,
+  unitId: string,
+): string {
+  const store = parseAcceptedContentStore(existingRaw);
+  const id = normalizeCreationUnitId(unitId);
+  if (id) delete store.units[id];
+  return JSON.stringify(store, null, 2);
+}
+
 /** 写入/覆盖某一单位的最后验收内容 */
 export function upsertAcceptedUnitContent(
   existingRaw: unknown,

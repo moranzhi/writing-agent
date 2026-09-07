@@ -13,6 +13,36 @@ export const MAINTAIN_GENERATE_TAG = "运行.本轮.旁观.生成抽样";
 
 type PoolEntry = { id?: string; 内容?: string; 权重?: number; weight?: number };
 
+const DIRECTION_KINDS = new Set(["方向", "方向池", "type", "类型", "类型池"]);
+const ELEMENT_KINDS = new Set(["元素", "元素池", "enum", "枚举", "枚举池"]);
+
+function poolKindToken(pool: Record<string, unknown>): string | undefined {
+  return (
+    asString(pool.池型) ??
+    asString(pool.kind) ??
+    asString(pool.类型) ??
+    asString(pool.pool_type)
+  );
+}
+
+/** 方向池给 LLM 当创作范围，不能程序加权抽。 */
+export function isElementPool(pool: Record<string, unknown>): boolean {
+  const kind = poolKindToken(pool);
+  if (kind && DIRECTION_KINDS.has(kind)) return false;
+  if (kind && ELEMENT_KINDS.has(kind)) return true;
+  const dirs = pool.方向;
+  const hasDirection =
+    (dirs != null &&
+      typeof dirs === "object" &&
+      !Array.isArray(dirs) &&
+      Object.keys(dirs as object).length > 0) ||
+    (Array.isArray(dirs) && dirs.length > 0);
+  const entries = pool.条目 ?? pool.entries;
+  const hasEntries = Array.isArray(entries) && entries.length > 0;
+  if (hasDirection && !hasEntries) return false;
+  return hasEntries;
+}
+
 function asString(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
@@ -61,6 +91,7 @@ export function buildChanceBatchFromGenerationRule(
   for (const poolRaw of pools) {
     if (!poolRaw || typeof poolRaw !== "object" || Array.isArray(poolRaw)) continue;
     const pool = poolRaw as Record<string, unknown>;
+    if (!isElementPool(pool)) continue;
     const poolId =
       asString(pool.pool_id) ?? asString(pool.池id) ?? asString(pool.名称);
     const entries = (pool.条目 ?? pool.entries) as PoolEntry[] | undefined;

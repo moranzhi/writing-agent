@@ -1410,6 +1410,31 @@ export class SessionManager {
     return this.toView(id);
   }
 
+  /** 中止当前生成，不重跑；回到生成前的等待面或分层图。 */
+  async abortRun(id: string): Promise<SessionView> {
+    const s = this.require(id);
+    const session = s.runtime.getSession();
+    if (session.phase !== "running" || session.waitingReason) {
+      return this.toView(id);
+    }
+    const cutoff = s.runMessageCutoff ?? s.messages.length;
+    s.messages = s.messages.slice(0, cutoff);
+    try {
+      const owned = await this.runExclusive(id, s, async () => {
+        s.runtime.abortCurrentRun();
+      });
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 停止生成失败", detail);
+      await this.recoverFailedRun(s, detail);
+    }
+    s.messages.push(this.msg("system", "已停止生成。"));
+    this.syncCreationDialogue(s);
+    this.persist(s);
+    return this.toView(id);
+  }
+
   /** 删除消息及其后的对话 */
   async deleteMessage(id: string, messageId: string): Promise<SessionView> {
     const s = this.require(id);
@@ -1686,6 +1711,27 @@ export class SessionManager {
     return this.toView(id);
   }
 
+  async deleteStep(id: string, stepId: string): Promise<SessionView> {
+    const s = this.require(id);
+    try {
+      const owned = await this.runExclusive(id, s, async () => {
+        await this.confirmPendingFlowPlan(s);
+        const waiting = s.runtime.getSession().waitingReason?.kind;
+        if (waiting !== "pick_creation_step") {
+          throw new Error("当前不是删除产物的时机");
+        }
+        await s.runtime.deleteCreationStep(stepId);
+      });
+      if (!owned) return this.toView(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error("[会话] 删除产物失败", detail);
+      s.messages.push(this.msg("system", formatRuntimeError(detail)));
+    }
+    this.persist(s);
+    return this.toView(id);
+  }
+
   /** 已点进技能步、尚未验收：可退回分层图（误点可增殖节点时用） */
   private canOfferLeaveCreationStep(
     s: ManagedSession,
@@ -1699,10 +1745,21 @@ export class SessionManager {
       return false;
     }
     const kind = reason?.kind;
+    if (session.phase === "running" && !kind) {
+      return Boolean(
+        s.runtime.getBlackboard().getContentByTag(CREATION_FLOW_TAG)?.trim(),
+      );
+    }
+    if (kind === "review_artifact") {
+      return Boolean(
+        s.runtime.getBlackboard().getContentByTag(CREATION_FLOW_TAG)?.trim(),
+      );
+    }
     if (
       kind !== "worker_questions" &&
       kind !== "input" &&
-      kind !== "revision"
+      kind !== "revision" &&
+      kind !== "approve_step"
     ) {
       return false;
     }
