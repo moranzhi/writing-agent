@@ -34,7 +34,7 @@ boundary: |
 准备收成可进游玩的规格。请确认或补充：
 
 1. 还有没有「绝不能瞎发挥」的前提？（一句一条）
-2. 槽位是否按上游拓扑？（世界模拟默认：主世界层+转述；写手默认：大纲+章节）有无要改的勾选？
+2. 槽位是否按上游拓扑？（世界模拟默认：仅主世界层；转述/旁观默认关；写手默认：大纲+章节）有无要改的勾选？
 3. 若已有「上下文投影排序」，是否按该表收成？（不要在本步重排）
 4. 要不要表/状态门控？（不要就写「不要」）
 
@@ -57,15 +57,16 @@ boundary: |
 执行顺序：
 1. 复述站位、体验内核、禁忌；矛盾处 askUser 1 点。
 2. 写入 `play_slots`（世界模拟）或等价写手槽；**workers 只含白名单 ref**：
-   - world_sim 每轮（顺序）：world-simulator（gm）→ role-decide（仅 perspective 开）→ narrator → auditor
+   - world_sim 默认：仅 world-simulator（gm）；可选 role-decide / narrator / auditor
+   - world_sim 每轮顺序（启用的槽）：world-simulator（gm）→ role-decide（仅 perspective 开）→ narrator（仅开转述）→ auditor
    - world_sim 机遇：`play_slots.chance` 开时 gm harness 获批量工具；可另声明 `chance` ref（`invocation: on_demand`）供显式调度
    - writing：outline / chapter-writer
    - 程序也会按 play_slots 展开；你仍应写出与槽一致的 workers[]（含 acceptance），便于人读验收。
 3. **禁止**自造 ref、禁止添加 variable-update / lore-keeper / 自造骰子 LLM 等。
-4. resident_context：稳定句挂到 gm 或 narrator（或 outline/chapter-writer）；旁观合同可挂 auditor；勿塞聊天过程。
+4. resident_context：稳定句挂到 gm（无转述时叙事指南也挂 gm）；开了转述可挂 narrator；旁观合同可挂 auditor；勿塞聊天过程。
 5. tables：吸入变量设计的 side_effects；无则空数组或省略。
 6. core_premises、design_end.opening 按需。
-7. summary：`细化终稿 · 槽 旁观+gm+转述 · …` 或 `细化终稿 · 大纲+章节 · …`
+7. summary：`细化终稿 · 槽 仅 gm · …` 或 `细化终稿 · 槽 gm+转述 · …` 或 `细化终稿 · 大纲+章节 · …`
 
 进游玩不在本步完成。
 ```
@@ -74,9 +75,9 @@ boundary: |
 
 ```principles
 1. 合并优于重写；槽位优于发明演员。
-2. 面向用户的终稿点 acceptance=review（通常是 narrator 或 chapter-writer）；auditor/gm/outline 常用 continue。
+2. 面向用户的终稿点 acceptance=review（默认是 world-simulator；开了转述则是 narrator；写手是 chapter-writer）；旁观/outline 常用 continue；有转述时 gm 用 continue。
 3. 真值变更写在 gm 的 outputs（运行.本轮.变量变更 / 裁决包内 variable_changes），旁观维护只出 maintain.v1；不靠第三变量 Worker。
-4. 裁决包约定：运行.本轮.裁决 使用 settlement.v1（见 progressive-data-design / 模板）；Runtime 合并 variable_changes。
+4. 裁决包约定：启用转述时，运行.本轮.裁决 使用 settlement.v1（见 progressive-data-design / 模板）；Runtime 合并 variable_changes。无转述时主世界层直接写 输出.用户展示。
 5. 键名稳定；未决进 open_questions。
 ```
 
@@ -109,34 +110,18 @@ boundary: |
     "satisfaction_source": "…"
   },
   "play_slots": {
-    "auditor": true,
+    "auditor": false,
     "gm": true,
-    "narrator": true,
+    "narrator": false,
     "perspective": false
   },
   "workers": [
     {
-      "name": "旁观维护",
-      "ref": "auditor",
-      "duty": "表/规则检查；maintain.v1；默认空操作；无长对话史",
-      "when": "每轮用户输入后、主世界层之前",
-      "rationale": "删掉则表补与规则触发放回主世界层，挤占历史上下文",
-      "acceptance": "continue"
-    },
-    {
       "name": "主世界层",
       "ref": "world-simulator",
-      "duty": "读投影与真值，输出 settlement.v1 裁决包；可提议变量变更",
-      "when": "每轮用户输入后（旁观之后）",
-      "rationale": "删掉则无程序化裁决与真值更新",
-      "acceptance": "continue"
-    },
-    {
-      "name": "叙事转述",
-      "ref": "narrator",
-      "duty": "只读裁决包，写用户可见正文",
-      "when": "裁决包就绪后",
-      "rationale": "删掉则无独立文风呈现（或需 gm 兼写，须用户明确）",
+      "duty": "读投影与真值，直接写用户可见正文（无独立转述）",
+      "when": "每轮用户输入后",
+      "rationale": "默认少槽：原文即终稿",
       "acceptance": "review"
     }
   ],
@@ -145,7 +130,7 @@ boundary: |
       "id": "experience-contract",
       "position": "static",
       "content": "体验/禁忌压缩句",
-      "mount": ["world-simulator", "narrator"]
+      "mount": ["world-simulator"]
     }
   ],
   "tables": {
@@ -183,7 +168,8 @@ boundary: |
 
 ```examples
 好：
-- play_slots auditor+gm+narrator；workers 与槽一致；side_effects 从变量设计拷入。
+- play_slots 仅 gm；workers 与槽一致；side_effects 从变量设计拷入（或明确不要表）。
+- 用户明确要转述：gm continue + narrator review。
 - 扩写：outline continue + chapter-writer review；无自造 ref。
 
 坏：

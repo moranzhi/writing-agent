@@ -99,7 +99,7 @@ feeds: design_only
       "label": "主世界层",
       "enabled": true,
       "when": "every_turn",
-      "duty": "读真值与规则，出裁决包",
+      "duty": "读真值与规则，直接写用户可见正文",
       "inserts": [
         { "order": 0, "ref": "worker.persona", "projection": "fixed" },
         { "order": 1, "ref": "设计.舞台骨架", "projection": "summary" },
@@ -107,39 +107,27 @@ feeds: design_only
         { "order": 3, "ref": "设计.变量设计与更新规则", "projection": "summary" },
         { "order": 4, "ref": "设计.生成规则", "projection": "summary" },
         { "order": 5, "ref": "设计.叙事指南与故事推进", "projection": "summary" },
-        { "order": 6, "ref": "对话.历史", "projection": "summary" },
-        { "order": 7, "ref": "变量.当前", "projection": "fields" },
-        { "order": 8, "ref": "用户.最新输入", "projection": "full" }
+        { "order": 6, "ref": "设计.正文组成", "projection": "summary" },
+        { "order": 7, "ref": "对话.历史", "projection": "summary" },
+        { "order": 8, "ref": "变量.当前", "projection": "fields" },
+        { "order": 9, "ref": "用户.最新输入", "projection": "full" }
       ]
     },
     {
       "id": "narrator",
       "label": "叙事转述",
-      "enabled": true,
+      "enabled": false,
       "when": "every_turn",
-      "duty": "只把裁决写成用户可见正文",
-      "inserts": [
-        { "order": 0, "ref": "worker.persona", "projection": "fixed" },
-        { "order": 1, "ref": "设计.叙事指南与故事推进", "projection": "summary" },
-        { "order": 2, "ref": "设计.正文组成", "projection": "summary" },
-        { "order": 3, "ref": "运行.本轮.裁决", "projection": "full" }
-      ]
+      "duty": "只把裁决写成用户可见正文（默认关）",
+      "inserts": []
     },
     {
       "id": "auditor",
       "label": "旁观维护",
-      "enabled": true,
+      "enabled": false,
       "when": "every_turn",
-      "duty": "回合末查表/补规则，不写正文",
-      "inserts": [
-        { "order": 0, "ref": "worker.persona", "projection": "fixed" },
-        { "order": 1, "ref": "设计.变量设计与更新规则", "projection": "summary" },
-        { "order": 2, "ref": "设计.生成规则", "projection": "summary" },
-        { "order": 3, "ref": "设计.变量控制上下文", "projection": "summary" },
-        { "order": 4, "ref": "运行.本轮.裁决", "projection": "full" },
-        { "order": 5, "ref": "变量.当前", "projection": "fields" },
-        { "order": 6, "ref": "用户.最新输入", "projection": "full" }
-      ]
+      "duty": "回合末查表/补规则，不写正文（默认关）",
+      "inserts": []
     },
     {
       "id": "perspective",
@@ -161,8 +149,7 @@ feeds: design_only
 - [ ] 未重写上游长文，只有排序/投影
 - [ ] 未把游玩选项示例当成当前提问
 - [ ] 已启用的每轮槽有 order 0 人设位
-- [ ] 主世界层含「对话.历史」；转述与旁观维护默认无历史
-- [ ] 旁观维护含「运行.本轮.裁决」；转述含裁决且不含历史
+- [ ] 主世界层含「对话.历史」；转述与旁观若启用则默认无历史
+- [ ] 与游玩拓扑勾选一致（默认仅 gm）；有随机范围表则已挂 gm
 - [ ] 少变块整体靠前、本轮/真值靠后（软规则）
-- [ ] 与游玩拓扑勾选一致；有随机范围表则已挂 gm
 ```

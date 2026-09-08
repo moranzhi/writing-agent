@@ -12,23 +12,23 @@ name: 游玩拓扑
 id: worker-spec
 artifact: 设计.worker规格
 declaration: >
-  不能吃默认槽时才勾选：主世界层必开；有变量/表维护才开旁观；转述默认开；强秘密才开视角；写手则大纲+章节；禁止发明执行单元与机遇槽
+  不能吃默认槽时才勾选：主世界层必开；转述默认关（要独立文风层才开）；有变量/表维护才开旁观；强秘密才开视角；写手则大纲+章节；禁止发明执行单元与机遇槽
 when: |
-  体验契约已大致清楚，且不能吃默认槽：要关旁观、关转述、开角色视角（强秘密不能进主世界层），或走写手大纲+章节。
+  体验契约已大致清楚，且不能吃默认槽：要开转述、开旁观、开角色视角（强秘密不能进主世界层），或走写手大纲+章节。
   或要修订已勾选槽（开/关 auditor、perspective、narrator 等）。
 when_not: |
   体验/站位仍混沌 → 先「美学纲领与交互范式」。
-  世界模拟可吃默认（主世界层+转述+旁观；视角关）→ 可不排，「细化终稿」按默认收成。
+  世界模拟可吃默认（仅主世界层；转述/旁观/视角关）→ 可不排，「细化终稿」按默认收成。
   只需输出完整运行规格 → 「细化终稿」（本步只交槽位勾选）。
   检定/掷骰范围汇总 → 「随机范围整理」；不要为本步加「机遇裁定」槽。
   不要用本步发明世界观/性格/变量专用执行单元。
 boundary: |
   本能力：输出 play_slots（及写手路径的 writing_slots），可选覆盖挂载说明；不写完整 设计.worker集。
-  主世界层（gm）几乎总要。旁观维护：有变量/表/规则要程序化盯时才开。转述默认开。
+  主世界层（gm）几乎总要。转述默认关：主世界层直接交用户可见原文。旁观维护：有变量/表/规则要程序化盯时才开。
   不再设机遇裁定（chance）槽：真随机走「随机范围整理」+ 程序插入上下文备用数。
   细化终稿：按本步勾选展开 workers、合并常驻与 tables。
   变量设计 / 变量控制上下文：真值与投影，不是推理槽。
-  叙事指南与故事推进：挂到转述槽（推进可兼挂主世界层）；世界/机制：挂到主世界层——本步只点名槽。
+  叙事指南与故事推进：默认挂主世界层；若开了转述可挂转述（推进可兼挂主世界层）；世界/机制：挂到主世界层——本步只点名槽。
 ```
 
 ## opening
@@ -37,9 +37,9 @@ boundary: |
 游玩时用哪些固定槽？（只勾选，不要发明新角色名当「新系统」）
 
 世界模拟类常见：
-1. 主世界层（裁决）——要（几乎总要）
-2. 叙事转述（写你看见的正文）——要 / 不要（默认要）
-3. 旁观维护（有变量/表/规则要盯时才开；默认：有变量类上游则要）——要 / 不要
+1. 主世界层（推进 + 默认直接写可见正文）——要（几乎总要）
+2. 叙事转述（独立文风层再改写正文）——要 / 不要（默认不要）
+3. 旁观维护（有变量/表/规则要盯时才开；默认不要）——要 / 不要
 4. 角色视角（仅当有强秘密、不能进主世界层时）——要 / 不要（默认不要）
 
 不要勾「机遇裁定」：检定/掷骰用「随机范围整理」收表，程序插备用随机数。
@@ -63,14 +63,14 @@ boundary: |
 
 执行顺序：
 1. 读配方与体验契约，判断路径：世界模拟 vs 写手分段。
-2. 默认世界模拟：`gm: true, narrator: true, auditor: true, perspective: false`；
-   调度序 gm → perspective? → narrator → auditor；
+2. 默认世界模拟：`gm: true, narrator: false, auditor: false, perspective: false`；
+   调度序 gm → perspective? → narrator? → auditor?；
    主世界层必开（用户明确只要旁观/写手路径除外）；
-   有变量设计/表维护需求 → auditor true；纯无状态对话可 auditor false；
+   要独立文风改写才 narrator true；有变量设计/表维护需求 → auditor true；
    仅信息隔离才开 perspective。
 3. 写手路径：`outline` + `chapter-writer` 默认都开；用户明确只要正文则可关 outline。
 4. 可写简短 `mount_notes`（哪类上游产物挂哪槽），不粘贴长文。
-5. 输出 JSON。summary：`游玩拓扑 · gm+转述+旁观` 等（勿写机遇）。
+5. 输出 JSON。summary：`游玩拓扑 · 仅 gm` 或 `游玩拓扑 · gm+转述` 等（勿写机遇）。
 
 若程序已发默认问题：禁止重复同一开场；在首答上补洞。
 ```
@@ -79,8 +79,8 @@ boundary: |
 
 ```principles
 1. 只勾选，不发明：ref 必须在白名单内；无机遇裁定槽。
-2. 默认：世界模拟 = 主世界层 + 转述 + 旁观；perspective 默认关。主世界层必要。
-3. 有变量/表/规则要盯 → 开旁观；无则可不开。
+2. 默认：世界模拟 = 仅主世界层；转述/旁观/perspective 默认关。主世界层必要。
+3. 要独立文风层再开转述；有变量/表/规则要盯再开旁观。
 4. 变量 / Data / Progressive 不是执行单元；旁观维护只出 maintain.v1，不写真相。
 5. 删掉检验仍适用：关某个槽要说得清损失什么。
 6. 本步不输出完整 Worker 集、不写 tables 全文、不写随机范围表（交给细化终稿 / 变量设计 / 随机范围整理）。
@@ -92,7 +92,7 @@ boundary: |
 ```probe
 一次 1～2 点：
 
-- 正文是否必须由独立转述写？（不要则 gm 兼呈现，narrator=false——需用户明确）
+- 是否必须独立转述改写正文？（要才 narrator=true；默认不要，主世界层原文即终稿）
 - 是否有「主世界层不该知道的角色秘密」？（有才 perspective=true）
 - 有变量/表要盯却关了旁观？或无状态却硬开旁观？
 - 扩写：要不要先验大纲再写章？
@@ -107,9 +107,9 @@ boundary: |
   "brief": "一句话：本局启用哪些固定槽",
   "path": "world_sim|writing",
   "play_slots": {
-    "auditor": true,
+    "auditor": false,
     "gm": true,
-    "narrator": true,
+    "narrator": false,
     "perspective": false
   },
   "writing_slots": {
@@ -117,8 +117,8 @@ boundary: |
     "chapter_writer": true
   },
   "mount_notes": [
-    "生成规则/变量合同/旁观摘要 → auditor（无长对话史）",
-    "叙事指南与故事推进 → narrator（推进兼 gm）",
+    "生成规则/变量合同/旁观摘要 → auditor（仅开旁观时；无长对话史）",
+    "叙事指南与故事推进 → gm（默认）；若开转述可挂 narrator",
     "世界/机制/变量规则 → gm",
     "随机范围整理 → gm（上下文备用随机数；无机遇槽）",
     "真值与 side_effects → 细化终稿 tables"
@@ -131,7 +131,8 @@ boundary: |
 - `path=world_sim` 时必须有 `play_slots`；`writing_slots` 可省略。
 - `path=writing` 时必须有 `writing_slots`；`play_slots` 可省略。
 - `play_slots.gm` 世界模拟路径下应为 true。
-- `auditor` 缺省：有变量/表维护意图视为 true，否则可 false。
+- `narrator` 缺省按 false（主世界层兼呈现）；仅用户明确要独立文风层时 true。
+- `auditor` 缺省按 false；有变量/表维护意图才 true。
 - 不要输出 `chance` 字段；旧产物若有 `chance: true`，本步改为 false/删除，并指向「随机范围整理」。
 - 不要输出自造 `actors[]` / 自由 `workers[]`。
 - 旧产物若含 `actors[]`：本步应改写为槽位勾选，不再追加自定义 ref。
@@ -149,7 +150,8 @@ boundary: |
 
 ```examples
 好：
-- play_slots: gm+narrator+auditor，perspective false；有变量故开旁观。
+- play_slots: 仅 gm；转述/旁观/perspective false。
+- 用户明确要独立文风：gm+narrator；有变量再加旁观。
 - 有凶手真名不能进 GM：perspective true，并说明只出反应建议。
 - 需要检定：不写 chance；提醒排「随机范围整理」。
 

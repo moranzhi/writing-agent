@@ -18,16 +18,16 @@ Runtime 执行时读 Worker 集条目，不直接读本目录。
 
 ```json
 {
-  "play_slots": { "auditor": true, "gm": true, "narrator": true, "perspective": false },
+  "play_slots": { "auditor": false, "gm": true, "narrator": false, "perspective": false },
   "workers": []
 }
 ```
 
 | 槽 | 默认 ref | 模板 |
 |----|----------|------|
-| auditor | `auditor` | `auditor.yaml` — maintain.v1；默认空操作；无长对话史 |
-| gm | `world-simulator` | `world-simulator.yaml` — 裁决包 settlement.v1；`play_slots.chance` 开时 harness 批量机遇工具 |
-| narrator | `narrator` | `narrator.yaml` — 只读裁决包写正文 |
+| auditor | `auditor` | `auditor.yaml` — maintain.v1；默认空操作；无长对话史（默认关） |
+| gm | `world-simulator` | `world-simulator.yaml` — 默认直接写用户可见正文；开转述时改出 settlement.v1；`play_slots.chance` 开时 harness 批量机遇工具 |
+| narrator | `narrator` | `narrator.yaml` — 只读裁决包写正文（默认关） |
 | perspective | `role-decide` | `role-decide.yaml` — 可选知密视角 |
 | chance（拓扑开关） | `chance` | `play_slots.chance` 控制 gm harness；可选声明按需 `chance` ref 供显式 run_worker |
 

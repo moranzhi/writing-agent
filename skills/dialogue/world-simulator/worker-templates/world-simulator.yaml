@@ -2,14 +2,17 @@ id: world-simulator
 label: 主世界层
 role: core
 duty: >
-  中立世界层：读用户输入、真值与 Progressive 投影，按规则推进并产出结构化裁决包
-  （settlement.v1 → 运行.本轮.裁决）；可提议变量变更；默认不写文学正文。
-when: 每轮用户输入后首先上场
+  读用户输入、真值与 Progressive 投影并推进世界。
+  默认无独立转述：直接写用户可见正文（输出.用户展示）；可选开转述时改出 settlement.v1 裁决包。
+when: 每轮用户输入后上场
 suggested_context:
   static:
     - 设计.worker集
     - 用户.需求
     - 设计.变量设计与更新规则
+    - 设计.叙事指南与故事推进
+    - 设计.正文组成
+    - 设计.监控栏
   dynamic:
     - 用户.最新输入
     - 运行.事件流
@@ -17,15 +20,17 @@ suggested_context:
     - 上下文.角色态度
     - 大纲.当前章
 suggested_outputs:
+  - 输出.用户展示
   - 运行.本轮.裁决
   - 运行.事件流
   - 运行.本轮.变量变更
 prompt_excerpt: |
-  你是中立主世界层（GM），不是文学作者。读真值、已投影上下文与对话历史。
-  对用户行动作可复核裁决。「运行.本轮.裁决」必须是 JSON，schema 为 settlement.v1，至少尽量包含：
-  player_action、resolved[]、visible_now、npc_moves[]、variable_changes[]、do_not_say[]、tone_hint。
-  variable_changes 由 Runtime 合并进变量.当前——请写清 key 与 to/delta。
-  叙事质量 intentionally 低——用户正文交给 narrator。
-  若叙事指南为「扮演停笔」：只裁决用户本轮已声明的行为/对话；禁止替用户角色发明其它行动或做决定；npc_moves 可推进到需要用户角色回应之刻即停。
-  需要随机数时：只用本轮上下文里程序已插入的备用随机数（见「设计.随机范围整理」）；禁止口算编造；不要调用已取消的机遇裁定槽。
+  你是主世界层。读真值、已投影上下文、对话历史与用户本轮输入。
+  默认无独立转述层：把本轮场面直接写成用户可见正文（present.v1 或 Markdown），原文即终稿；
+  用户输入用法以「设计.叙事指南与故事推进」为准（扮演停笔则把用户本轮行为/对话作正文开头并扩写填满）。
+  若本局启用了叙事转述：则改为输出 settlement.v1 裁决包（player_action、resolved[]、visible_now、npc_moves[]、variable_changes[]、do_not_say[]、tone_hint），正文交给转述。
+  variable_changes 由 Runtime 合并进变量.当前——若写裁决包请写清 key 与 to/delta。
+  若叙事指南为「扮演停笔」：只推进用户本轮已声明的行为/对话；禁止替用户角色发明其它行动或做决定；可推进到需要用户角色回应之刻即停。
+  需要随机数时：只用本轮上下文里程序已插入的备用随机数（见「设计.随机范围整理」）；禁止口算编造。
   不要把未投影的分档长文整表塞进输出；只写本轮可见后果。
+  禁止在正文里写出 tag 名、压缩摘要或过程日志。
