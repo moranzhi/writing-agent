@@ -9,6 +9,8 @@
  *   P3 header / footer / aside — 辅助，紧凑
  */
 
+import { formatBodyHtml, isMarkdownRenderEnabled } from "./markdown.js";
+
 export const PRESENT_SHELL_IDS = [
   "prose",
   "chat_monitor",
@@ -132,6 +134,10 @@ function regionInnerHtml(region, rawValue, esc) {
     if (chips) return chips;
   }
   const text = formatBlockContent(rawValue).trim();
+  if (!text) return `<div class="present-region-body"></div>`;
+  if (isMarkdownRenderEnabled()) {
+    return `<div class="present-region-body">${formatBodyHtml(text)}</div>`;
+  }
   const paras = text.split(/\n\n+/).filter(Boolean);
   const inner = paras
     .map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`)
