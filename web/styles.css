@@ -1,7 +1,7 @@
-/* Functional layout â agent-first, no production-line chrome */
+/* Functional layout Ã¢ÂÂ agent-first, no production-line chrome */
 
 :root {
-  /* Default = modern；实际以色主题 data-color-theme 为准 */
+  /* Default = modernï¼å®éä»¥è²ä¸»é¢ data-color-theme ä¸ºå */
   --bg: #f8f8f8;
   --surface: #fff;
   --border: #e0e0e0;
@@ -29,7 +29,7 @@
   color: var(--text);
 }
 
-/* 仿纸暖黄（护眼）*/
+/* ä»¿çº¸æé»ï¼æ¤ç¼ï¼*/
 html[data-color-theme="paper"] {
   --bg: #f5ecd7;
   --surface: #fbf8f2;
@@ -41,7 +41,7 @@ html[data-color-theme="paper"] {
   --shadow: 0 8px 24px rgba(62, 58, 53, 0.1);
 }
 
-/* 现代清爽 */
+/* ç°ä»£æ¸ç½ */
 html[data-color-theme="modern"] {
   --bg: #f8f8f8;
   --surface: #fff;
@@ -53,7 +53,7 @@ html[data-color-theme="modern"] {
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
-/* 夜间暗色 */
+/* å¤é´æè² */
 html[data-color-theme="dark"] {
   --bg: #1e1e1e;
   --surface: #2d2d30;
@@ -65,7 +65,7 @@ html[data-color-theme="dark"] {
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
-/* 豆沙绿 */
+/* è±æ²ç»¿ */
 html[data-color-theme="green"] {
   --bg: #dce5d9;
   --surface: #f4f9f2;
@@ -82,7 +82,7 @@ html {
   color: var(--text);
 }
 
-/* å¼åä½åç¼©è¿å·¦ä¾§æ  */
+/* Ã¥Â¼ÂÃ¥ÂÂÃ¤Â½ÂÃ¥ÂÂÃ§Â¼Â©Ã¨Â¿ÂÃ¥Â·Â¦Ã¤Â¾Â§Ã¦Â Â */
 body.rail-collapsed {
   --books-w: var(--books-w-collapsed);
 }
@@ -91,7 +91,7 @@ body.rail-collapsed {
 html, body {
   height: 100%;
   margin: 0;
-  overflow: hidden; /* æµè§å¨å±æ°¸ä¸åºç°é¡µé¢æ»å¨æ¡ */
+  overflow: hidden; /* Ã¦ÂµÂÃ¨Â§ÂÃ¥ÂÂ¨Ã¥Â±ÂÃ¦Â°Â¸Ã¤Â¸ÂÃ¥ÂÂºÃ§ÂÂ°Ã©Â¡ÂµÃ©ÂÂ¢Ã¦Â»ÂÃ¥ÂÂ¨Ã¦ÂÂ¡ */
   background: var(--bg);
   color: var(--text);
 }
@@ -311,8 +311,8 @@ body[data-nav-level="root"] .burst-badge { display: none; }
 .rail-tab-panel[hidden] { display: none !important; }
 
 body.rail-collapsed .panel-rail { align-items: stretch; }
-/* composer æåå®¹èªéåºï¼ä¸­é´åºåæå©ä½é«åº¦ï¼æ´é¡µéå¨è§å£å */
-/* panel-main：上=悬停遮盖 chrome；下=工作区（左中右在 main-body / head 内） */
+/* composer Ã¦ÂÂÃ¥ÂÂÃ¥Â®Â¹Ã¨ÂÂªÃ©ÂÂÃ¥ÂºÂÃ¯Â¼ÂÃ¤Â¸Â­Ã©ÂÂ´Ã¥ÂÂºÃ¥ÂÂÃ¦ÂÂÃ¥ÂÂ©Ã¤Â½ÂÃ©Â«ÂÃ¥ÂºÂ¦Ã¯Â¼ÂÃ¦ÂÂ´Ã©Â¡ÂµÃ©ÂÂÃ¥ÂÂ¨Ã¨Â§ÂÃ¥ÂÂ£Ã¥ÂÂ */
+/* panel-mainï¼ä¸=æ¬åé®ç chromeï¼ä¸=å·¥ä½åºï¼å·¦ä¸­å³å¨ main-body / head åï¼ */
 .panel-main {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -332,7 +332,7 @@ body.rail-collapsed .panel-rail { align-items: stretch; }
   overflow: hidden;
 }
 
-/* 顶缘热区 + 遮盖条：不占文档流，悬停/聚焦才展开 */
+/* é¡¶ç¼ç­åº + é®çæ¡ï¼ä¸å ææ¡£æµï¼æ¬å/èç¦æå±å¼ */
 .main-chrome {
   position: absolute;
   top: 0;
@@ -425,7 +425,7 @@ body.rail-collapsed .panel-rail { align-items: stretch; }
 }
 
 @media (hover: none) {
-  /* 触控无悬停：顶缘仍可点开，聚焦后保持 */
+  /* è§¦æ§æ æ¬åï¼é¡¶ç¼ä»å¯ç¹å¼ï¼èç¦åä¿æ */
   .main-chrome {
     height: 12px;
   }
@@ -453,7 +453,7 @@ body.design-workspace.coord-rail-collapsed .main-body {
   position: relative;
 }
 
-/* 验收态：协调流收窄，产物占主工作面 */
+/* éªæ¶æï¼åè°æµæ¶çªï¼äº§ç©å ä¸»å·¥ä½é¢ */
 .workspace-stage {
   flex: 1 1 auto;
   min-height: 0;
@@ -546,7 +546,7 @@ body.design-workspace.coord-rail-collapsed .main-body {
 }
 .workspace-raw-body { margin-top: 8px; }
 
-/* 创作伪 0 层：右侧协调栏（横向折叠，不占主柱高度） */
+/* åä½ä¼ª 0 å±ï¼å³ä¾§åè°æ ï¼æ¨ªåæå ï¼ä¸å ä¸»æ±é«åº¦ï¼ */
 .coord-rail {
   display: none;
   min-width: 0;
@@ -560,6 +560,9 @@ body.design-workspace .coord-rail:not([hidden]) {
   display: flex;
   flex-direction: row;
   align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 .coord-rail-toggle {
   flex: 0 0 var(--coord-w-collapsed, 40px);
@@ -646,8 +649,10 @@ body:not(.coord-rail-collapsed) .coord-rail-toggle {
 }
 .coord-drawer-body {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -895,7 +900,7 @@ body.is-reviewing .msg-bubble {
   max-width: 92%;
 }
 
-/* 创作伪 0 层：产物铺满主柱，对话退居右侧栏 */
+/* åä½ä¼ª 0 å±ï¼äº§ç©éºæ»¡ä¸»æ±ï¼å¯¹è¯éå±å³ä¾§æ  */
 body.design-workspace .message-feed {
   display: none !important;
 }
@@ -909,7 +914,7 @@ body.design-workspace .workspace-stage {
   min-height: 0;
 }
 body.design-workspace[data-design-surface="answer"] .workspace-stage {
-  overflow: hidden; /* 滚动只在询问卡内，避免 stage↔card 双滚 */
+  overflow: hidden; /* æ»å¨åªå¨è¯¢é®å¡åï¼é¿å stageâcard åæ» */
 }
 body.design-workspace .workspace-review {
   max-width: none;
@@ -1075,7 +1080,7 @@ body.design-workspace[data-design-surface="answer"] .questions-card-host {
   margin-top: 0;
   padding: 0;
 }
-/* 答题/验收工作面已是 surface，询问不再套圆角卡片 */
+/* ç­é¢/éªæ¶å·¥ä½é¢å·²æ¯ surfaceï¼è¯¢é®ä¸åå¥åè§å¡ç */
 body.design-workspace[data-design-surface="answer"] .questions-card-host.is-open:not([hidden]),
 .workspace-review-ask .questions-card-host.is-open:not([hidden]) {
   margin: 0;
@@ -1102,6 +1107,46 @@ body.design-workspace[data-design-surface="answer"] .qcard-pager,
 .workspace-review-ask .qcard-pager {
   right: 0;
 }
+
+/* 转述：主柱对话；stage 一行条；右侧已持久化（栏内上下滚、正文换行） */
+body.design-workspace[data-design-surface="dictate"] .message-feed {
+  display: flex !important;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+body.design-workspace[data-design-surface="dictate"] .workspace-stage {
+  order: -1;
+  flex: 0 0 auto;
+  overflow: visible;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-top: none;
+}
+body.design-workspace[data-design-surface="dictate"] {
+  --coord-w: clamp(300px, 28vw, 380px);
+}
+body.design-workspace[data-design-surface="dictate"] .panel-feed {
+  overflow: hidden;
+}
+.dictate-stage-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px var(--workspace-pad-x, 24px);
+  margin: 0;
+}
+.dictate-stage-bar .workspace-surface-kicker {
+  margin-bottom: 0;
+}
+.dictate-stage-recipe {
+  font-size: 12px;
+  color: var(--muted);
+}
+body.design-workspace[data-design-surface="dictate"] .workspace-surface-kicker {
+  color: var(--accent);
+}
+
 body.design-workspace[data-design-surface="speak"] .workspace-surface-kicker {
   color: var(--accent);
 }
@@ -1116,7 +1161,7 @@ body.design-workspace[data-design-surface="review"][data-review-kind="opening"] 
   color: var(--accent);
 }
 
-/* 挂载追问嵌在产物验收面下方：与产物同宽，随主柱动态适应 */
+/* æè½½è¿½é®åµå¨äº§ç©éªæ¶é¢ä¸æ¹ï¼ä¸äº§ç©åå®½ï¼éä¸»æ±å¨æéåº */
 .workspace-review-ask {
   flex: 0 0 auto;
   margin-top: 0;
@@ -1878,7 +1923,7 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
 .panel-head-actions { display: flex; gap: 4px; align-items: center; }
 .btn-sm.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
-/* Books — breadcrumb + list */
+/* Books â breadcrumb + list */
 .path-bar {
   display: flex;
   align-items: center;
@@ -2126,7 +2171,7 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
 }
 .sidebar-empty { padding: 12px; color: var(--muted); font-size: 13px; text-align: center; }
 
-/* Skill picker â primary action when starting */
+/* Skill picker Ã¢ÂÂ primary action when starting */
 .skill-picker {
   padding: 16px;
   border-bottom: 2px solid var(--accent);
@@ -2144,7 +2189,7 @@ body.design-workspace .flow-step[data-run="done"] .flow-name {
 .skill-card-desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
 .skill-card-tag { font-size: 11px; color: var(--accent); margin-top: 6px; }
 
-/* Feed â SillyTavern å¼å¯¹è¯æ°æ³¡ */
+/* Feed Ã¢ÂÂ SillyTavern Ã¥Â¼ÂÃ¥Â¯Â¹Ã¨Â¯ÂÃ¦Â°ÂÃ¦Â³Â¡ */
 .message-feed {
   flex: 1;
   overflow-y: auto;
@@ -2356,11 +2401,11 @@ body.rail-collapsed .message-feed {
 }
 .msg-play-process > summary::-webkit-details-marker { display: none; }
 .msg-play-process > summary::before {
-  content: "▸";
+  content: "â¸";
   font-size: 10px;
   color: var(--muted);
 }
-.msg-play-process[open] > summary::before { content: "▾"; }
+.msg-play-process[open] > summary::before { content: "â¾"; }
 .msg-play-process .msg-tag {
   font-weight: 600;
   color: var(--muted);
@@ -2492,7 +2537,7 @@ body.rail-collapsed .message-feed {
   margin: 0 0 8px;
 }
 
-/* 主对话验收卡（旧）：保留选择器以免历史类名失效 */
+/* ä¸»å¯¹è¯éªæ¶å¡ï¼æ§ï¼ï¼ä¿çéæ©å¨ä»¥ååå²ç±»åå¤±æ */
 .msg-review {
   align-self: stretch;
   width: 100%;
@@ -2529,7 +2574,7 @@ body.rail-collapsed .message-feed {
 .msg-review .ws-focus-hint { margin-bottom: 0; font-size: 11px; }
 .msg-review .review-worker-set { margin: 0 0 6px; }
 
-/* 顶栏主题菜单：色主题 + 选壳 */
+/* é¡¶æ ä¸»é¢èåï¼è²ä¸»é¢ + éå£³ */
 .more-menu {
   position: relative;
   display: inline-block;
@@ -2628,6 +2673,119 @@ body.rail-collapsed .message-feed {
   background: var(--accent-soft);
   color: var(--accent);
 }
+.more-toggle-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.more-toggle-item .more-theme-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.more-toggle-mark {
+  flex: 0 0 auto;
+  width: 1.1em;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.more-toggle-mark::before {
+  content: "";
+}
+.more-toggle-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.more-toggle-item.is-active .more-toggle-mark::before {
+  content: "✓";
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Markdown body (optional render) */
+.msg-body .md-p,
+.dictate-product-body .md-p,
+.present-region-body .md-p {
+  margin: 0 0 0.55em;
+  line-height: 1.55;
+}
+.msg-body .md-p:last-child,
+.dictate-product-body .md-p:last-child,
+.present-region-body .md-p:last-child {
+  margin-bottom: 0;
+}
+.msg-body .md-h,
+.dictate-product-body .md-h,
+.present-region-body .md-h {
+  margin: 0.7em 0 0.35em;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.msg-body .md-h:first-child,
+.dictate-product-body .md-h:first-child,
+.present-region-body .md-h:first-child {
+  margin-top: 0;
+}
+.msg-body h1.md-h { font-size: 1.25em; }
+.msg-body h2.md-h { font-size: 1.15em; }
+.msg-body h3.md-h,
+.msg-body h4.md-h,
+.msg-body h5.md-h,
+.msg-body h6.md-h { font-size: 1.05em; }
+.msg-body .md-ul,
+.msg-body .md-ol,
+.dictate-product-body .md-ul,
+.dictate-product-body .md-ol,
+.present-region-body .md-ul,
+.present-region-body .md-ol {
+  margin: 0.35em 0 0.55em;
+  padding-left: 1.35em;
+}
+.msg-body .md-quote,
+.dictate-product-body .md-quote,
+.present-region-body .md-quote {
+  margin: 0.45em 0;
+  padding: 0.15em 0 0.15em 0.75em;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--muted);
+}
+.msg-body .md-pre,
+.dictate-product-body .md-pre,
+.present-region-body .md-pre {
+  margin: 0.45em 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 80%, var(--surface));
+  font-size: 12px;
+  line-height: 1.45;
+}
+.msg-body .md-code,
+.dictate-product-body .md-code,
+.present-region-body .md-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+}
+.msg-body .md-a,
+.dictate-product-body .md-a,
+.present-region-body .md-a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg-body .md-hr,
+.dictate-product-body .md-hr,
+.present-region-body .md-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.75em 0;
+}
+
 .more-theme-icon {
   flex: 0 0 auto;
   width: 1.25em;
@@ -2656,7 +2814,7 @@ body.rail-collapsed .message-feed {
   color: color-mix(in srgb, var(--accent) 70%, var(--muted));
 }
 
-/* 提问索引气泡：决策在下方询问卡 */
+/* æé®ç´¢å¼æ°æ³¡ï¼å³ç­å¨ä¸æ¹è¯¢é®å¡ */
 .msg-bubble-index {
   width: auto;
   max-width: 70%;
@@ -2680,7 +2838,7 @@ body.rail-collapsed .message-feed {
 .msg-q-list li { margin: 0.35rem 0; }
 .msg-q-lead { margin: 0; line-height: 1.55; font-size: 14px; }
 
-/* 游玩：终稿铺满阅读区；字号跟正文阅读走，不跟创作验收的大字稿走 */
+/* æ¸¸ç©ï¼ç»ç¨¿éºæ»¡éè¯»åºï¼å­å·è·æ­£æéè¯»èµ°ï¼ä¸è·åä½éªæ¶çå¤§å­ç¨¿èµ° */
 body[data-lifecycle="play"] .message-feed {
   padding: 10px 12px 16px;
   gap: 10px;
@@ -2741,7 +2899,7 @@ body[data-lifecycle="play"] .msg-play-final .present-shell--chat_monitor .presen
   background: transparent;
 }
 
-/* 产物紧凑卡：横向主轴，预览一行 */
+/* äº§ç©ç´§åå¡ï¼æ¨ªåä¸»è½´ï¼é¢è§ä¸è¡ */
 .artifact-compact-list {
   display: flex;
   flex-direction: column;
@@ -2754,7 +2912,7 @@ body[data-lifecycle="play"] .msg-play-final .present-shell--chat_monitor .presen
   overflow: hidden;
 }
 
-/* 验收扁平：一条 meta，正文直接读，不套 details/预览摘要 */
+/* éªæ¶æå¹³ï¼ä¸æ¡ metaï¼æ­£æç´æ¥è¯»ï¼ä¸å¥ details/é¢è§æè¦ */
 .artifact-flat-review {
   display: flex;
   flex-direction: column;
@@ -2845,8 +3003,8 @@ body.design-workspace .artifact-flat-review {
   border-radius: 999px;
   background: var(--accent-soft);
 }
-.artifact-compact-toggle::before { content: "å±å¼"; }
-.artifact-compact[open] .artifact-compact-toggle::before { content: "æ¶èµ·"; }
+.artifact-compact-toggle::before { content: "Ã¥Â±ÂÃ¥Â¼Â"; }
+.artifact-compact[open] .artifact-compact-toggle::before { content: "Ã¦ÂÂ¶Ã¨ÂµÂ·"; }
 .artifact-compact-preview {
   margin: 0;
   font-family: var(--font-read);
@@ -2902,7 +3060,7 @@ body.design-workspace .artifact-flat-review {
 }
 .ws-focus-body .artifact-compact-list { margin: 0; }
 
-/* 展开区：mosaic / 瓷砖网格 */
+/* å±å¼åºï¼mosaic / ç·ç ç½æ ¼ */
 .af-mosaic {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2914,7 +3072,7 @@ body.design-workspace .af-mosaic {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 
-/* 美学验收：左契约 / 右诊断 */
+/* ç¾å­¦éªæ¶ï¼å·¦å¥çº¦ / å³è¯æ­ */
 .af-split {
   display: flex;
   flex-direction: column;
@@ -2997,7 +3155,7 @@ body.design-workspace .af-mosaic {
   min-width: 0;
 }
 
-/* 美学卡：阅读层级 — 内核最大，范式次之，右栏更密更沉 */
+/* ç¾å­¦å¡ï¼éè¯»å±çº§ â åæ ¸æå¤§ï¼èå¼æ¬¡ä¹ï¼å³æ æ´å¯æ´æ² */
 .af-split--aesthetics .af-split-product {
   gap: 22px;
 }
@@ -3084,7 +3242,7 @@ body.design-workspace .af-mosaic {
   }
 }
 
-/* 旧布局类名保留，避免残留引用崩样式 */
+/* æ§å¸å±ç±»åä¿çï¼é¿åæ®çå¼ç¨å´©æ ·å¼ */
 .af-review-stack,
 .af-review-layout {
   display: flex;
@@ -3355,7 +3513,7 @@ body.design-workspace .af-mosaic {
   word-break: break-word;
 }
 
-/* 行内完备度 / 评分 */
+/* è¡åå®å¤åº¦ / è¯å */
 .pct-inline {
   display: inline-flex;
   align-items: baseline;
@@ -3386,14 +3544,14 @@ body.design-workspace .af-mosaic {
   gap: 5px;
 }
 
-/* æè½ä¸ç¨æ­£æå¡ */
+/* Ã¦ÂÂÃ¨ÂÂ½Ã¤Â¸ÂÃ§ÂÂ¨Ã¦Â­Â£Ã¦ÂÂÃ¥ÂÂ¡ */
 .skill-view {
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
-/* 美学纲领：主栏契约 / 辅栏诊断（无第二层盒子） */
+/* ç¾å­¦çº²é¢ï¼ä¸»æ å¥çº¦ / è¾æ è¯æ­ï¼æ ç¬¬äºå±çå­ï¼ */
 .skill-view.skill-view-aesthetics {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(15.5rem, 0.88fr);
@@ -4061,7 +4219,7 @@ body.design-workspace .af-mosaic {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #2a6) 20%, transparent);
 }
 
-/* 询问卡：对话流里 host 即卡片；创作工作面上剥壳，见上方 flatten 规则 */
+/* è¯¢é®å¡ï¼å¯¹è¯æµé host å³å¡çï¼åä½å·¥ä½é¢ä¸å¥å£³ï¼è§ä¸æ¹ flatten è§å */
 .questions-card-host {
   --qcard-max: 48vh;
   flex: 0 1 auto;
@@ -4145,7 +4303,7 @@ body.design-workspace .af-mosaic {
 .questions-card-host.is-collapsed .qcard-float {
   display: none;
 }
-/* 悬浮控件层：不占文档流高度 */
+/* æ¬æµ®æ§ä»¶å±ï¼ä¸å ææ¡£æµé«åº¦ */
 .qcard-float {
   position: absolute;
   inset: 0;
@@ -4331,7 +4489,7 @@ body.design-workspace .af-mosaic {
 }
 .ws-slot-chip.ws-slot-on { background: var(--accent-soft); border-color: transparent; }
 .ws-slot-chip.ws-slot-off { opacity: 0.55; text-decoration: line-through; }
-/* äº§ç©ç»æåå±ç¤º â å¯¹é½ qcard / flow-step / ws-badge */
+/* Ã¤ÂºÂ§Ã§ÂÂ©Ã§Â»ÂÃ¦ÂÂÃ¥ÂÂÃ¥Â±ÂÃ§Â¤Âº Ã¢ÂÂ Ã¥Â¯Â¹Ã©Â½Â qcard / flow-step / ws-badge */
 .artifact-friendly { display: flex; flex-direction: column; gap: 10px; }
 .artifact-list { margin: 0; padding-left: 18px; line-height: 1.5; }
 .artifact-hero {
@@ -4431,7 +4589,7 @@ body.design-workspace .af-mosaic {
 .artifact-kv-row.complex .artifact-kv-key { margin-bottom: 2px; }
 .artifact-kv-val { min-width: 0; font-size: 13px; line-height: 1.45; }
 
-/* 自适应定义行：够宽并排，不够整组折行——同行规则，不按字数抽签 */
+/* èªéåºå®ä¹è¡ï¼å¤å®½å¹¶æï¼ä¸å¤æ´ç»æè¡ââåè¡è§åï¼ä¸æå­æ°æ½ç­¾ */
 .af-def-list {
   display: flex;
   flex-direction: column;
@@ -4488,7 +4646,7 @@ body.design-workspace .af-mosaic {
   flex-basis: 14rem;
 }
 
-/* ç¾åæ¯è¿åº¦æ¡ */
+/* Ã§ÂÂ¾Ã¥ÂÂÃ¦Â¯ÂÃ¨Â¿ÂÃ¥ÂºÂ¦Ã¦ÂÂ¡ */
 .pct-meter {
   display: flex;
   flex-direction: column;
@@ -4626,7 +4784,7 @@ body.design-workspace .af-mosaic {
 .artifact-raw > summary:hover { color: var(--text); }
 .artifact-raw .json-pretty { margin-top: 6px; max-height: min(40vh, 360px); }
 
-/* 指针 tag / 扁平面包屑：一行路径 + 不起眼原文 */
+/* æé tag / æå¹³é¢åå±ï¼ä¸è¡è·¯å¾ + ä¸èµ·ç¼åæ */
 .artifact-crumb {
   display: flex;
   flex-wrap: wrap;
@@ -4895,7 +5053,7 @@ body.design-workspace .af-mosaic {
 .timeline-item { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .timeline-empty { color: var(--muted); }
 
-/* Composer — emoji 更多在左 / 输入 / 发送；菜单向上弹出不被裁切 */
+/* Composer — 左汉堡 / 输入 / 发送；菜单向上弹出不被裁切 */
 .composer {
   border-top: 1px solid var(--border);
   padding: 6px var(--workspace-pad-x, 16px) 8px;
@@ -4909,6 +5067,9 @@ body.design-workspace .af-mosaic {
   flex-direction: row;
   align-items: flex-end;
   gap: 8px;
+}
+.composer:has(.composer-more-menu[open]) {
+  z-index: 120;
 }
 .composer > .status {
   flex: 0 0 auto;
@@ -4924,9 +5085,16 @@ body.design-workspace .af-mosaic {
   min-width: 0;
   min-height: 0;
   max-height: min(50vh, 420px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
-/* 唯一描边：输入 + 操作同框 */
+#composer-main:has(.composer-more-menu[open]) {
+  overflow: visible;
+}
+.main-stack:has(.composer-more-menu[open]) {
+  overflow: visible;
+}
+/* å¯ä¸æè¾¹ï¼è¾å¥ + æä½åæ¡ */
 .composer-input-shell {
   flex: 1 1 auto;
   min-width: 0;
@@ -5043,14 +5211,48 @@ body.design-workspace .af-mosaic {
 .composer-hint { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .composer-form {
   display: flex;
-  gap: 0;
+  gap: 8px;
   align-items: flex-end;
   min-height: 0;
   max-height: 100%;
   width: 100%;
 }
 .composer-form .composer-input-shell {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+.composer-more-menu {
+  align-self: center;
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+}
+.composer-more-menu[open] {
+  z-index: 130;
+}
+.composer-more-menu .more-menu-sum {
+  height: var(--composer-control-h);
+  min-height: var(--composer-control-h);
+  min-width: var(--composer-control-h);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+}
+.composer-more-menu .more-menu-sum:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.composer-more-menu .more-menu-panel {
+  left: 0;
+  right: auto;
+  top: auto;
+  bottom: calc(100% + 6px);
+  min-width: 220px;
+  z-index: 140;
 }
 .composer-shell-actions > .btn,
 .composer-shell-actions > .btn-primary,
@@ -5080,7 +5282,7 @@ body.design-workspace .af-mosaic {
   font-size: 16px;
   line-height: 1;
 }
-/* 验收态：主按钮承接原「批阅」语义 */
+/* éªæ¶æï¼ä¸»æé®æ¿æ¥åãæ¹éãè¯­ä¹ */
 .composer-btn-review {
   background: #15803d;
   border-color: #15803d;
@@ -5163,9 +5365,9 @@ body.design-workspace .af-mosaic {
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .dialog-head-row { display: flex; justify-content: space-between; align-items: center; }
 
-/* —— 游玩呈现壳 present.v1 ——
- * 主工作面 = body（随 1000～2000 字撑高）。
- * 视觉：少盒子、少渐变；层级靠字号/间距/对比，不靠装饰抢注意力。
+/* ââ æ¸¸ç©åç°å£³ present.v1 ââ
+ * ä¸»å·¥ä½é¢ = bodyï¼é 1000ï½2000 å­æé«ï¼ã
+ * è§è§ï¼å°çå­ãå°æ¸åï¼å±çº§é å­å·/é´è·/å¯¹æ¯ï¼ä¸é è£é¥°æ¢æ³¨æåã
  */
 .present-shell {
   white-space: normal;
@@ -5235,7 +5437,7 @@ body.design-workspace .af-mosaic {
 .present-region-body > p:last-child {
   margin-bottom: 0;
 }
-/* P0：正文舞台 —— 随字数伸展（1000～2000 靠外层滚动，不塞进小框） */
+/* P0ï¼æ­£æèå° ââ éå­æ°ä¼¸å±ï¼1000ï½2000 é å¤å±æ»å¨ï¼ä¸å¡è¿å°æ¡ï¼ */
 .present-stage {
   flex: 1 1 auto;
   min-height: 0;
@@ -5264,7 +5466,7 @@ body.design-workspace .af-mosaic {
   line-height: 1.7;
   max-width: none;
 }
-/* 双栏：侧栏钉住，正文再长也能对照 */
+/* åæ ï¼ä¾§æ éä½ï¼æ­£æåé¿ä¹è½å¯¹ç§ */
 .present-board-side,
 .present-split-side,
 .present-reader-aside {
@@ -5274,7 +5476,7 @@ body.design-workspace .af-mosaic {
   max-height: calc(100dvh - 3rem);
   overflow-y: auto;
 }
-/* P2：监控芯片 */
+/* P2ï¼çæ§è¯ç */
 .present-chips {
   display: flex;
   flex-wrap: wrap;
@@ -5316,7 +5518,7 @@ body.design-workspace .af-mosaic {
   letter-spacing: 0.01em;
   line-height: 1.4;
 }
-/* P1：行动 */
+/* P1ï¼è¡å¨ */
 .present-action-row {
   display: flex;
   flex-wrap: wrap;
@@ -5340,7 +5542,7 @@ body.design-workspace .af-mosaic {
   line-height: 1.45;
   font-size: 13px;
 }
-/* —— 各壳布局（结构差在同时可见关系；不靠渐变区分） —— */
+/* ââ åå£³å¸å±ï¼ç»æå·®å¨åæ¶å¯è§å³ç³»ï¼ä¸é æ¸ååºåï¼ ââ */
 .present-shell--chat_monitor {
   --present-accent: #0369a1;
 }
@@ -5581,4 +5783,154 @@ body.design-workspace .af-mosaic {
   color: var(--muted, #888);
   min-width: 4.5em;
   text-align: center;
+}
+
+/* ×ªÊöÕûÀí£ºÒÑ³Ö¾Ã»¯²úÎïÕ¹Ê¾ */
+.dictate-products {
+  margin-top: 14px;
+  border: 1px solid var(--border, #d8d4cc);
+  background: var(--surface-2, #f7f5f1);
+  padding: 10px 12px;
+}
+.dictate-products-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dictate-products-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #6b6560);
+}
+.dictate-products-count {
+  font-size: 12px;
+  color: var(--muted, #6b6560);
+  font-variant-numeric: tabular-nums;
+}
+.dictate-products-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted, #6b6560);
+  line-height: 1.45;
+}
+.dictate-products-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dictate-product {
+  border: 1px solid var(--border, #e2ddd4);
+  background: var(--surface, #fff);
+}
+.dictate-product > summary {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.dictate-product > summary::-webkit-details-marker {
+  display: none;
+}
+.dictate-product-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg, #1c1917);
+  word-break: break-all;
+}
+.dictate-product-preview {
+  font-size: 12px;
+  color: var(--muted, #6b6560);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.dictate-product-body {
+  margin: 0;
+  padding: 0 10px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--fg, #1c1917);
+  font-family: inherit;
+}
+
+/* 转述：右侧栏产物列表 — 只上下滚，长文换行不横滑 */
+.dictate-product--rail {
+  border: 1px solid var(--border, #e2ddd4);
+  background: var(--surface, #fff);
+  margin-bottom: 6px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.dictate-product--rail > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  min-width: 0;
+}
+.dictate-product--rail > summary::-webkit-details-marker { display: none; }
+.dictate-product--rail .dictate-product-tag {
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.dictate-product--rail .dictate-product-preview {
+  font-size: 12px;
+  color: var(--muted, #6b6560);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.dictate-product--rail .dictate-product-body {
+  margin: 0;
+  padding: 0 10px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  font-family: inherit;
+  color: var(--fg, #1c1917);
+}
+.dictate-products-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+body[data-coord-rail-mode="products"] .coord-drawer-body {
+  padding: 8px 10px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-width: 0;
+}
+body[data-coord-rail-mode="products"] .coord-rail,
+body[data-coord-rail-mode="products"] .coord-rail-panel {
+  min-width: 0;
+  overflow-x: hidden;
 }

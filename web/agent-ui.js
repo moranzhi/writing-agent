@@ -8,6 +8,7 @@ import {
   renderQuestionsCard,
 } from "./questions-ui.js";
 import { displayWorkerLabel, formatWorkerDisplayTitle, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
+import { formatBodyHtml } from "./markdown.js";
 import {
   PRESENT_SHELL_IDS,
   parsePresentDoc,
@@ -32,6 +33,7 @@ const MSG_CLASS = {
   orchestrator_thinking: "agent",
   orchestrator_prompt: "agent",
   orchestrator_assessment: "agent",
+  dictate_reply: "agent",
   worker_running: "skill",
   worker_output: "skill",
   worker_questions: "questions",
@@ -45,6 +47,7 @@ const MSG_LABEL = {
   orchestrator_thinking: "编排器 · 思考",
   orchestrator_prompt: "编排器",
   orchestrator_assessment: "编排器 · 内容评价",
+  dictate_reply: "转述整理",
   worker_running: "执行单元",
   worker_output: "执行单元",
   worker_questions: "提问",
@@ -96,6 +99,11 @@ export function isCreationCloserDone(view) {
 }
 
 export function canOfferSaveProduct(view) {
+  if (!view || isPlayView(view)) return false;
+  if (view.creationMode === "dictate") {
+    const products = view.dictateProducts;
+    return Array.isArray(products) && products.length > 0;
+  }
   return isCreationSealedWaiting(view) || isCreationCloserDone(view);
 }
 
@@ -490,7 +498,7 @@ function cancelInlineEdit(card) {
   card.querySelector(".msg-foot")?.removeAttribute("hidden");
   const editing = card.querySelector(".msg-body-editing");
   if (editing) {
-    editing.outerHTML = `<div class="msg-body">${esc(original)}</div>`;
+    editing.outerHTML = `<div class="msg-body">${formatBodyHtml(original)}</div>`;
   }
 }
 
@@ -689,19 +697,34 @@ export function renderSkillPicker(_view, _onPick) {
 let activeRailTab = "books";
 /** 用户手动展开侧栏后，在本会话保持展开，直到再点收起 */
 let railUserExpanded = false;
-/** 创作验收右侧「此前对话」：默认收起，把宽度留给产物 */
+/** 创作右侧栏：history=此前对话；products=转述产物 */
+let coordRailMode = "history";
+/** 创作验收右侧栏：默认收起（对话）；转述看产物时默认展开 */
 let coordRailCollapsed = true;
 
 function syncCoordRailChrome() {
   const rail = document.getElementById("coord-rail");
   const toggle = document.getElementById("btn-coord-toggle");
+  const toggleLabel = document.getElementById("coord-rail-toggle-label");
+  const title = document.getElementById("coord-rail-title");
+  const products = coordRailMode === "products";
   document.body.classList.toggle("coord-rail-collapsed", coordRailCollapsed);
+  document.body.dataset.coordRailMode = coordRailMode;
+  if (toggleLabel) toggleLabel.textContent = products ? "产物" : "对话";
+  if (title) title.textContent = products ? "已持久化" : "此前对话";
   if (toggle) {
     toggle.setAttribute("aria-expanded", coordRailCollapsed ? "false" : "true");
-    toggle.title = coordRailCollapsed ? "展开此前对话" : "收起此前对话";
+    toggle.title = coordRailCollapsed
+      ? products
+        ? "展开产物"
+        : "展开此前对话"
+      : products
+        ? "收起产物"
+        : "收起此前对话";
   }
   if (rail) {
     rail.dataset.collapsed = coordRailCollapsed ? "1" : "0";
+    rail.setAttribute("aria-label", products ? "已持久化产物" : "此前对话");
   }
 }
 
@@ -4668,10 +4691,12 @@ function getRollbackMessageId(messages, messageId) {
   return messageIndex >= 0 ? messages[messageIndex + 1]?.id ?? null : null;
 }
 
-/** @returns {"speak"|"answer"|"review"|"busy"|null} */
+/** @returns {"speak"|"answer"|"review"|"busy"|"dictate"|null} */
 function resolveDesignSurface(view, loading) {
   if (isPlayView(view)) return null;
   if (view.phase === "done") return null;
+  // 转述：主面始终是对话流；右侧才是产物
+  if (view.creationMode === "dictate") return "dictate";
   const busy = Boolean(loading || (view.phase === "running" && !view.waitingReason));
   if (busy) return "busy";
   if (view.phase === "error") return "speak";
@@ -4850,8 +4875,12 @@ function renderSpeakWorkspace(view) {
   if (canOfferSaveProduct(view)) {
     title = "可以落档了";
     hint = view.hasProduct
-      ? "产物已拆出，可开玩；创作流程还在，补节点或再保存一份新定稿。"
-      : "保存后创作流程仍在；拆出的产物可以单独开玩、存档。";
+      ? view.creationMode === "dictate"
+        ? "产物已拆出，可开玩；创作对话还在，可继续改产物或再保存一份新定稿。"
+        : "产物已拆出，可开玩；创作流程还在，补节点或再保存一份新定稿。"
+      : view.creationMode === "dictate"
+        ? "保存后创作对话仍在；拆出的产物可以单独开玩、存档。"
+        : "保存后创作流程仍在；拆出的产物可以单独开玩、存档。";
   } else if (wr?.kind === "pick_creation_step" || isFlowPlanReview(view)) {
     title = "选要做的节点";
     hint = "点图上可进入的节点即开始；虚线原型点一下增殖。要看技能池点上方「技能」。要改排在底栏写意见再发。";
@@ -4890,14 +4919,30 @@ function renderSpeakWorkspace(view) {
       ? proposedOutputCopy(view.proposedNextStep)
       : view.focus?.detail || "确认执行，或在底栏说明意见。";
   } else if (wr?.kind === "input") {
-    title = "继续说";
-    hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
+    if (isPlayView(view)) {
+      title = "继续游玩";
+      hint =
+        view.hints?.[0] ||
+        wr.message ||
+        "描述本轮行动、对话或想说的话；由游玩管线推进。";
+    } else if (view.creationMode === "dictate") {
+      title = "转述整理";
+      hint =
+        view.hints?.[0] ||
+        wr.message ||
+        "直接说体验与设定；右侧「已持久化」会列出 Agent 写入的内容。";
+    } else {
+      title = "继续说";
+      hint = view.hints?.[0] || wr.message || "直接输入你的想法或补充。";
+    }
   } else if (view.uiPrompt && !hasUserMessages(view)) {
     title = "描述你想创作什么";
     hint = String(view.uiPrompt).trim().slice(0, 280);
   }
   const recipe =
-    view.selectedRecipe?.name && !hasUserMessages(view)
+    view.selectedRecipe?.name &&
+    !isPlayView(view) &&
+    (view.creationMode === "dictate" || !hasUserMessages(view))
       ? `<p class="workspace-intent-meta">配方：${esc(view.selectedRecipe.name)}</p>`
       : "";
   const intake =
@@ -4931,7 +4976,11 @@ function renderSpeakWorkspace(view) {
         flowInteractive
           ? workspaceViewSwitchHtml("flow")
           : `<span class="workspace-surface-kicker">${
-              canOfferSaveProduct(view) ? "落档" : "说话"
+              view.creationMode === "dictate"
+                ? "转述"
+                : canOfferSaveProduct(view)
+                  ? "落档"
+                  : "说话"
             }</span>`
       }
     </div>
@@ -4945,14 +4994,53 @@ function renderSpeakWorkspace(view) {
   </section>`;
 }
 
-function renderAnswerWorkspaceShell(view) {
-  return `<section class="workspace-answer" id="workspace-answer-slot">
-    <header class="workspace-answer-head workspace-answer-head--slim">
-      ${leaveStepControlHtml(view)}
-      <span class="workspace-surface-kicker">答题</span>
-      <p class="workspace-answer-hint">点字母选中，文案可改；点卡片展开，点顶条收起。</p>
-    </header>
-  </section>`;
+/** 转述式：产物列表（右侧栏） */
+function renderDictateProductsList(view) {
+  const items = Array.isArray(view.dictateProducts) ? view.dictateProducts : [];
+  if (!items.length) {
+    return `<p class="coord-empty">尚无写入。Agent 落盘产物后会出现在这里。</p>`;
+  }
+  return `<div class="dictate-products-list">${items
+    .map((p) => {
+      const tag = String(p.tag ?? "").trim();
+      const content = String(p.content ?? "");
+      const preview = content.replace(/\s+/g, " ").trim().slice(0, 72);
+      return `<details class="dictate-product dictate-product--rail" open>
+        <summary>
+          <span class="dictate-product-tag">${esc(tag)}${
+            p.order != null && Number.isFinite(Number(p.order))
+              ? ` · ${Number(p.order)}`
+              : ""
+          }</span>
+          <span class="dictate-product-preview">${esc(preview)}${
+            content.length > 72 ? "…" : ""
+          }</span>
+        </summary>
+        <div class="dictate-product-body">${formatBodyHtml(content)}</div>
+      </details>`;
+    })
+    .join("")}</div>`;
+}
+
+function fillCoordRailProducts(view) {
+  const coordRail = document.getElementById("coord-rail");
+  const drawerBody = document.getElementById("coord-drawer-body");
+  const drawerCount = document.getElementById("coord-drawer-count");
+  if (!coordRail) return;
+  const items = Array.isArray(view.dictateProducts) ? view.dictateProducts : [];
+  if (coordRailMode !== "products") {
+    coordRailMode = "products";
+    coordRailCollapsed = false;
+  }
+  coordRail.hidden = false;
+  if (drawerBody) drawerBody.innerHTML = renderDictateProductsList(view);
+  if (drawerCount) {
+    drawerCount.textContent = String(items.length);
+    drawerCount.title = items.length
+      ? `已持久化 ${items.length} 项`
+      : "尚无产物";
+  }
+  syncCoordRailChrome();
 }
 
 function fillCoordRail(visible, view, handlers) {
@@ -4960,6 +5048,18 @@ function fillCoordRail(visible, view, handlers) {
   const drawerBody = document.getElementById("coord-drawer-body");
   const drawerCount = document.getElementById("coord-drawer-count");
   if (!coordRail) return;
+
+  // 转述产物栏只在创作层；游玩层与配方开玩一样走回合历史
+  if (view.creationMode === "dictate" && !isPlayView(view)) {
+    fillCoordRailProducts(view);
+    return;
+  }
+
+  if (coordRailMode !== "history") {
+    coordRailMode = "history";
+    coordRailCollapsed = true;
+  }
+
   const visibleIds = new Set(visible.map((message) => message.id));
   const history = (view.messages ?? []).filter((message) => {
     if (isReviewSidecarQuestionStub(message)) return false;
@@ -4967,7 +5067,6 @@ function fillCoordRail(visible, view, handlers) {
   });
   const traceCount = history.filter((message) => message.contextTrace).length;
   const packs = groupCoordTurnPacks(history);
-  // 侧栏是回看档案：打开先看最近一轮，往下才是更早的对话
   const ordered = [...packs].reverse();
   const hiddenIds = new Set(
     history.filter((message) => !visibleIds.has(message.id)).map((message) => message.id),
@@ -5105,6 +5204,39 @@ export function renderMessageFeed(view, loading, handlers = {}) {
 
     if (!stage) return;
 
+    // 转述：主柱对话流；右侧已持久化；stage 仅一行条
+    if (surface === "dictate") {
+      stage.hidden = false;
+      const recipeName = view.selectedRecipe?.name
+        ? esc(view.selectedRecipe.name)
+        : "";
+      stage.innerHTML = recipeName
+        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">转述</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
+        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">转述</span></header>`;
+      if (panelFeed) ensureQuestionsHostIn(panelFeed);
+      appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, {
+        emptyText:
+          "直接说你想要的体验与设定。我会整理进右侧产物，并在回复里跟你确认、建议补充。",
+        loading,
+      });
+      if (loading) {
+        const pending = document.createElement("article");
+        pending.className = "msg agent msg-assistant-row msg-pending";
+        pending.id = "msg-live-pending";
+        const live = view.liveStream;
+        const label = live?.label ?? view.focus?.action ?? "整理中";
+        pending.innerHTML = `
+          <div class="msg-bubble">
+            <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
+            <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
+          </div>`;
+        feed.appendChild(pending);
+        wireRetryRun(pending, handlers);
+      }
+      feed.scrollTop = feed.scrollHeight;
+      return;
+    }
+
     if (surface === "busy" || loading) {
       stage.hidden = false;
       const live = view.liveStream;
@@ -5158,29 +5290,63 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     return;
   }
 
-  // —— 游玩：保持原对话流 ——
+  // —— 游玩 / 转述对话流 ——
+  appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, {
+    emptyText: isPlayView(view)
+      ? "开场已就绪。在下方说你要做什么。"
+      : view.uiPrompt
+        ? `${view.uiPrompt}${
+            view.selectedRecipe?.name
+              ? `\n\n已选配方：${view.selectedRecipe.name}`
+              : view.recipes?.length
+                ? "\n\n（请先在新建作品时选定配方）"
+                : ""
+          }`
+        : view.waitingReason?.kind === "worker_questions"
+          ? "在下方回答提问。"
+          : intake
+            ? "在下方描述你想创作什么；Agent 会收成 Worker 集供你验收。"
+            : "在下方继续对话。",
+    loading,
+    emptyClass: isPlayView(view) ? "empty" : "empty empty-intake",
+  });
+
+  if (reviewingNow && view.reviewArtifact && !loading && stage && !isPlayView(view)) {
+    const hasHungAsk = Boolean(activeQuestions?.questions?.length);
+    mountReviewWorkspace(stage, view, handlers, {
+      hideAskSidecar: hasHungAsk,
+      mountAskCard: hasHungAsk,
+    });
+  }
+
+  if (loading) {
+    const pending = document.createElement("article");
+    pending.className = "msg agent msg-assistant-row msg-pending";
+    pending.id = "msg-live-pending";
+    const live = view.liveStream;
+    const label = live?.label ?? view.focus?.action ?? "处理中";
+    pending.innerHTML = `
+      <div class="msg-bubble">
+        <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
+        <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
+      </div>`;
+    feed.appendChild(pending);
+    wireRetryRun(pending, handlers);
+  }
+
+  feed.scrollTop = feed.scrollHeight;
+  if (stage && !stage.hidden) stage.scrollTop = 0;
+}
+
+function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, opts = {}) {
+  const loading = Boolean(opts.loading);
   if (!visible.length && !loading) {
     const p = document.createElement("p");
-    p.className = "empty";
-    if (isPlayView(view)) {
-      p.textContent = "开场已就绪。在下方说你要做什么。";
-    } else if (view.uiPrompt) {
-      const recipeLine = view.selectedRecipe?.name
-        ? `\n\n已选配方：${view.selectedRecipe.name}`
-        : view.recipes?.length
-          ? "\n\n（请先在新建作品时选定配方）"
-          : "";
-      p.textContent = `${view.uiPrompt}${recipeLine}`;
-      p.classList.add("empty-intake");
-    } else if (view.waitingReason?.kind === "worker_questions") {
-      p.textContent = "在下方回答提问。";
-    } else if (intake) {
-      p.textContent = "在下方描述你想创作什么；Agent 会收成 Worker 集供你验收。";
-    } else {
-      p.textContent = "在下方继续对话。";
-    }
-    p.classList.add("empty-intake");
+    p.className = opts.emptyClass || "empty empty-intake";
+    p.textContent = opts.emptyText || "在下方继续对话。";
     feed.appendChild(p);
+    wireMessageFeedActions(feed, handlers);
+    wireMessageContextMenu(feed, handlers);
     return;
   }
 
@@ -5217,8 +5383,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     card.dataset.originalText = body;
 
     const questionsActive = kind === "worker_questions" && Boolean(activeQuestions);
-    const showThinking =
-      !isUser && msg.thinking && isPlayView(view);
+    const showThinking = !isUser && msg.thinking && isPlayView(view);
     const innerBody = questionsActive
       ? `<p class="msg-q-index">${esc(body)}</p>`
       : kind === "worker_questions"
@@ -5227,7 +5392,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
           ? formatPlayPresentHtml(body, view)
           : kind === "worker_output"
             ? formatArtifactBodyHtml(body)
-            : esc(body);
+            : formatBodyHtml(body);
 
     const process = !isUser && isPlayProcessMessage(msg, view);
     const playFinal = !isUser && isPlayFinalReply(msg, view);
@@ -5255,35 +5420,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     }
     feed.appendChild(card);
   }
-
   wireMessageFeedActions(feed, handlers);
   wireMessageContextMenu(feed, handlers);
-
-  if (reviewingNow && view.reviewArtifact && !loading && stage && !isPlayView(view)) {
-    const hasHungAsk = Boolean(activeQuestions?.questions?.length);
-    mountReviewWorkspace(stage, view, handlers, {
-      hideAskSidecar: hasHungAsk,
-      mountAskCard: hasHungAsk,
-    });
-  }
-
-  if (loading) {
-    const pending = document.createElement("article");
-    pending.className = "msg agent msg-assistant-row msg-pending";
-    pending.id = "msg-live-pending";
-    const live = view.liveStream;
-    const label = live?.label ?? view.focus?.action ?? "处理中";
-    pending.innerHTML = `
-      <div class="msg-bubble">
-        <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
-        <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
-      </div>`;
-    feed.appendChild(pending);
-    wireRetryRun(pending, handlers);
-  }
-
-  feed.scrollTop = feed.scrollHeight;
-  if (stage && !stage.hidden) stage.scrollTop = 0;
 }
 
 /** 轮询时仅更新流式 pending 卡片，避免整页重绘；不自动滚到底，保持用户当前阅读位置 */

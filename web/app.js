@@ -27,6 +27,11 @@ import {
   themeById,
   chromeById,
 } from "./theme.js";
+import {
+  applyMarkdownRender,
+  initMarkdownRender,
+  isMarkdownRenderEnabled,
+} from "./markdown.js";
 
 let sessionId = null;
 let activeBookId = null;
@@ -124,8 +129,10 @@ function resolveUserTask(view, loading) {
       label: "可保存",
       title: "落档产物",
       hint: view.hasProduct
-        ? "可再保存一份新定稿，或用已有产物开玩。补节点仍点图。"
-        : "点「保存定稿」拆出产物。创作流程还在，之后用产物开玩。",
+        ? "可再保存一份新定稿，或用已有产物开玩。"
+        : view.creationMode === "dictate"
+          ? "点「保存定稿」拆出产物。创作对话还在，之后用产物开玩。"
+          : "点「保存定稿」拆出产物。创作流程还在，之后用产物开玩。",
     };
   }
 
@@ -565,6 +572,43 @@ function composerInputShell(spec, { textareaHtml, trailing = "" } = {}) {
   </div>`;
 }
 
+function composerMoreMenuHtml() {
+  const on = isMarkdownRenderEnabled();
+  return `<details class="more-menu composer-more-menu" id="composer-more-menu">
+    <summary class="btn-sm more-menu-sum" title="更多选项" aria-label="更多选项">
+      <span class="hamburger-icon" aria-hidden="true"></span>
+    </summary>
+    <div class="more-menu-panel composer-more-panel" role="menu">
+      <div class="more-menu-label">显示</div>
+      <button
+        type="button"
+        class="more-menu-item more-toggle-item${on ? " is-active" : ""}"
+        data-toggle-markdown
+        role="menuitemcheckbox"
+        aria-checked="${on ? "true" : "false"}"
+      >
+        <span class="more-theme-copy">
+          <span class="more-theme-name">Markdown 渲染</span>
+          <span class="more-theme-desc">消息与产物按 Markdown 显示</span>
+        </span>
+        <span class="more-toggle-mark" aria-hidden="true"></span>
+      </button>
+    </div>
+  </details>`;
+}
+
+function composerFormHtml(shell) {
+  return `<form class="composer-form" id="composer-form">${composerMoreMenuHtml()}${shell}</form>`;
+}
+
+function syncMarkdownMenuUi() {
+  const mdOn = isMarkdownRenderEnabled();
+  document.querySelectorAll("[data-toggle-markdown]").forEach((btn) => {
+    btn.classList.toggle("is-active", mdOn);
+    btn.setAttribute("aria-checked", mdOn ? "true" : "false");
+  });
+}
+
 function syncThemeMenuUi() {
   const colorId = document.documentElement.getAttribute("data-color-theme") || getStoredColorTheme();
   const chromeId =
@@ -584,6 +628,7 @@ function syncThemeMenuUi() {
   document.querySelectorAll("[data-present-chrome].more-theme-item").forEach((btn) => {
     btn.classList.toggle("is-active", btn.getAttribute("data-present-chrome") === chromeMeta.id);
   });
+  syncMarkdownMenuUi();
 }
 
 function stashComposerDraftFromDom() {
@@ -652,7 +697,7 @@ function renderComposer(view, loading) {
           <button type="button" class="btn composer-btn-icon" data-act="retry_run" title="重roll" aria-label="重roll">🔄</button>`,
       },
     );
-    root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
+    root.innerHTML = composerFormHtml(shell);
     root.querySelector("#composer-form")?.addEventListener("submit", (e) => e.preventDefault());
     root.querySelector("[data-act=abort_run]")?.addEventListener("click", () => abortRun());
     root.querySelector("[data-act=retry_run]")?.addEventListener("click", () => retryRun());
@@ -682,7 +727,7 @@ function renderComposer(view, loading) {
     root.innerHTML = `
       ${intakePanel}
       ${confirm}
-      <form class="composer-form" id="composer-form">${shell}</form>`;
+      ${composerFormHtml(shell)}`;
     wireComposerForm();
     root.querySelector("[data-act=confirm_intake]")?.addEventListener("click", () => runAction("confirm_intake"));
     applyPendingComposerDraft();
@@ -843,7 +888,7 @@ function renderComposer(view, loading) {
       textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
       trailing: `${saveProduct}${enterPlay}<button type="submit" class="${sendCls}" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进入">${esc(spec.submitLabel || "发送")}</button>`,
     });
-    root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
+    root.innerHTML = composerFormHtml(shell);
     wireComposerForm({ requiresText: true });
     root.querySelector("[data-act=save-product]")?.addEventListener("click", () => {
       void saveCurrentInstance();
@@ -866,14 +911,28 @@ function renderComposer(view, loading) {
           : spec.acceptAction.title || spec.acceptAction.label
       )}" ${spec.acceptAction.disabled ? "disabled" : ""}>${esc(spec.acceptAction.label)}</button>`
     : "";
+  const clearDictate =
+    view?.creationMode === "dictate" && !isPlayView(view)
+      ? `<button type="button" class="btn" data-act="clear-dictate" title="清空对话，保留产物">清空对话</button>`
+      : "";
+  const saveProduct = canOfferSaveProduct(view)
+    ? `<button type="button" class="btn btn-primary" data-act="save-product">保存定稿</button>`
+    : "";
+  const enterPlay = canOfferEnterPlay(view)
+    ? `<button type="button" class="btn${
+        canOfferSaveProduct(view) ? "" : " btn-primary"
+      }" data-act="enter-play">${
+        view.hasProduct ? "用产物开玩" : "开玩"
+      }</button>`
+    : "";
   const submitLabel = spec.submitLabel || "发送";
-  const sendIsPrimary = !acceptOnEmpty;
+  const sendIsPrimary = !acceptOnEmpty && !saveProduct && !enterPlay;
   const placeholder = acceptOnEmpty
     ? `${spec.placeholder || "修改意见…"}（${spec.emptyEnterHint || "空 Enter＝确认"}）`
     : spec.placeholder;
   const shell = composerInputShell(spec, {
     textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(placeholder)}"></textarea>`,
-    trailing: `<button type="button" class="btn composer-btn${
+    trailing: `${clearDictate}${saveProduct}${enterPlay}<button type="button" class="btn composer-btn${
       sendIsPrimary ? " btn-primary" : ""
     }" data-act="revise" title="${esc(
       acceptOnEmpty
@@ -881,9 +940,18 @@ function renderComposer(view, loading) {
         : "Enter 发送"
     )}">${esc(submitLabel)}</button>${acceptBtn}`,
   });
-  root.innerHTML = `<form class="composer-form" id="composer-form">${shell}</form>`;
+  root.innerHTML = composerFormHtml(shell);
   wireComposerForm({ acceptOnEmpty });
   root.querySelector("[data-act=accept]")?.addEventListener("click", () => runAction("accept"));
+  root.querySelector("[data-act=clear-dictate]")?.addEventListener("click", () => {
+    void clearDictateDialogue();
+  });
+  root.querySelector("[data-act=save-product]")?.addEventListener("click", () => {
+    void saveCurrentInstance();
+  });
+  root.querySelector("[data-act=enter-play]")?.addEventListener("click", () => {
+    enterPlayNow();
+  });
   applyPendingComposerDraft();
 }
 
@@ -1964,6 +2032,23 @@ async function abortRun() {
   }
 }
 
+async function clearDictateDialogue() {
+  if (!sessionId) return;
+  if (!confirm("清空对话？产物会保留。")) return;
+  const seq = beginUiRequest();
+  try {
+    const view = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/dictate/clear-dialogue`,
+      { method: "POST", body: "{}" },
+    );
+    if (isStaleUiRequest(seq)) return;
+    renderSession(view, false);
+  } catch (err) {
+    if (isStaleUiRequest(seq)) return;
+    alert(err.message);
+  }
+}
+
 function startLivePoll() {
   stopLivePoll();
   if (!sessionId) return;
@@ -2350,38 +2435,90 @@ function openNewBookDialog() {
 async function populateDirectorSelect() {
   const sel = $("select-director");
   const desc = $("director-desc");
-  if (!sel) return;
-  try {
-    const data = await api("/api/directors");
-    const directors = data.directors ?? [];
+  const modeSel = $("select-creation-mode");
+  const modeDesc = $("creation-mode-desc");
+  const fieldDirector = $("field-director");
+  let recipeDirectors = [];
+  let dictateDirectors = [];
+
+  const fillOptions = (list) => {
+    if (!sel) return;
     sel.innerHTML = "";
-    if (!directors.length) {
+    if (!list.length) {
       sel.innerHTML = `<option value="">暂无配方</option>`;
-      if (desc) {
-        desc.hidden = false;
-        desc.textContent = "尚未配置配方选项（recipes/catalog.yaml）。";
+      sel.required = false;
+      return;
+    }
+    for (const d of list) {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      opt.textContent = d.name || d.id;
+      if (d.declaration) opt.dataset.declaration = d.declaration;
+      sel.appendChild(opt);
+    }
+    sel.value = list[0].id;
+    sel.required = true;
+  };
+
+  const syncDesc = () => {
+    if (!sel || !desc) return;
+    if (!modeSel?.value) {
+      desc.hidden = true;
+      desc.textContent = "";
+      return;
+    }
+    const list =
+      modeSel.value === "dictate" ? dictateDirectors : recipeDirectors;
+    const cur = list.find((d) => d.id === sel.value);
+    const text = (cur?.declaration ?? "").trim();
+    desc.hidden = !text;
+    desc.textContent = text;
+  };
+
+  const syncMode = () => {
+    const mode = modeSel?.value?.trim() || "";
+    if (!mode) {
+      if (fieldDirector) fieldDirector.hidden = true;
+      if (modeDesc) modeDesc.hidden = true;
+      if (desc) desc.hidden = true;
+      if (sel) {
+        sel.innerHTML = `<option value="">请先选择进料方式</option>`;
+        sel.required = false;
       }
       return;
     }
-    for (const d of directors) {
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = displaySkillPackLabel(d.id) || d.name || d.id;
-      sel.appendChild(opt);
+    const dictate = mode === "dictate";
+    if (fieldDirector) fieldDirector.hidden = false;
+    fillOptions(dictate ? dictateDirectors : recipeDirectors);
+    if (modeDesc) {
+      modeDesc.hidden = false;
+      modeDesc.textContent = dictate
+        ? "转述整理：直接对话写入产物；下方为转述专用配方。"
+        : "节点流程：按配方预置起点走工作流计划；下方为节点流程配方。";
     }
-    const preferred =
-      directors.find((d) => d.id === "world-simulator") ?? directors[0];
-    sel.value = preferred.id;
-    const syncDesc = () => {
-      const cur = directors.find((d) => d.id === sel.value);
-      if (desc) {
-        const text = (cur?.declaration ?? "").trim();
-        desc.hidden = !text;
-        desc.textContent = text;
-      }
-    };
-    sel.onchange = syncDesc;
     syncDesc();
+  };
+
+  if (modeSel && !modeSel.dataset.bound) {
+    modeSel.dataset.bound = "1";
+    modeSel.addEventListener("change", syncMode);
+  }
+  if (sel && !sel.dataset.boundDesc) {
+    sel.dataset.boundDesc = "1";
+    sel.addEventListener("change", syncDesc);
+  }
+  if (!sel) return;
+  try {
+    const data = await api("/api/directors");
+    recipeDirectors = data.recipeDirectors ?? data.directors ?? [];
+    dictateDirectors = data.dictateDirectors ?? [];
+    // 打开对话框时重置为「先选进料」
+    if (modeSel) {
+      modeSel.value = "";
+      const placeholder = [...modeSel.options].find((o) => !o.value);
+      if (placeholder) placeholder.selected = true;
+    }
+    syncMode();
   } catch (err) {
     sel.innerHTML = `<option value="">加载失败</option>`;
     if (desc) {
@@ -2393,7 +2530,12 @@ async function populateDirectorSelect() {
 
 async function createBook() {
   const title = $("input-book-title").value.trim() || "未命名作品";
+  const creationMode = $("select-creation-mode")?.value?.trim() || "";
   const recipeId = $("select-director")?.value?.trim();
+  if (creationMode !== "recipe" && creationMode !== "dictate") {
+    alert("请先选择进料方式");
+    return;
+  }
   if (!recipeId) {
     alert("请选择配方");
     return;
@@ -2407,6 +2549,7 @@ async function createBook() {
       body: JSON.stringify({
         title,
         orchestratorId,
+        creationMode,
         recipeId,
       }),
     });
@@ -2493,7 +2636,11 @@ function defaultArchiveLabel() {
 
 async function saveCurrentInstance() {
   if (!activeBookId || (!lastView?.playReady && !canOfferSaveProduct(lastView))) {
-    return alert("须先完成收口或验收 Worker 集");
+    return alert(
+      lastView?.creationMode === "dictate"
+        ? "请先让 Agent 写入至少一项产物，再保存定稿"
+        : "须先完成收口或验收 Worker 集",
+    );
   }
   const label = prompt("落档名称", defaultArchiveLabel());
   if (!label?.trim()) return;
@@ -2699,6 +2846,16 @@ $("theme-menu")?.addEventListener("click", (e) => {
   }
 });
 
+$("composer")?.addEventListener("click", (e) => {
+  const menu = e.target.closest("#composer-more-menu");
+  const mdBtn = e.target.closest("[data-toggle-markdown]");
+  if (!mdBtn || !menu?.contains(mdBtn)) return;
+  e.preventDefault();
+  applyMarkdownRender(!isMarkdownRenderEnabled());
+  syncMarkdownMenuUi();
+  if (lastView && sessionId) renderSession(lastView, false);
+});
+
 window.addEventListener("wa:session-updated", (e) => {
   const view = e.detail;
   if (!view?.id || isCatalogNav() || !sessionId) return;
@@ -2719,6 +2876,7 @@ document.addEventListener("click", (e) => {
 async function init() {
   initColorTheme();
   initPresentChrome();
+  initMarkdownRender();
   syncThemeMenuUi();
   try {
     void populateDirectorSelect();
