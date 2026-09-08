@@ -25,6 +25,7 @@ export type AgentMessageKind =
   | "orchestrator_thinking"
   | "orchestrator_prompt"
   | "orchestrator_assessment"
+  | "dictate_reply"
   | "agent_tool"
   | "worker_running"
   | "worker_output"

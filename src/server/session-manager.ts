@@ -140,6 +140,17 @@ import {
   foldRunProcessMessages,
 } from "./prune-creation-messages.js";
 import {
+  CREATION_INTAKE_MODE_TAG,
+  DICTATE_MODE_VALUE,
+  DICTATE_ORDER_META_KEY,
+  defaultDictateOrder,
+  extractDictateDialogue,
+  isDictateModeValue,
+  runDictateTurn,
+  sortDictateProducts,
+  type DictateProduct,
+} from "../dictate/index.js";
+import {
   formatQuestionAnswersForAi,
   formatQuestionAnswersForDisplay,
   isModuleOpeningQuestions,
@@ -252,6 +263,10 @@ export type SessionView = {
   /** Agent / Worker 流式输出（轮询用） */
   liveStream?: LiveStreamView;
   resumed?: boolean;
+  /** 创作进料：recipe=配方节点流；dictate=转述整理直填 */
+  creationMode?: "recipe" | "dictate";
+  /** 转述式已写入黑板的产物（按相对序） */
+  dictateProducts?: Array<{ tag: string; content: string; order?: number }>;
   tokenStats?: {
     sessionTotal: number;
     sessionCached?: number;
@@ -503,6 +518,7 @@ export class SessionManager {
     bookId?: string,
     preselectSkillId?: string,
     selectedRecipeId?: string,
+    opts?: { creationMode?: "recipe" | "dictate" },
   ): Promise<SessionView> {
     const id = randomUUID();
     const messages: ChatMessage[] = [];
@@ -543,11 +559,22 @@ export class SessionManager {
     } else {
       await runtime.start();
     }
-    await this.refreshRecipeOptions(managed);
+    const useDictate = opts?.creationMode === "dictate";
+    await this.refreshRecipeOptions(
+      managed,
+      useDictate ? "dictate" : "recipe",
+    );
+
     if (selectedRecipeId?.trim()) {
-      await this.applySelectedRecipe(managed, selectedRecipeId.trim());
+      await this.applySelectedRecipe(managed, selectedRecipeId.trim(), {
+        seedFlow: !useDictate,
+      });
     }
-    await this.maybeKickAgentAfterDemand(runtime);
+    if (useDictate) {
+      this.enterDictateMode(managed);
+    } else {
+      await this.maybeKickAgentAfterDemand(runtime);
+    }
 
     recordPreMessageCheckpoint(
       managed.branchState,
@@ -562,6 +589,183 @@ export class SessionManager {
       this.persist(managed);
     }
     return this.toView(id);
+  }
+
+  /** 切换到转述整理进料（与配方并行；不跑 design-flow） */
+  private enterDictateMode(s: ManagedSession): void {
+    const board = s.runtime.getBlackboard();
+    board.write({
+      tag: CREATION_INTAKE_MODE_TAG,
+      content: DICTATE_MODE_VALUE,
+      source: "runtime",
+    });
+    s.runtime.enterDictateIntake();
+    const recipe = resolveSelectedRecipeView(board, s.recipeOptions);
+    const recipeLine = recipe?.name
+      ? `\n本局配方：${recipe.name}${
+          recipe.declaration ? `（${recipe.declaration}）` : ""
+        }。`
+      : "";
+    const welcome =
+      `转述整理模式：直接说你想要的体验与设定。我会整理进产物；缺什么会问你。对话过长时可清空对话（产物保留）。${recipeLine}`;
+    s.messages.push({
+      id: randomUUID(),
+      role: "system",
+      text: welcome,
+      createdAt: new Date().toISOString(),
+      kind: "orchestrator_prompt",
+      actor: "orchestrator",
+      title: "转述整理",
+      body: welcome,
+    });
+  }
+
+  private isDictateMode(s: ManagedSession): boolean {
+    return isDictateModeValue(
+      s.runtime.getBlackboard().getContentByTag(CREATION_INTAKE_MODE_TAG),
+    );
+  }
+
+  private listDictateProducts(s: ManagedSession): DictateProduct[] {
+    const board = s.runtime.getBlackboard();
+    const products: DictateProduct[] = [];
+    for (const e of board.listTagIndex()) {
+      if (!e.tag.startsWith("用户.") && !e.tag.startsWith("设计.")) continue;
+      const item = board.getLatestByTag(e.tag);
+      const content = item?.content?.trim() ?? "";
+      if (!content) continue;
+      const rawOrder = item?.metadata?.[DICTATE_ORDER_META_KEY];
+      const order =
+        typeof rawOrder === "number" && Number.isFinite(rawOrder)
+          ? rawOrder
+          : undefined;
+      products.push({ tag: e.tag, content, order });
+    }
+    return sortDictateProducts(products);
+  }
+
+  /** 清空转述对话，保留黑板产物（产物即浓缩上下文） */
+  async clearDictateDialogue(sessionId: string): Promise<SessionView> {
+    const s = this.require(sessionId);
+    if (!this.isDictateMode(s)) {
+      throw new Error("当前不是转述整理模式");
+    }
+    const kept = this.listDictateProducts(s);
+    s.messages = [];
+    const note =
+      kept.length > 0
+        ? `对话已清空。仍保留 ${kept.length} 项产物：${kept.map((p) => p.tag).join("、")}。`
+        : "对话已清空。尚无产物，请继续说明需求。";
+    s.messages.push({
+      id: randomUUID(),
+      role: "system",
+      text: note,
+      createdAt: new Date().toISOString(),
+      kind: "system_info",
+      actor: "system",
+      title: "对话已清空",
+      body: note,
+    });
+    s.runtime.enterDictateIntake("对话已清空；产物仍在。请继续。");
+    if (s.bookId) this.persist(s);
+    return this.toView(sessionId);
+  }
+
+  private async runDictateTurnForSession(
+    s: ManagedSession,
+    _userText: string,
+  ): Promise<void> {
+    const llm = createDefaultMainAgentLlm(s.trackingRef);
+    let dialogue = extractDictateDialogue(s.messages);
+    const recipeView = resolveSelectedRecipeView(
+      s.runtime.getBlackboard(),
+      s.recipeOptions,
+    );
+
+    const result = await runDictateTurn({
+      llm,
+      dialogue,
+      recipeName: recipeView?.name,
+      recipeBrief: recipeView
+        ? [recipeView.declaration].filter(Boolean).join("；")
+        : undefined,
+      handlers: {
+        listProducts: () => this.listDictateProducts(s),
+        writeProduct: (tag, content, order) => {
+          const board = s.runtime.getBlackboard();
+          const existing = board.getLatestByTag(tag);
+          const prev = existing?.metadata?.[DICTATE_ORDER_META_KEY];
+          const resolved =
+            typeof order === "number" && Number.isFinite(order)
+              ? order
+              : typeof prev === "number" && Number.isFinite(prev)
+                ? prev
+                : defaultDictateOrder(tag);
+          board.write({
+            tag,
+            content,
+            source: "agent",
+            metadata: {
+              ...(existing?.metadata ?? {}),
+              [DICTATE_ORDER_META_KEY]: resolved,
+            },
+          });
+        },
+        clearDialogue: () => {
+          const kept = this.listDictateProducts(s);
+          const lastUser = [...s.messages]
+            .reverse()
+            .find((m) => m.kind === "user_input");
+          const note =
+            kept.length > 0
+              ? `（已清空先前对话；保留产物 ${kept.map((p) => p.tag).join("、")}）`
+              : "（已清空先前对话）";
+          s.messages = [
+            {
+              id: randomUUID(),
+              role: "system",
+              text: note,
+              createdAt: new Date().toISOString(),
+              kind: "system_info",
+              actor: "system",
+              title: "对话已清空",
+              body: note,
+            },
+            ...(lastUser ? [lastUser] : []),
+          ];
+          dialogue = extractDictateDialogue(s.messages);
+        },
+        onToolCall: (name, detail) => {
+          s.messages.push(
+            this.msg("system", `[总管 tool] ${name}: ${detail}`),
+          );
+        },
+        onThinkingDelta: (delta) => {
+          const id = s.runtime.getSession().id;
+          const prev = this.agentThinkingLive.get(id) ?? "";
+          this.agentThinkingLive.set(id, prev + delta);
+          this.agentThinkingClosed.delete(id);
+        },
+        onThinkingDone: (text) => {
+          const id = s.runtime.getSession().id;
+          if (text.trim()) this.agentThinkingLive.set(id, text);
+          this.agentThinkingClosed.add(id);
+        },
+      },
+    });
+
+    this.clearAgentThinking(s.runtime.getSession().id);
+    s.messages.push({
+      id: randomUUID(),
+      role: "system",
+      text: result.reply,
+      createdAt: new Date().toISOString(),
+      kind: "dictate_reply",
+      actor: "orchestrator",
+      title: "转述整理",
+      body: result.reply,
+    });
+    s.runtime.enterDictateIntake();
   }
 
   /** 用户手动选定 / 更换初始配方 */
@@ -613,10 +817,11 @@ export class SessionManager {
 
     if (kind === "instance") {
       s.runtime.prepareEnterPlay();
+      this.ensurePlayOpeningWritten(s);
       runtimeSession = structuredClone(s.runtime.getSession());
       blackboardItems = s.runtime.getBlackboard().exportItems();
       if (!canEnterPlay(runtimeSession)) {
-        throw new Error("须先完成收口或验收 Worker 集，才能保存产物");
+        throw new Error("须先完成收口、验收 Worker 集，或（转述）先写入产物，才能保存定稿");
       }
       ({ runtimeSession, blackboardItems } = materializeInstanceSnapshotPayload({
         runtimeSession,
@@ -683,7 +888,7 @@ export class SessionManager {
     this.persistCreationIfDesign(s);
     s.runtime.prepareEnterPlay();
     if (!canEnterPlay(s.runtime.getSession())) {
-      throw new Error("须先验收 Worker 集或完成收口，才能开始游玩");
+      throw new Error("须先验收 Worker 集、完成收口，或（转述）先写入产物并落档，才能开始游玩");
     }
     this.archivePlayWorking(s.bookId);
     this.enterPlayLayer(s, { resume: false, instanceId });
@@ -739,6 +944,9 @@ export class SessionManager {
 
   private beginNewPlayFromInstance(s: ManagedSession, instanceId?: string): void {
     const keepId = s.runtime.getSession().id;
+    // 换上 instance 快照前先记下当前创作里的开场白（可能比上次定稿更新）
+    const liveDesignOpening =
+      s.runtime.getBlackboard().getContentByTag("设计.开场白")?.trim() ?? "";
     let runtimeSession: RuntimeSession;
     let blackboardItems: import("../types/blackboard.js").BlackboardItem[];
     const instance = s.bookId
@@ -772,8 +980,18 @@ export class SessionManager {
     runtimeSession.currentWorkerId = undefined;
     runtimeSession.resumeContext = undefined;
     s.runtime.restoreFromCheckpoint(runtimeSession, blackboardItems);
-    const opening =
-      s.runtime.getBlackboard().getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
+    // 新开一局（未点名旧定稿）：用当前创作的设计.开场白覆盖快照里过期的开场
+    if (liveDesignOpening && !instanceId) {
+      s.runtime.getBlackboard().write({
+        tag: "设计.开场白",
+        content: liveDesignOpening,
+        source: "runtime",
+      });
+    }
+    const opening = this.ensurePlayOpeningWritten(
+      s,
+      instance?.messages as ChatMessage[] | undefined,
+    );
     if (opening) {
       s.runtime.getBlackboard().write({
         tag: DIALOGUE_HISTORY_TAG,
@@ -785,6 +1003,104 @@ export class SessionManager {
       s.messages = [];
     }
     s.branchState = createMessageBranchState();
+  }
+
+  /**
+   * 保证黑板上有 输出.开场白，供开玩主区展示。
+   * 优先级：设计.开场白（转述产物）> 已有 输出.开场白 > 其它产物拼装 > 非转述聊天兜底。
+   * 切勿用 dictate_reply（常含确认/建议补充）盖过已钉的设计.开场白。
+   */
+  private ensurePlayOpeningWritten(
+    s: ManagedSession,
+    messageSource?: ChatMessage[],
+  ): string {
+    const board = s.runtime.getBlackboard();
+    const fromDesign =
+      board.getContentByTag("设计.开场白")?.trim() ||
+      this.listDictateProducts(s).find((p) => p.tag === "设计.开场白")
+        ?.content?.trim() ||
+      "";
+    if (fromDesign) {
+      const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
+      if (existing !== fromDesign) {
+        board.write({
+          tag: OPENING_OUTPUT_TAG,
+          content: fromDesign,
+          source: "runtime",
+        });
+      }
+      return fromDesign;
+    }
+
+    const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
+    if (existing) return existing;
+
+    const fromProducts = this.deriveOpeningFromDictateProducts(s);
+    const fromMessages = fromProducts
+      ? ""
+      : this.deriveOpeningFromMessages(messageSource ?? s.messages);
+    const opening = (fromProducts || fromMessages).trim();
+    if (!opening) return "";
+
+    board.write({
+      tag: OPENING_OUTPUT_TAG,
+      content: opening,
+      source: "runtime",
+    });
+    return opening;
+  }
+
+  private deriveOpeningFromMessages(messages: ChatMessage[] | undefined): string {
+    if (!messages?.length) return "";
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (!m || m.role === "user") continue;
+      const kind = m.kind ?? "";
+      // 转述聊天常夹确认/建议，不能当开场白
+      if (
+        kind === "dictate_reply" ||
+        kind === "agent_tool" ||
+        kind === "orchestrator_thinking" ||
+        kind === "worker_questions"
+      ) {
+        continue;
+      }
+      if (
+        kind === "system_info" &&
+        !/开场白|用户展示/.test(String(m.title ?? ""))
+      ) {
+        continue;
+      }
+      const body = String(m.body ?? m.text ?? "").trim();
+      if (body.length < 24) continue;
+      if (
+        kind === "worker_output" ||
+        /开场白|用户展示/.test(String(m.title ?? "")) ||
+        m.actor === "narrator"
+      ) {
+        return body;
+      }
+      if (body.length >= 80) return body;
+    }
+    return "";
+  }
+
+  private deriveOpeningFromDictateProducts(s: ManagedSession): string {
+    const products = this.listDictateProducts(s);
+    if (!products.length) return "";
+    // 开场白是「按正文格式生成的内容」，优先设计.开场白；不要把设计.正文组成（格式）当开场白
+    const opening = products.find((p) => p.tag === "设计.开场白")?.content?.trim();
+    if (opening) return opening;
+    const preferred = products.filter(
+      (p) =>
+        /开场|开局|场景|需求|设定|叙事/.test(p.tag) &&
+        p.tag !== "设计.正文组成" &&
+        !p.tag.includes("正文组成"),
+    );
+    const list = preferred.length ? preferred : products.filter((p) => p.tag !== "设计.正文组成");
+    if (!list.length) return "";
+    const chunks = list.slice(0, 8).map((p) => `【${p.tag}】\n${p.content}`);
+    return `开场设定已就绪。\n\n${chunks.join("\n\n")}`;
   }
 
   private restoreSnapshotInPlace(
@@ -836,7 +1152,31 @@ export class SessionManager {
     s.runtime.restoreFromCheckpoint(runtimeSession, blackboardItems);
     s.messages = snapshot.messages.map((m) => ({ ...m })) as ChatMessage[];
     s.branchState = createMessageBranchState();
-    if (layer === "play") this.sanitizePlayHitl(s);
+    if (layer === "play") {
+      this.sanitizePlayHitl(s);
+      // 旧产物/工作副本可能没有开场消息：补一条到主区
+      if (!s.messages.some((m) => (m.body ?? m.text ?? "").trim())) {
+        const opening = this.ensurePlayOpeningWritten(
+          s,
+          snapshot.messages as ChatMessage[],
+        );
+        if (opening) {
+          s.messages = [this.playOpeningMessage(opening)];
+          const hist =
+            s.runtime.getBlackboard().getContentByTag(DIALOGUE_HISTORY_TAG) ?? "";
+          if (!hist.trim()) {
+            s.runtime.getBlackboard().write({
+              tag: DIALOGUE_HISTORY_TAG,
+              content: appendDialogueHistoryTurn("", {
+                role: "助手",
+                text: opening,
+              }),
+              source: "runtime",
+            });
+          }
+        }
+      }
+    }
   }
 
   /** 游玩层不保留创作 HITL（验收 / 确认下一步 / 修订） */
@@ -1143,6 +1483,21 @@ export class SessionManager {
     }
     try {
       const owned = await this.runExclusive(id, s, async () => {
+        // 转述提示词只服务创作进料；游玩层必须走 submitInput → GM/叙事转述管线
+        {
+          const sess = s.runtime.getSession();
+          const inPlay =
+            isPlayLayerActive(sess.slots) ||
+            inferLifecycleStage(sess) === "play";
+          if (
+            this.isDictateMode(s) &&
+            reason?.kind === "input" &&
+            !inPlay
+          ) {
+            await this.runDictateTurnForSession(s, trimmed || text);
+            return;
+          }
+        }
         if (reason?.kind === "approve_step") {
           await s.runtime.rejectStep(trimmed || text);
         } else if (reason?.kind === "review_artifact") {
@@ -2664,6 +3019,10 @@ export class SessionManager {
       actions,
       pipeline: buildPipeline(session),
       lifecycleStage,
+      creationMode: this.isDictateMode(s) ? "dictate" : "recipe",
+      dictateProducts: this.isDictateMode(s)
+        ? this.listDictateProducts(s)
+        : undefined,
       playLayerActive: isPlayLayerActive(session.slots),
       playReady: canEnterPlay(session),
       hasProduct: Boolean(
@@ -2805,7 +3164,10 @@ export class SessionManager {
     return state;
   }
 
-  private async refreshRecipeOptions(s: ManagedSession): Promise<void> {
+  private async refreshRecipeOptions(
+    s: ManagedSession,
+    family?: "recipe" | "dictate",
+  ): Promise<void> {
     const skillName = s.runtime.getActiveSkill()?.name;
     if (!skillName) {
       s.recipeOptions = [];
@@ -2821,8 +3183,10 @@ export class SessionManager {
         s.openingGuide = null;
         return;
       }
+      const intake =
+        family ?? (this.isDictateMode(s) ? "dictate" : "recipe");
       const [catalog, modules] = await Promise.all([
-        loadRecipeCatalog(skill.skillPackRoot),
+        loadRecipeCatalog(skill.skillPackRoot, undefined, intake),
         loadModuleCatalog(skill.skillPackRoot),
       ]);
       s.recipeOptions = catalog?.recipes ?? [];
@@ -2837,6 +3201,7 @@ export class SessionManager {
 
   /** 已选配方但尚无流程 → 写入配方近期起点（兼容旧会话） */
   private async ensureRecipeSeededFlow(s: ManagedSession): Promise<void> {
+    if (this.isDictateMode(s)) return;
     const board = s.runtime.getBlackboard();
     if (board.getContentByTag(CREATION_FLOW_TAG)?.trim()) return;
     const ref = parseSelectedRecipeRef(
@@ -2990,6 +3355,7 @@ export class SessionManager {
   private async applySelectedRecipe(
     s: ManagedSession,
     recipeId: string,
+    opts?: { seedFlow?: boolean },
   ): Promise<void> {
     const options = s.recipeOptions ?? [];
     const entry = findRecipeCatalogEntry(
@@ -3005,13 +3371,16 @@ export class SessionManager {
       content: JSON.stringify({
         id: entry.id,
         name: entry.name,
+        family: entry.family ?? (opts?.seedFlow === false ? "dictate" : "recipe"),
       }),
       source: "user",
     });
 
+    const seedFlow = opts?.seedFlow !== false;
     // 开局节点跟剧本 seed：写入近期起点并进入点选图（不必先跑 design-flow / 先描述需求）
+    // 转述进料可只钉配方、不种 DAG
     const existingFlow = board.getContentByTag(CREATION_FLOW_TAG)?.trim();
-    if (!existingFlow) {
+    if (seedFlow && !existingFlow) {
       const skillName = s.runtime.getActiveSkill()?.name;
       if (skillName) {
         try {

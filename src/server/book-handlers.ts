@@ -177,7 +177,7 @@ export async function handleBooksApi(
     return true;
   }
 
-  /** 新建作品：配方一层选型（内部 = recipes catalog） */
+  /** 新建作品：配方一层选型（节点流程 / 转述各一本目录，不共享） */
   if (pathname === "/api/directors" && req.method === "GET") {
     const { DEFAULT_ORCHESTRATOR_ID } = await import(
       "../config/default-orchestrator.js"
@@ -188,17 +188,35 @@ export async function handleBooksApi(
       const { loadRecipeCatalog } = await import("../skills/creation-flow.js");
       const skill = await loadSkill(skillId);
       if (!skill.skillPackRoot) {
-        json(res, 200, { directors: [], skillPackId: skillId });
+        json(res, 200, {
+          directors: [],
+          recipeDirectors: [],
+          dictateDirectors: [],
+          skillPackId: skillId,
+        });
         return true;
       }
-      const catalog = await loadRecipeCatalog(skill.skillPackRoot);
+      const [recipeCat, dictateCat] = await Promise.all([
+        loadRecipeCatalog(skill.skillPackRoot, undefined, "recipe"),
+        loadRecipeCatalog(skill.skillPackRoot, undefined, "dictate"),
+      ]);
+      const mapRow = (r: {
+        id: string;
+        name: string;
+        declaration: string;
+      }) => ({
+        id: r.id,
+        name: r.name,
+        declaration: r.declaration,
+      });
+      const recipeDirectors = (recipeCat?.recipes ?? []).map(mapRow);
+      const dictateDirectors = (dictateCat?.recipes ?? []).map(mapRow);
       json(res, 200, {
         skillPackId: skillId,
-        directors: (catalog?.recipes ?? []).map((r) => ({
-          id: r.id,
-          name: r.name,
-          declaration: r.declaration,
-        })),
+        /** @deprecated 兼容旧前端：默认节点流程列表 */
+        directors: recipeDirectors,
+        recipeDirectors,
+        dictateDirectors,
       });
     } catch (err) {
       json(res, 404, {
@@ -324,6 +342,8 @@ export async function handleBooksApi(
       orchestratorId?: string;
       /** 用户手动选定的配方 id（内部 recipe） */
       recipeId?: string;
+      /** recipe=配方流（默认）；dictate=转述整理直填 */
+      creationMode?: "recipe" | "dictate";
     };
     const skills = await listSkills();
     const requested = body.orchestratorId?.trim();
@@ -342,10 +362,17 @@ export async function handleBooksApi(
       orchestratorId: director.name,
       orchestratorName: director.name,
     });
+    const creationMode =
+      body.creationMode === "dictate" ? "dictate" : "recipe";
+    if (!body.recipeId?.trim()) {
+      json(res, 400, { error: "请选择配方" });
+      return true;
+    }
     const session = await sessionManager.createForBook(
       book.id,
       director.name,
-      body.recipeId?.trim(),
+      body.recipeId.trim(),
+      { creationMode },
     );
     json(res, 201, { book: getBook(book.id) ?? book, session });
     return true;

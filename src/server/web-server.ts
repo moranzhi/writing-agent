@@ -179,6 +179,18 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/dictate/clear-dialogue") {
+        try {
+          const view = await sessionManager.clearDictateDialogue(sessionId);
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "清空失败",
+          });
+        }
+        return;
+      }
+
       if (req.method === "POST" && sub === "/answers") {
         const body = JSON.parse(await readBody(req)) as {
           answers?: Array<{

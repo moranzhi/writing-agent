@@ -133,6 +133,10 @@ import {
   SLOT_OPENING_SELECTED_INDEX,
 } from "../skills/opening-seal.js";
 import {
+  CREATION_INTAKE_MODE_TAG,
+  isDictateModeValue,
+} from "../dictate/types.js";
+import {
   readPlayTurnQueue,
   withPlayTurnQueue,
   isPlayLayerActive,
@@ -480,6 +484,32 @@ export class PhaseRuntime {
     await this.awaitCreationStepPick();
   }
 
+  /**
+   * 转述整理式进料：跳过配方 DAG / 点选节点，直接等用户说话。
+   * 总管不跑 design-flow；由 session-manager 的 dictate 对话环处理输入。
+   */
+  enterDictateIntake(message?: string): void {
+    this.session = {
+      ...this.session,
+      phase: "waiting_user",
+      waitingReason: {
+        kind: "input",
+        message:
+          message?.trim() ||
+          "转述整理：直接说你想要的体验与设定；我会整理进产物。缺什么会问你。",
+      },
+      pendingDecision: undefined,
+      currentWorkerId: undefined,
+      pendingArtifactId: undefined,
+      resumeContext: undefined,
+      slots: {
+        ...this.session.slots,
+        startupCompleted: true,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   /** 重 roll 指定 worker（刷新 Skill 回复） */
   async rerunWorker(workerId: string): Promise<RuntimeSession> {
     const effect: Extract<PhaseEffect, { type: "run_worker" }> = {
@@ -519,7 +549,18 @@ export class PhaseRuntime {
       this.session.slots.designInstanceReady
     ) {
       this.ensurePlaySpecReady();
+      return;
     }
+    // 转述：无节点收口，落档/开玩时直接封印并补默认运行规格
+    if (this.isDictateIntakeMode()) {
+      this.ensurePlaySpecReady();
+    }
+  }
+
+  private isDictateIntakeMode(): boolean {
+    return isDictateModeValue(
+      this.blackboard.getContentByTag(CREATION_INTAKE_MODE_TAG),
+    );
   }
 
   getAvailableSkills(): SkillIndexEntry[] {
