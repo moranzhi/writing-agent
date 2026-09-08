@@ -198,10 +198,15 @@ export const PLAY_VISIBLE_BODY_INSTRUCTION = [
   "禁止把 tag 名（如「输出.用户展示」）、压缩摘要、过程日志写进正文。",
 ].join("\n");
 
-/** 游玩期把裁决写成用户可见终稿的执行单元 */
-export function isPlayPresentWorker(workerId: string): boolean {
+/** 游玩期把用户可见终稿写出的执行单元（有转述用转述；无则主世界层直接交原文） */
+export function isPlayPresentWorker(
+  workerId: string,
+  opts?: { narratorEnabled?: boolean },
+): boolean {
   const id = workerId.trim();
-  return id === "narrator" || id === "round-present";
+  if (id === "narrator" || id === "round-present") return true;
+  if (id === "world-simulator" && opts?.narratorEnabled === false) return true;
+  return false;
 }
 
 /** 按能力探测走 json_schema / forced_tool 时用的 present.v1 形状（全 required，可 strict） */

@@ -629,7 +629,7 @@ function shouldRenderPlayPresent(msg, view) {
   if (isPlayHousekeepingMessage(msg)) return false;
   const actor = String(msg.actor ?? "");
   const title = String(msg.title ?? "");
-  return actor === "narrator" || actor === "round-present" || /用户展示|开场白/.test(title);
+  return actor === "narrator" || actor === "round-present" || actor === "world-simulator" || /用户展示|开场白/.test(title);
 }
 
 function isPlayFinalReply(msg, view) {

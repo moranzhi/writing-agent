@@ -236,6 +236,9 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "世界.蓝图.确认稿",
         "世界.拓扑.*",
         "设计.变量设计与更新规则",
+        "设计.叙事指南与故事推进",
+        "设计.正文组成",
+        "设计.监控栏",
       ],
       dynamic: [
         "变量.当前",
@@ -246,7 +249,7 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "运行.本轮.旁观",
       ],
     },
-    outputs: ["运行.本轮.裁决", "运行.事件流", "运行.本轮.变量变更"],
+    outputs: ["输出.用户展示", "运行.本轮.裁决", "运行.事件流", "运行.本轮.变量变更"],
   },
   "variable-update": {
     context: {
@@ -767,10 +770,7 @@ export function formatWorkerSetForUser(
       ? PLAY_SLOT_ORDER.map((id: PlaySlotId) => ({
           id,
           label: PLAY_SLOT_META[id].label,
-          enabled:
-            id === "auditor"
-              ? parsed.play_slots!.auditor !== false
-              : Boolean(parsed.play_slots![id]),
+          enabled: Boolean(parsed.play_slots![id]),
           ref: refForSlot(parsed.play_slots!, id),
         }))
       : undefined,

@@ -120,7 +120,7 @@ import {
   SLOT_ASKED_QUESTIONS,
 } from "../skills/question-protocol.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
-import { defaultPlaySlots } from "../skills/play-slots.js";
+import { defaultPlaySlots, isNarratorEnabled } from "../skills/play-slots.js";
 import {
   mergeOpeningTablePatch,
   OPENING_CURRENT_VARS_TAG,
@@ -1252,7 +1252,16 @@ export class PhaseRuntime {
   ): import("../worker/executor.js").WorkerRunResult {
     if (!isPlayLayerActive(this.session.slots)) return result;
     const outputs = { ...result.outputs };
-    if (Object.keys(outputs).length === 0 && isPlayPresentWorker(workerId)) {
+    if (
+      Object.keys(outputs).length === 0 &&
+      isPlayPresentWorker(workerId, {
+        narratorEnabled: isNarratorEnabled(
+          parseWorkerSetYaml(
+            this.blackboard.getContentByTag("设计.worker集") ?? "",
+          )?.play_slots,
+        ),
+      })
+    ) {
       const shell =
         parseShellAdaptationFromReplyFormat(
           this.blackboard.getContentByTag("设计.正文组成") ??

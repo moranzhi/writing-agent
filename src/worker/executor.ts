@@ -46,6 +46,7 @@ import {
   GM_CHANCE_HARNESS_INSTRUCTION,
 } from "../skills/gm-tools.js";
 import { runGmHarness } from "./gm-harness.js";
+import { isNarratorEnabled } from "../skills/play-slots.js";
 import {
   mergeQuestionsPreferFragment,
   normalizeQuestions,
@@ -772,17 +773,20 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     inputs[CONTEXT_BRIEF_TAG] = priorBrief;
   }
 
+  const playSlots = parseWorkerSetYaml(
+    params.blackboard.getContentByTag("设计.worker集") ?? "",
+  )?.play_slots;
+
   const useGmHarness =
     isPlayLayerActive(params.slots) &&
     worker.id === "world-simulator" &&
-    gmChanceToolsEnabled(
-      parseWorkerSetYaml(
-        params.blackboard.getContentByTag("设计.worker集") ?? "",
-      )?.play_slots,
-    );
+    gmChanceToolsEnabled(playSlots);
 
   const playPresent =
-    isPlayLayerActive(params.slots) && isPlayPresentWorker(worker.id);
+    isPlayLayerActive(params.slots) &&
+    isPlayPresentWorker(worker.id, {
+      narratorEnabled: isNarratorEnabled(playSlots),
+    });
   const playShell: PresentShellId | undefined = playPresent
     ? parseShellAdaptationFromReplyFormat(
         params.blackboard.getContentByTag("设计.正文组成") ??

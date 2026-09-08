@@ -118,10 +118,16 @@ describe("shell adaptation from reply-format", () => {
 });
 
 describe("play present worker", () => {
-  it("recognizes narrator and round-present", () => {
+  it("recognizes narrator, round-present, and solo gm", () => {
     expect(isPlayPresentWorker("narrator")).toBe(true);
     expect(isPlayPresentWorker("round-present")).toBe(true);
     expect(isPlayPresentWorker("world-simulator")).toBe(false);
+    expect(
+      isPlayPresentWorker("world-simulator", { narratorEnabled: false }),
+    ).toBe(true);
+    expect(
+      isPlayPresentWorker("world-simulator", { narratorEnabled: true }),
+    ).toBe(false);
   });
 
   it("fallback packet uses the given shell", () => {

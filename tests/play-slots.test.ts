@@ -34,8 +34,25 @@ import { synthesizeContextOrderFromWorkers } from "../src/skills/context-order.j
 import { DIALOGUE_HISTORY_TAG } from "../src/skills/dialogue-history.js";
 
 describe("play_slots", () => {
-  it("expands default auditor+gm+narrator", () => {
+  it("defaults to gm only", () => {
+    const slots = parsePlaySlots({})!;
+    expect(slots).toEqual({
+      auditor: false,
+      gm: true,
+      narrator: false,
+      perspective: false,
+      chance: false,
+    });
+    expect(refsFromPlaySlots(slots)).toEqual(["world-simulator"]);
+    const workers = expandPlaySlotsToWorkers(slots);
+    expect(workers.map((w) => w.ref)).toEqual(["world-simulator"]);
+    expect(workers[0].acceptance).toBe("review");
+    expect(workers[0].outputs).toEqual(["输出.用户展示"]);
+  });
+
+  it("expands auditor+gm+narrator when all enabled", () => {
     const slots = parsePlaySlots({
+      auditor: true,
       gm: true,
       narrator: true,
       perspective: false,

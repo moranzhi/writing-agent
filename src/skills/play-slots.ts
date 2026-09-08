@@ -11,13 +11,13 @@ export type OnDemandSlotId = "chance";
 
 export type PlaySlotsConfig = {
   /**
-   * 旁观维护（副 LLM：表/规则检查，默认空操作）；默认 true。
-   * 每轮可上场，但不等于每轮改表。缺省键视为开启。
+   * 旁观维护（副 LLM：表/规则检查，默认空操作）；默认 false。
+   * 每轮可上场，但不等于每轮改表。缺省键视为关闭。
    */
   auditor?: boolean;
-  /** 主世界层（裁决）；默认 true */
+  /** 主世界层（裁决 / 无转述时兼写可见正文）；默认 true */
   gm: boolean;
-  /** 叙事转述；默认 true */
+  /** 叙事转述；默认 false（主世界层直接交用户可见原文） */
   narrator: boolean;
   /** 单角色知密视角；默认 false */
   perspective: boolean;
@@ -53,12 +53,13 @@ export const PLAY_SLOT_META: Record<
   },
   gm: {
     label: "主世界层",
-    purpose: "读真值与 Progressive 投影，输出结构化裁决包；可提议变量变更。",
-    defaultAcceptance: "continue",
+    purpose:
+      "读真值与 Progressive 投影并推进世界；无独立转述时直接写用户可见正文，有转述时出裁决包。",
+    defaultAcceptance: "review",
   },
   narrator: {
     label: "叙事转述",
-    purpose: "只读裁决包 + 文风常驻，输出用户可见正文。",
+    purpose: "只读裁决包 + 文风常驻，输出用户可见正文（可选；默认关）。",
     defaultAcceptance: "review",
   },
   perspective: {
@@ -102,12 +103,17 @@ export function playSlotIdForRef(ref: string): PlaySlotId | undefined {
 
 export function defaultPlaySlots(): PlaySlotsConfig {
   return {
-    auditor: true,
+    auditor: false,
     gm: true,
-    narrator: true,
+    narrator: false,
     perspective: false,
     chance: false,
   };
+}
+
+/** 是否启用独立转述层（未显式 true 视为关） */
+export function isNarratorEnabled(slots: PlaySlotsConfig | undefined | null): boolean {
+  return slots?.narrator === true;
 }
 
 export function parsePlaySlots(raw: unknown): PlaySlotsConfig | undefined {
@@ -154,10 +160,7 @@ export function refForSlot(
 }
 
 export function enabledPlaySlotIds(slots: PlaySlotsConfig): PlaySlotId[] {
-  return PLAY_SLOT_ORDER.filter((id) => {
-    if (id === "auditor") return slots.auditor !== false;
-    return Boolean(slots[id]);
-  });
+  return PLAY_SLOT_ORDER.filter((id) => Boolean(slots[id]));
 }
 
 export function enabledOnDemandSlotIds(slots: PlaySlotsConfig): OnDemandSlotId[] {
@@ -188,14 +191,19 @@ export function workerEntryForSlot(
 ): WorkerSetEntry {
   const meta = PLAY_SLOT_META[id];
   const ref = refForSlot(slots, id);
+  const soloGm = id === "gm" && !isNarratorEnabled(slots);
   return {
     ref,
     name: meta.label,
     role: id,
-    duty: meta.purpose,
+    duty: soloGm
+      ? "读真值与投影，推进世界，并直接写出用户可见正文（无独立转述层，原文即终稿）。"
+      : meta.purpose,
     when:
       id === "gm"
-        ? "每轮用户输入后首先上场（主 LLM / 裁决权威）"
+        ? soloGm
+          ? "每轮用户输入后上场；直接交用户可见正文"
+          : "每轮用户输入后首先上场（主 LLM / 裁决权威）"
         : id === "perspective"
           ? "强信息隔离且本轮需要该角色独立反应时（主世界层之后）"
           : id === "narrator"
@@ -203,13 +211,17 @@ export function workerEntryForSlot(
             : "转述完成后；表维护合并进变量.当前，供下一轮主世界层读取",
     rationale:
       id === "gm"
-        ? "等同 SillyTavern 主 LLM：读设定与状态并产出裁决"
+        ? soloGm
+          ? "默认少槽：主世界层兼呈现，避免转述再改写一遍"
+          : "有独立转述时：主世界层出裁决，正文交给转述"
         : id === "perspective"
           ? "知密内容不能进主世界层上下文"
           : id === "narrator"
             ? "用户可见正文与裁决分离，避免文风与规则互相挤压"
             : "表与规则补充延后执行，改表结果作用于下一轮而非本轮重裁",
-    acceptance: meta.defaultAcceptance,
+    acceptance:
+      id === "gm" && isNarratorEnabled(slots) ? "continue" : meta.defaultAcceptance,
+    outputs: soloGm ? ["输出.用户展示"] : undefined,
     invocation: "turn",
   };
 }
@@ -356,7 +368,7 @@ export function formatPlayAgentRosterForPrompt(): string {
   ];
   for (const id of PLAY_SLOT_ORDER) {
     const meta = PLAY_SLOT_META[id];
-    const def = id === "perspective" ? "默认关" : "默认开";
+    const def = id === "gm" ? "默认开" : "默认关";
     lines.push(
       `- \`${id}\` → ref=\`${DEFAULT_PLAY_SLOT_REFS[id]}\` **${meta.label}**（${def}）：${meta.purpose}`,
     );
