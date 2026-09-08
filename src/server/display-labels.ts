@@ -52,6 +52,8 @@ const PHASE_UNIT_LABELS: Record<string, string> = {
 const SKILL_PACK_LABELS: Record<string, string> = {
   "world-simulator": "世界模拟器",
   "expand-assistant": "扩写助手",
+  文本生成器: "文本生成器",
+  "text-generator": "文本生成器",
 };
 
 /** 生命周期 / 相位 */

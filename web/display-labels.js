@@ -57,6 +57,8 @@ export function displaySkillPackLabel(id) {
   const map = {
     "world-simulator": "世界模拟器",
     "expand-assistant": "扩写助手",
+    文本生成器: "文本生成器",
+    "text-generator": "文本生成器",
   };
   return map[id] ?? id;
 }

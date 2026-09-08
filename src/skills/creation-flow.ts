@@ -49,8 +49,14 @@ export function isRuntimePinnedTag(tag: string): boolean {
 }
 export const MODULE_CATALOG_FILENAME = "modules/catalog.yaml";
 export const RECIPE_CATALOG_FILENAME = "recipes/catalog.yaml";
+/** 转述进料专用配方目录（与节点流程 catalog 不共享） */
+export const DICTATE_RECIPE_CATALOG_FILENAME = "recipes/转述/catalog.yaml";
+export const DICTATE_RECIPE_DIR = "recipes/转述";
 export const DESIGN_STEP_WORKER_ID = "design-step";
 export const DESIGN_FLOW_WORKER_ID = "design-flow";
+
+/** 配方所属进料族：节点流程 vs 转述 */
+export type RecipeIntakeFamily = "recipe" | "dictate";
 
 const DEFAULT_SKILLS_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -225,6 +231,8 @@ export type RecipeCatalogEntry = {
   id: string;
   name: string;
   declaration: string;
+  /** 条目来自哪本目录；缺省视为节点流程 */
+  family?: RecipeIntakeFamily;
 };
 
 export type RecipeCatalog = {
@@ -1329,7 +1337,10 @@ function indentMultiline(text: string, indent: string): string {
   return [lines[0], ...lines.slice(1).map((l) => `${indent}${l}`)].join("\n");
 }
 
-export function parseRecipeCatalog(raw: string): RecipeCatalog | null {
+export function parseRecipeCatalog(
+  raw: string,
+  family: RecipeIntakeFamily = "recipe",
+): RecipeCatalog | null {
   let doc: unknown;
   try {
     doc = parseYaml(raw);
@@ -1354,7 +1365,7 @@ export function parseRecipeCatalog(raw: string): RecipeCatalog | null {
           ? slugFromName(name)
           : "";
     if (!name || !declaration || !id) continue;
-    recipes.push({ id, name, declaration });
+    recipes.push({ id, name, declaration, family });
   }
   if (recipes.length === 0) return null;
   return { recipes };
@@ -1363,11 +1374,16 @@ export function parseRecipeCatalog(raw: string): RecipeCatalog | null {
 export async function loadRecipeCatalog(
   skillPackRoot: string,
   skillsRoot = DEFAULT_SKILLS_ROOT,
+  family: RecipeIntakeFamily = "recipe",
 ): Promise<RecipeCatalog | null> {
-  const fullPath = path.join(skillsRoot, skillPackRoot, RECIPE_CATALOG_FILENAME);
+  const filename =
+    family === "dictate"
+      ? DICTATE_RECIPE_CATALOG_FILENAME
+      : RECIPE_CATALOG_FILENAME;
+  const fullPath = path.join(skillsRoot, skillPackRoot, filename);
   try {
     const raw = await readFile(fullPath, "utf8");
-    return parseRecipeCatalog(raw);
+    return parseRecipeCatalog(raw, family);
   } catch {
     return null;
   }
@@ -1456,13 +1472,17 @@ export async function loadRecipeDetail(
   entry: RecipeCatalogEntry,
   skillsRoot = DEFAULT_SKILLS_ROOT,
 ): Promise<RecipeDetail> {
-  const fullPath = path.join(
-    skillsRoot,
-    skillPackRoot,
-    "recipes",
-    entry.id,
-    "recipe.yaml",
-  );
+  const family = entry.family ?? "recipe";
+  const fullPath =
+    family === "dictate"
+      ? path.join(
+          skillsRoot,
+          skillPackRoot,
+          DICTATE_RECIPE_DIR,
+          entry.id,
+          "recipe.yaml",
+        )
+      : path.join(skillsRoot, skillPackRoot, "recipes", entry.id, "recipe.yaml");
   try {
     const raw = await readFile(fullPath, "utf8");
     return parseRecipeYaml(raw, entry);
@@ -1801,10 +1821,18 @@ export async function resolveSelectedRecipeDetail(params: {
   const ref = parseSelectedRecipeRef(params.selectedRecipeRef);
   if (!ref) return null;
   const skillsRoot = params.skillsRoot ?? DEFAULT_SKILLS_ROOT;
-  const catalog = await loadRecipeCatalog(params.skillPackRoot, skillsRoot);
-  const entry = findRecipeCatalogEntry(catalog, ref);
-  if (!entry) return null;
-  return loadRecipeDetail(params.skillPackRoot, entry, skillsRoot);
+  for (const family of ["recipe", "dictate"] as const) {
+    const catalog = await loadRecipeCatalog(
+      params.skillPackRoot,
+      skillsRoot,
+      family,
+    );
+    const entry = findRecipeCatalogEntry(catalog, ref);
+    if (entry) {
+      return loadRecipeDetail(params.skillPackRoot, entry, skillsRoot);
+    }
+  }
+  return null;
 }
 
 export function validateCreationFlow(

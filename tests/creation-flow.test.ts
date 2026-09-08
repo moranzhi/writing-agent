@@ -18,6 +18,7 @@ import {
   loadModuleCatalog,
   loadModulePrompt,
   loadRecipeCatalog,
+  loadRecipeDetail,
   mergeCreationFlowPreservingAccepted,
   needsFlowExpansion,
   nextPendingStep,
@@ -484,6 +485,7 @@ describe("creation-flow", () => {
     const recipes = await loadRecipeCatalog("dialogue/world-simulator");
     expect(recipes?.recipes.some((r) => r.name === "世界模拟器")).toBe(true);
     expect(recipes?.recipes.some((r) => r.name === "扩写助手")).toBe(true);
+    expect(recipes?.recipes.some((r) => r.name === "文本生成器")).toBe(false);
     const block = formatRecipeCatalogForAgent(recipes!);
     expect(block).toContain("须由用户手动选择");
     expect(block).toContain("世界模拟器");
@@ -504,6 +506,22 @@ describe("creation-flow", () => {
     expect(formatted).toContain("设计流程");
     expect(formatted).toContain("原则");
     expect(formatted).not.toContain("调味提示");
+  });
+
+  it("loads dictate recipe catalog separately with Chinese ids", async () => {
+    const dictate = await loadRecipeCatalog(
+      "dialogue/world-simulator",
+      undefined,
+      "dictate",
+    );
+    expect(dictate?.recipes.some((r) => r.id === "文本生成器")).toBe(true);
+    expect(dictate?.recipes.some((r) => r.name === "文本生成器")).toBe(true);
+    expect(dictate?.recipes.some((r) => r.name === "世界模拟器")).toBe(false);
+    const entry = dictate!.recipes.find((r) => r.id === "文本生成器")!;
+    expect(entry.family).toBe("dictate");
+    const detail = await loadRecipeDetail("dialogue/world-simulator", entry);
+    expect(detail.core).toBeTruthy();
+    expect(detail.seed).toBeNull();
   });
 
   it("parses selected recipe ref", () => {
