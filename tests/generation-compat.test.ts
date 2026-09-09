@@ -4,6 +4,8 @@ import {
   applyRejectedGenerationField,
   classifyChatModel,
   fetchWithGenerationCompat,
+  forceReasoningEffortNoneWhenTools,
+  isToolsReasoningEffortConflictError,
   parseRejectedGenerationField,
   sanitizeReasoningEffort,
   sanitizeVerbosity,
@@ -102,6 +104,58 @@ describe("applyOpenAiGeneration", () => {
   });
 });
 
+describe("forceReasoningEffortNoneWhenTools", () => {
+  it("forces none when tools are present", () => {
+    const body: Record<string, unknown> = {
+      tools: [{ type: "function", function: { name: "x" } }],
+      reasoning_effort: "high",
+    };
+    forceReasoningEffortNoneWhenTools(body);
+    expect(body.reasoning_effort).toBe("none");
+  });
+
+  it("sets none even when effort was omitted", () => {
+    const body: Record<string, unknown> = {
+      tools: [{ type: "function", function: { name: "x" } }],
+    };
+    forceReasoningEffortNoneWhenTools(body);
+    expect(body.reasoning_effort).toBe("none");
+  });
+
+  it("leaves body alone without tools", () => {
+    const body: Record<string, unknown> = { reasoning_effort: "high" };
+    forceReasoningEffortNoneWhenTools(body);
+    expect(body.reasoning_effort).toBe("high");
+  });
+});
+
+describe("isToolsReasoningEffortConflictError", () => {
+  it("detects gpt-5.6-luna style conflict", () => {
+    const text = JSON.stringify({
+      error: {
+        message:
+          "Provider API error: Function tools with reasoning_effort are not supported for gpt-5.6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+        type: "invalid_request_error",
+      },
+    });
+    expect(isToolsReasoningEffortConflictError(text, 400)).toBe(true);
+  });
+
+  it("ignores unrelated 400s", () => {
+    expect(
+      isToolsReasoningEffortConflictError(
+        JSON.stringify({
+          error: {
+            message: "Unsupported parameter: temperature",
+            param: "temperature",
+          },
+        }),
+        400,
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("parseRejectedGenerationField", () => {
   it("reads OpenAI unsupported parameter errors", () => {
     expect(
@@ -151,6 +205,16 @@ describe("applyRejectedGenerationField", () => {
     expect(body.max_completion_tokens).toBeUndefined();
     expect(body.max_tokens).toBeUndefined();
   });
+
+  it("sets reasoning_effort to none when tools are present", () => {
+    const body: Record<string, unknown> = {
+      tools: [{ type: "function" }],
+      reasoning_effort: "high",
+    };
+    const tried = new Set<string>();
+    expect(applyRejectedGenerationField(body, "reasoning_effort", tried)).toBe(true);
+    expect(body.reasoning_effort).toBe("none");
+  });
 });
 
 describe("fetchWithGenerationCompat", () => {
@@ -176,6 +240,34 @@ describe("fetchWithGenerationCompat", () => {
     expect(sent).toHaveLength(2);
     expect(sent[0].temperature).toBe(1);
     expect(sent[1].temperature).toBeUndefined();
+  });
+
+  it("retries tools+reasoning conflict by setting none", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const response = await fetchWithGenerationCompat(async (body) => {
+      sent.push({ ...body });
+      if (body.reasoning_effort !== "none") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message:
+                "Function tools with reasoning_effort are not supported for gpt-5.6-luna. Set reasoning_effort to 'none'.",
+            },
+          }),
+          { status: 400 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, {
+      model: "gpt-5.6-luna",
+      tools: [{ type: "function", function: { name: "run" } }],
+      messages: [],
+    });
+
+    expect(response.ok).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].reasoning_effort).toBeUndefined();
+    expect(sent[1].reasoning_effort).toBe("none");
   });
 });
 
@@ -232,6 +324,25 @@ describe("buildRequestBody", () => {
       generation: { reasoningEffort: "low" },
     });
     expect(body.reasoning_effort).toBe("low");
+  });
+
+  it("forces reasoning_effort none when tools are attached", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+    };
+    const body = buildRequestBody(config, messages, {
+      tools: [
+        {
+          type: "function",
+          function: { name: "run_worker", parameters: { type: "object" } },
+        },
+      ],
+    });
+    expect(body.reasoning_effort).toBe("none");
+    expect(body.tools).toHaveLength(1);
   });
 
   it("does not forward top_k from an imported ST preset", () => {

@@ -47,7 +47,7 @@ const MSG_LABEL = {
   orchestrator_thinking: "编排器 · 思考",
   orchestrator_prompt: "编排器",
   orchestrator_assessment: "编排器 · 内容评价",
-  dictate_reply: "转述整理",
+  dictate_reply: "Boss直聘",
   worker_running: "执行单元",
   worker_output: "执行单元",
   worker_questions: "提问",
@@ -409,9 +409,11 @@ function wireMsgActionMenu(handlers) {
       }
       return;
     }
-    if (action === "delete") {
-      if (!confirm("从这里重开？这条消息及之后的对话和创作状态将被移除。")) return;
-      msgMenuState.handlers?.onDeleteMessage?.(messageId);
+    if (action === "restart" || action === "delete") {
+      if (!confirm("从这里重开？将丢掉这条及之后的内容，并按本轮输入重新生成。")) return;
+      const restart = msgMenuState.handlers?.onRestartFromMessage;
+      if (typeof restart === "function") restart(messageId);
+      else msgMenuState.handlers?.onDeleteMessage?.(messageId);
     }
   });
 }
@@ -4926,7 +4928,7 @@ function renderSpeakWorkspace(view) {
         wr.message ||
         "描述本轮行动、对话或想说的话；由游玩管线推进。";
     } else if (view.creationMode === "dictate") {
-      title = "转述整理";
+      title = "Boss 直聘";
       hint =
         view.hints?.[0] ||
         wr.message ||
@@ -4977,7 +4979,7 @@ function renderSpeakWorkspace(view) {
           ? workspaceViewSwitchHtml("flow")
           : `<span class="workspace-surface-kicker">${
               view.creationMode === "dictate"
-                ? "转述"
+                ? "Boss直聘"
                 : canOfferSaveProduct(view)
                   ? "落档"
                   : "说话"
@@ -5211,8 +5213,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         ? esc(view.selectedRecipe.name)
         : "";
       stage.innerHTML = recipeName
-        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">转述</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
-        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">转述</span></header>`;
+        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">Boss直聘</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
+        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">Boss直聘</span></header>`;
       if (panelFeed) ensureQuestionsHostIn(panelFeed);
       appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, {
         emptyText:

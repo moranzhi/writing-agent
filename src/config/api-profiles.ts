@@ -19,7 +19,8 @@ export type ApiProfile = {
   model: string;
   /**
    * 该配置默认思考强度（写入请求的 reasoning_effort）。
-   * 省略 / auto = 不发送；探测永远用 low，不受此项影响。
+   * 省略 / auto = 不发送；none = 显式关闭；带 tools 的请求会强制 none。
+   * 探测永远用 low，不受此项影响。
    */
   reasoningEffort?: string;
   createdAt: string;

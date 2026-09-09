@@ -152,12 +152,13 @@
           思考强度
           <select name="reasoningEffort">
             <option value="">默认（不发送）</option>
+            <option value="none">none · 关闭思考（带 tools 时自动用）</option>
             <option value="low">low · 轻量</option>
             <option value="medium">medium</option>
             <option value="high">high · 增强</option>
             <option value="max">max · 深度</option>
           </select>
-          <span class="field-hint">写入 reasoning_effort；「探测」始终用 low，与此项无关。GLM 建议 low / high / max。</span>
+          <span class="field-hint">写入 reasoning_effort；「探测」始终用 low，与此项无关。带 function tools 的请求会强制 none（兼容 gpt-5.6-luna 等）。GLM 建议 low / high / max。</span>
         </label>
         <div class="dialog-actions">
           <button type="button" id="profile-cancel" class="btn-secondary">取消</button>

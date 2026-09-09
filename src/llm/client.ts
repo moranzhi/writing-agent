@@ -3,6 +3,7 @@ import type { GenerationParameters } from "../types/preset.js";
 import {
   applyOpenAiGeneration,
   fetchWithGenerationCompat,
+  forceReasoningEffortNoneWhenTools,
   sanitizeReasoningEffort,
 } from "./generation-compat.js";
 import { consumeOpenAiToolStream } from "./stream-complete.js";
@@ -147,6 +148,8 @@ export function buildRequestBody(
   applyOpenAiGeneration(body, options?.generation ?? {}, config.model, {
     reasoningEffort: config.reasoningEffort,
   });
+  // 对齐 imyai：带 tools 时强制 none（省略字段网关仍可能注入默认 effort）
+  forceReasoningEffortNoneWhenTools(body);
 
   if (options?.responseFormat === "json_object") {
     body.response_format = { type: "json_object" };

@@ -37,6 +37,7 @@ export function isAllowedProductTag(tag: string): boolean {
 export function defaultDictateOrder(tag: string): number {
   const t = tag.trim();
   if (t === "用户.需求") return -40;
+  if (t === "设计.变量目录" || t === "设计.变量映射") return -25;
   if (/美学|纲领|禁忌|示例/.test(t)) return -30;
   if (/文风|叙事指南|篇幅|结构/.test(t)) return -20;
   if (/正文组成|回复格式/.test(t)) return 0;

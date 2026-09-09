@@ -71,9 +71,10 @@ describe("dictate context", () => {
     expect(prompt).toContain("设计.开场白");
     expect(prompt).toContain("输出.开场白");
     expect(prompt).toContain("insert");
+    expect(prompt).toContain("declare_variable");
+    expect(prompt).toContain("declare_map");
     expect(prompt).toMatch(/order/);
     expect(prompt).toContain("仅允许 toolcall");
-    expect(prompt).toContain("变化越频繁");
   });
 
   it("sorts products by relative order: neg then 0 then pos", () => {

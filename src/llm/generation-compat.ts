@@ -6,7 +6,8 @@ import type { GenerationParameters } from "../types/preset.js";
  * - top_k、min_p、repetition_penalty 不是官方 Chat Completions 字段，默认不发
  * - 推理模型去掉 temperature / top_p / penalty
  * - o 系列与 gpt-5 用 max_completion_tokens
- * - 仍 400 时按错误信息剥掉不支持字段再试
+ * - 带 tools 时强制 reasoning_effort=none（gpt-5.6-luna 等网关：省略字段仍会注入默认 effort）
+ * - 仍 400 时按错误信息剥掉不支持字段再试；tools+reasoning 冲突则改 none 再试
  */
 
 const REASONING_EFFORT_VALUES = [
@@ -157,6 +158,46 @@ export function applyOpenAiGeneration(
   }
 }
 
+/** chat/completions + function tools 时须显式 none，否则网关可能注入默认 effort 并 400。 */
+export function forceReasoningEffortNoneWhenTools(
+  body: Record<string, unknown>,
+): void {
+  const tools = body.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return;
+  body.reasoning_effort = "none";
+}
+
+/**
+ * gpt-5.6-luna 等：/v1/chat/completions 下 function tools 不能与非 none 的
+ * reasoning_effort 同用。需显式 reasoning_effort='none'。
+ */
+export function isToolsReasoningEffortConflictError(
+  errorText: string,
+  status?: number,
+): boolean {
+  if (status != null && status !== 400 && status !== 422) return false;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(errorText);
+  } catch {
+    parsed = undefined;
+  }
+  const message = `${readErrorMessage(parsed)}\n${errorText}`.toLowerCase();
+  if (!message.trim()) return false;
+
+  const mentionsTools =
+    /\b(function\s+)?tools?\b/.test(message) ||
+    /tool_choice|function tools/.test(message);
+  const mentionsReasoningEffort = /reasoning_effort/.test(message);
+  const conflict =
+    /not support|unsupported|does not support|not supported|not allowed|cannot|can't/.test(
+      message,
+    );
+
+  return mentionsTools && mentionsReasoningEffort && conflict;
+}
+
 function readErrorMessage(raw: unknown): string {
   if (!raw || typeof raw !== "object") return "";
   const err = (raw as { error?: unknown }).error;
@@ -238,9 +279,39 @@ export function applyRejectedGenerationField(
     return true;
   }
 
+  // tools + reasoning_effort 冲突：删字段不够，须显式 none
+  if (
+    field === "reasoning_effort" &&
+    Array.isArray(body.tools) &&
+    body.tools.length > 0 &&
+    body.reasoning_effort !== "none" &&
+    !tried.has("reasoning_effort_none")
+  ) {
+    body.reasoning_effort = "none";
+    tried.add("reasoning_effort_none");
+    return true;
+  }
+
   if (!(field in body)) return false;
   delete body[field];
   tried.add(field);
+  return true;
+}
+
+function applyToolsReasoningEffortNone(
+  body: Record<string, unknown>,
+  tried: Set<string>,
+): boolean {
+  if (
+    !Array.isArray(body.tools) ||
+    body.tools.length === 0 ||
+    body.reasoning_effort === "none" ||
+    tried.has("reasoning_effort_none")
+  ) {
+    return false;
+  }
+  body.reasoning_effort = "none";
+  tried.add("reasoning_effort_none");
   return true;
 }
 
@@ -262,11 +333,19 @@ export async function fetchWithGenerationCompat(
 
   for (let attempt = 0; attempt < 8; attempt++) {
     last = await send(body);
-    if (last.ok || last.status !== 400) return last;
+    if (last.ok || (last.status !== 400 && last.status !== 422)) return last;
     const text = await last.text();
+    const next = { ...body };
+
+    if (isToolsReasoningEffortConflictError(text, last.status)) {
+      if (applyToolsReasoningEffortNone(next, tried)) {
+        body = next;
+        continue;
+      }
+    }
+
     const field = parseRejectedGenerationField(text);
     if (!field) return replayResponse(last, text);
-    const next = { ...body };
     if (!applyRejectedGenerationField(next, field, tried)) {
       return replayResponse(last, text);
     }

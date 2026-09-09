@@ -136,6 +136,15 @@ import {
   CREATION_INTAKE_MODE_TAG,
   isDictateModeValue,
 } from "../dictate/types.js";
+import { applyDictatePlayBind } from "../dictate/play-bind.js";
+import {
+  VARIABLE_CATALOG_TAG,
+  seedVariablesFromCatalog,
+} from "../skills/variable-catalog.js";
+import {
+  VALUE_MAP_TAG,
+  reprojectValueMaps,
+} from "../skills/value-map.js";
 import {
   readPlayTurnQueue,
   withPlayTurnQueue,
@@ -1983,13 +1992,26 @@ export class PhaseRuntime {
 
   /** 收口后若还没有运行规格，用草稿或默认槽位补一份，才能进游玩 */
   private ensurePlaySpecReady(): void {
-    const finalTag = this.blackboard.getContentByTag(WORKER_SET_FINAL_TAG)?.trim();
-    const draft = this.blackboard.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim();
-    if (!finalTag) {
-      const spec = draft?.trim()
-        ? draft
-        : JSON.stringify({ play_slots: defaultPlaySlots() });
-      this.writeWorkerTagContent(WORKER_SET_FINAL_TAG, spec, "opening-setup");
+    // Boss 直聘：落档/开玩时自动挂载产物；种变量初值；按映射重投影
+    if (this.isDictateIntakeMode()) {
+      const bound = applyDictatePlayBind(this.blackboard);
+      if (bound.boundTags.length) {
+        this.onMessage(
+          `[Boss直聘] 已自动挂载 ${bound.boundTags.length} 个产物到游玩上下文：${bound.boundTags.join("、")}`,
+        );
+      } else {
+        this.onMessage("[Boss直聘] 已生成默认游玩规格（尚无产物可挂载）");
+      }
+      this.seedVariablesAndReproject("opening-setup");
+    } else {
+      const finalTag = this.blackboard.getContentByTag(WORKER_SET_FINAL_TAG)?.trim();
+      const draft = this.blackboard.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim();
+      if (!finalTag) {
+        const spec = draft?.trim()
+          ? draft
+          : JSON.stringify({ play_slots: defaultPlaySlots() });
+        this.writeWorkerTagContent(WORKER_SET_FINAL_TAG, spec, "opening-setup");
+      }
     }
     if (this.session.slots.designInstanceReady) return;
     this.session = {
@@ -1999,6 +2021,52 @@ export class PhaseRuntime {
         designInstanceReady: true,
       },
     };
+  }
+
+  /** 目录初值 → 变量.当前；再按 设计.变量映射 重写投影 tag */
+  private seedVariablesAndReproject(actor: string): void {
+    const seeded = seedVariablesFromCatalog({
+      catalogRaw: this.blackboard.getContentByTag(VARIABLE_CATALOG_TAG),
+      currentRaw: this.blackboard.getContentByTag(OPENING_CURRENT_VARS_TAG),
+      initialRaw: this.blackboard.getContentByTag(OPENING_INITIAL_VARS_TAG),
+      actor: `system:${actor}`,
+    });
+    if (seeded.initial) {
+      this.blackboard.write({
+        tag: OPENING_INITIAL_VARS_TAG,
+        content: seeded.initial,
+        source: actor,
+      });
+    }
+    if (seeded.current) {
+      this.blackboard.write({
+        tag: OPENING_CURRENT_VARS_TAG,
+        content: seeded.current,
+        source: actor,
+      });
+      if (seeded.seededKeys.length) {
+        this.onMessage(
+          `[变量] 已种初值：${seeded.seededKeys.join("、")}`,
+        );
+      }
+    }
+    this.applyValueMapProjections(actor);
+  }
+
+  /** 按当前真值持续投影映射 tag（非 once） */
+  private applyValueMapProjections(workerId: string): void {
+    if (!this.blackboard.getContentByTag(VALUE_MAP_TAG)?.trim()) return;
+    const result = reprojectValueMaps({
+      blackboard: this.blackboard,
+      source: `value-map:${workerId}`,
+    });
+    if (result.written.length) {
+      this.onMessage(
+        `[变量映射] 投影 ${result.written
+          .map((w) => `${w.field}=${String(w.value)}→${w.tag}`)
+          .join("、")}`,
+      );
+    }
   }
 
   /** 再编排：解开开场收口，让 design-flow 能在收口前插入节点 */
@@ -2514,6 +2582,9 @@ export class PhaseRuntime {
     }
     if (nextDoc) {
       this.applyTableSideEffects(prevDoc, nextDoc, workerId);
+    }
+    if (tag === OPENING_CURRENT_VARS_TAG || tag === "变量.当前") {
+      this.applyValueMapProjections(workerId);
     }
     // 裁决包 / 旁观维护包 → 合并进变量.当前（可触发 side_effects）
     if (tag === SETTLEMENT_TAG) {

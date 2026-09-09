@@ -5,6 +5,7 @@
 
 import {
   applyRejectedGenerationField,
+  isToolsReasoningEffortConflictError,
   parseRejectedGenerationField,
 } from "./generation-compat.js";
 
@@ -168,7 +169,7 @@ async function postOnce(
 
 /**
  * 探测请求始终带 reasoning_effort=low。
- * 若供应商拒收该字段，剥掉后再试一次。
+ * 若供应商拒收该字段，剥掉后再试；tools 冲突则改 none 再试。
  */
 async function postChat(
   config: ProbeConfig,
@@ -179,14 +180,20 @@ async function postChat(
     reasoning_effort: CAPABILITY_PROBE_REASONING_EFFORT,
   };
   const first = await postOnce(config, withEffort);
-  if (first.ok || first.status !== 400) return first;
-
-  const rejected = parseRejectedGenerationField(first.text);
-  if (rejected !== "reasoning_effort") return first;
+  if (first.ok || (first.status !== 400 && first.status !== 422)) return first;
 
   const retryBody = { ...withEffort };
   const tried = new Set<string>();
-  if (!applyRejectedGenerationField(retryBody, "reasoning_effort", tried)) {
+
+  if (isToolsReasoningEffortConflictError(first.text, first.status)) {
+    retryBody.reasoning_effort = "none";
+    tried.add("reasoning_effort_none");
+    return postOnce(config, retryBody);
+  }
+
+  const rejected = parseRejectedGenerationField(first.text);
+  if (!rejected) return first;
+  if (!applyRejectedGenerationField(retryBody, rejected, tried)) {
     return first;
   }
   return postOnce(config, retryBody);

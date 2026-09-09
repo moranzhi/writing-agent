@@ -19,3 +19,22 @@ export {
 } from "./context.js";
 export { DICTATE_TOOL_DEFINITIONS } from "./tools.js";
 export { runDictateTurn, type DictateTurnResult } from "./turn.js";
+export {
+  applyDictatePlayBind,
+  bindDictateProductsToPlaySpec,
+  buildDictateContextOrder,
+  collectDictateBindProducts,
+  type DictatePlayBindResult,
+} from "./play-bind.js";
+export {
+  VARIABLE_CATALOG_TAG,
+  parseVariableCatalog,
+  type VariableCatalogDoc,
+} from "../skills/variable-catalog.js";
+export {
+  VALUE_MAP_TAG,
+  parseValueMapDoc,
+  lookupValueMapContent,
+  reprojectValueMaps,
+  type ValueMapDoc,
+} from "../skills/value-map.js";

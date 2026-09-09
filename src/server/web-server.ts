@@ -240,7 +240,7 @@ const server = createServer(async (req, res) => {
       }
 
       const messageActionMatch = sub.match(
-        /^\/messages\/([^/]+)\/(edit|refresh|variant|delete)$/,
+        /^\/messages\/([^/]+)\/(edit|refresh|variant|delete|restart)$/,
       );
       if (req.method === "POST" && messageActionMatch) {
         const messageId = decodeURIComponent(messageActionMatch[1]);
@@ -275,6 +275,8 @@ const server = createServer(async (req, res) => {
             );
           } else if (action === "delete") {
             view = await sessionManager.deleteMessage(sessionId, messageId);
+          } else if (action === "restart") {
+            view = await sessionManager.restartFromMessage(sessionId, messageId);
           } else {
             json(res, 400, { error: "未知 action" });
             return;

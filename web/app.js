@@ -2092,6 +2092,7 @@ function renderSession(view, loading = false) {
     onEditMessage: (messageId, text) => messageAction("edit", messageId, { text }),
     onRefreshMessage: (messageId) => messageAction("refresh", messageId),
     onDeleteMessage: (messageId) => messageAction("delete", messageId),
+    onRestartFromMessage: (messageId) => messageAction("restart", messageId),
     onRollbackToInput: (messageId, draft) => {
       pendingComposerDraft = String(draft ?? "");
       pendingComposerDraftSeq = 0;
@@ -2493,8 +2494,8 @@ async function populateDirectorSelect() {
     if (modeDesc) {
       modeDesc.hidden = false;
       modeDesc.textContent = dictate
-        ? "转述整理：直接对话写入产物；下方为转述专用配方。"
-        : "节点流程：按配方预置起点走工作流计划；下方为节点流程配方。";
+        ? "Boss 直聘：对话写入产物；变量/映射用工具钉死；下方为直聘专用配方。"
+        : "Worker 式：按工序图逐步验收；下方为编排专用配方。";
     }
     syncDesc();
   };

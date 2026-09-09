@@ -163,6 +163,7 @@ import {
   createUserVariantMessage,
   ensureBranchForEdit,
   ensureBranchForRefresh,
+  findPrecedingUserIndex,
   isRefreshableMessage,
   recordPreMessageCheckpoint,
   switchBranchVariant,
@@ -607,7 +608,7 @@ export class SessionManager {
         }。`
       : "";
     const welcome =
-      `转述整理模式：直接说你想要的体验与设定。我会整理进产物；缺什么会问你。对话过长时可清空对话（产物保留）。${recipeLine}`;
+      `Boss 直聘模式：直接说你想要的体验与设定。我会整理进产物；变量与映射用工具钉死。对话过长时可清空对话（产物保留）。${recipeLine}`;
     s.messages.push({
       id: randomUUID(),
       role: "system",
@@ -615,7 +616,7 @@ export class SessionManager {
       createdAt: new Date().toISOString(),
       kind: "orchestrator_prompt",
       actor: "orchestrator",
-      title: "转述整理",
+      title: "Boss直聘",
       body: welcome,
     });
   }
@@ -711,6 +712,19 @@ export class SessionManager {
             },
           });
         },
+        readTag: (tag) => s.runtime.getBlackboard().getContentByTag(tag),
+        writeTag: (tag, content) => {
+          const board = s.runtime.getBlackboard();
+          board.write({
+            tag,
+            content,
+            source: "agent",
+            metadata: {
+              ...(board.getLatestByTag(tag)?.metadata ?? {}),
+              [DICTATE_ORDER_META_KEY]: defaultDictateOrder(tag),
+            },
+          });
+        },
         clearDialogue: () => {
           const kept = this.listDictateProducts(s);
           const lastUser = [...s.messages]
@@ -736,6 +750,11 @@ export class SessionManager {
           dialogue = extractDictateDialogue(s.messages);
         },
         onToolCall: (name, detail) => {
+          recordPreMessageCheckpoint(
+            s.branchState,
+            s.messages.length,
+            this.captureCheckpoint(s),
+          );
           s.messages.push(
             this.msg("system", `[总管 tool] ${name}: ${detail}`),
           );
@@ -755,6 +774,11 @@ export class SessionManager {
     });
 
     this.clearAgentThinking(s.runtime.getSession().id);
+    recordPreMessageCheckpoint(
+      s.branchState,
+      s.messages.length,
+      this.captureCheckpoint(s),
+    );
     s.messages.push({
       id: randomUUID(),
       role: "system",
@@ -1655,9 +1679,22 @@ export class SessionManager {
     if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
 
     try {
-      const owned = await this.runExclusive(id, s, () =>
-        s.runtime.submitInput(trimmed),
-      );
+      const owned = await this.runExclusive(id, s, async () => {
+        const sess = s.runtime.getSession();
+        const reason = sess.waitingReason;
+        const inPlay =
+          isPlayLayerActive(sess.slots) ||
+          inferLifecycleStage(sess) === "play";
+        if (
+          this.isDictateMode(s) &&
+          reason?.kind === "input" &&
+          !inPlay
+        ) {
+          await this.runDictateTurnForSession(s, trimmed);
+          return;
+        }
+        await s.runtime.submitInput(trimmed);
+      });
       if (!owned) return this.toView(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -1790,7 +1827,7 @@ export class SessionManager {
     return this.toView(id);
   }
 
-  /** 删除消息及其后的对话 */
+  /** 删除消息及其后的对话（仅截断，不重生成） */
   async deleteMessage(id: string, messageId: string): Promise<SessionView> {
     const s = this.require(id);
     const idx = s.messages.findIndex((m) => m.id === messageId);
@@ -1810,9 +1847,35 @@ export class SessionManager {
       const n = Number(key);
       if (n >= idx) delete s.branchState.preMessageCheckpoints[n];
     }
+    this.syncCreationDialogue(s);
     if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     this.persist(s);
     return this.toView(id);
+  }
+
+  /**
+   * 从这里重开：丢掉该条及之后内容，并按本轮用户输入重新生成（重 roll）。
+   * 用户消息 → 同文编辑重跑；可刷新的 Worker 回复 → refresh；其余 → 回溯到上一轮用户输入再 edit。
+   */
+  async restartFromMessage(id: string, messageId: string): Promise<SessionView> {
+    const s = this.require(id);
+    const idx = s.messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) throw new Error("消息不存在");
+    const target = s.messages[idx];
+
+    if (target.role === "user") {
+      return this.editMessage(id, messageId, target.text);
+    }
+    if (isRefreshableMessage(target)) {
+      return this.refreshMessage(id, messageId);
+    }
+
+    const userIdx = findPrecedingUserIndex(s.messages, idx);
+    if (userIdx < 0) {
+      return this.deleteMessage(id, messageId);
+    }
+    const userMsg = s.messages[userIdx];
+    return this.editMessage(id, userMsg.id, userMsg.text);
   }
 
   /** 左右切换同位消息版本（swipe / branch） */
