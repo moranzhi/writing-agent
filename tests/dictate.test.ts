@@ -64,8 +64,8 @@ describe("dictate context", () => {
 
   it("system prompt requires insert toolcall and relative order", () => {
     const prompt = buildDictateSystemPrompt({
-      recipeName: "正文组成",
-      recipeBrief: "钉呈现壳与可见块",
+      recipeName: "数据化跑团体验",
+      recipeBrief: "设定 + 真值 + 分档映射\n怎么做：\n- declare_variable\n- declare_map",
     });
     expect(prompt).toContain("设计.正文组成");
     expect(prompt).toContain("设计.开场白");
@@ -73,8 +73,15 @@ describe("dictate context", () => {
     expect(prompt).toContain("insert");
     expect(prompt).toContain("declare_variable");
     expect(prompt).toContain("declare_map");
+    expect(prompt).toContain("数据化跑团体验");
     expect(prompt).toMatch(/order/);
     expect(prompt).toContain("仅允许 toolcall");
+    expect(prompt).toContain("设计.模仿范例");
+    expect(prompt).toContain("设计.模仿要点");
+    expect(prompt).toContain("设计.叙事指南与故事推进");
+    expect(prompt).toContain("大纲扩写");
+    expect(prompt).toContain("禁止扮演停笔");
+    expect(prompt).toContain("只挂载这些产物");
   });
 
   it("sorts products by relative order: neg then 0 then pos", () => {

@@ -38,8 +38,10 @@ export function defaultDictateOrder(tag: string): number {
   const t = tag.trim();
   if (t === "用户.需求") return -40;
   if (t === "设计.变量目录" || t === "设计.变量映射") return -25;
-  if (/美学|纲领|禁忌|示例/.test(t)) return -30;
+  if (t === "设计.模仿范例" || t === "设计.模仿要点") return -28;
+  if (/美学|纲领|禁忌|示例|模仿/.test(t)) return -30;
   if (/文风|叙事指南|篇幅|结构/.test(t)) return -20;
+  if (/短文集|短文\./.test(t)) return 10;
   if (/正文组成|回复格式/.test(t)) return 0;
   if (/开场白/.test(t)) return 20;
   return 0;

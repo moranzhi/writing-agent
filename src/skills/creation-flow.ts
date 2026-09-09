@@ -247,6 +247,8 @@ export type RecipeDetail = {
   id: string;
   name: string;
   declaration: string;
+  /** 一句话方法摘要（recipe.yaml brief；转述进料优先注入） */
+  brief?: string;
   /** 适用什么体验/任务 */
   when?: string;
   /** 整套设计方法的核心思路与最终目标 */
@@ -1433,8 +1435,12 @@ export function parseRecipeYaml(
       ? row.name.trim()
       : meta.name;
 
+  const brief =
+    typeof row.brief === "string" && row.brief.trim()
+      ? row.brief.trim()
+      : undefined;
   const seedParsed = parseCreationFlow(JSON.stringify({
-    brief: typeof row.brief === "string" ? row.brief : undefined,
+    brief,
     status: "open",
     steps: Array.isArray(row.steps) ? row.steps : [],
   }));
@@ -1444,6 +1450,7 @@ export function parseRecipeYaml(
     id: meta.id,
     name,
     declaration: meta.declaration,
+    ...(brief ? { brief } : {}),
     when,
     ...(core ? { core } : {}),
     ...(process ? { process } : {}),
@@ -1549,6 +1556,38 @@ export function formatRecipeCatalogForAgent(catalog: RecipeCatalog): string {
     (r) => `- ${r.name}：${r.declaration}`,
   );
   return `【可选配方】（须由用户手动选择）\n${lines.join("\n")}`;
+}
+
+/**
+ * Boss 直聘 / 转述进料：把已选配方方法论收成短要点（进系统提示「本局配方」）。
+ * 不含 DAG steps / design-flow 选型话术。
+ */
+export function formatDictateRecipeBrief(detail: RecipeDetail): string {
+  const lines: string[] = [];
+  if (detail.brief?.trim()) lines.push(detail.brief.trim());
+  else if (detail.declaration?.trim()) lines.push(detail.declaration.trim());
+  if (detail.when?.trim()) lines.push(`适用：${detail.when.trim()}`);
+  if (detail.core?.trim()) {
+    lines.push("核心：");
+    lines.push(detail.core.trim());
+  }
+  if (detail.process) {
+    lines.push("怎么做：");
+    lines.push(formatRecipeFieldBlock(detail.process));
+  }
+  if (detail.principles) {
+    lines.push("原则：");
+    lines.push(formatRecipeFieldBlock(detail.principles));
+  }
+  if (
+    !detail.core &&
+    !detail.process &&
+    !detail.principles &&
+    detail.hint?.trim()
+  ) {
+    lines.push(detail.hint.trim());
+  }
+  return lines.join("\n").trim();
 }
 
 /** 注入 design-flow：用户已选配方（方法论 + 开局起点） */

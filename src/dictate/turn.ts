@@ -48,7 +48,7 @@ export type DictateTurnResult = {
 };
 
 /**
- * 跑一轮 Boss 直聘整理：上下文 = 预设提示 + 按相对序的产物 + 全量对话。
+ * 跑一轮 Boss 直聘整理：任务 messages 由本模块拼；preset 夹心由 LLM 包装层统一装配。
  */
 export async function runDictateTurn(params: {
   llm: LlmProvider;

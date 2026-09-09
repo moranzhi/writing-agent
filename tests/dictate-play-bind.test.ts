@@ -14,6 +14,8 @@ describe("dictate play-bind", () => {
   it("classifies style tags", () => {
     expect(isDictateStyleBindTag("设计.美学纲领")).toBe(true);
     expect(isDictateStyleBindTag("设计.正文组成")).toBe(true);
+    expect(isDictateStyleBindTag("设计.模仿范例")).toBe(true);
+    expect(isDictateStyleBindTag("设计.模仿要点")).toBe(true);
     expect(isDictateStyleBindTag("用户.需求")).toBe(false);
   });
 
@@ -77,11 +79,66 @@ describe("dictate play-bind", () => {
     const narrRefs = narr!.inserts.map((i) => i.ref);
     expect(narrRefs).toContain("设计.美学纲领");
     expect(narrRefs).not.toContain("用户.需求");
-    expect(narrRefs).toContain("运行.本轮.裁决");
+    expect(narrRefs).toContain("输出.用户展示");
+    expect(narrRefs).not.toContain("运行.本轮.裁决");
 
     const gm = result.contextOrder.slots.find((s) => s.ref === "world-simulator");
     expect(gm!.inserts.map((i) => i.ref)).toContain("用户.需求");
     expect(result.workerSetJson).toContain("context_order");
+  });
+
+  it("forces narrator on for 文本生成器 and mounts creation-period style context", () => {
+    const board = new Blackboard();
+    board.write({
+      tag: "创作.选用配方",
+      content: JSON.stringify({ id: "文本生成器", name: "文本生成器" }),
+      source: "user",
+    });
+    board.write({
+      tag: "设计.模仿范例",
+      content: "范例正文",
+      source: "dictate",
+      metadata: { [DICTATE_ORDER_META_KEY]: -28 },
+    });
+    board.write({
+      tag: "设计.模仿要点",
+      content: "- 句式节奏\n- 感官密度",
+      source: "dictate",
+      metadata: { [DICTATE_ORDER_META_KEY]: -28 },
+    });
+    board.write({
+      tag: "设计.叙事指南与故事推进",
+      content: "用户输入用法：大纲扩写。禁止扮演停笔。",
+      source: "dictate",
+      metadata: { [DICTATE_ORDER_META_KEY]: -22 },
+    });
+    board.write({
+      tag: "用户.需求",
+      content: "短篇",
+      source: "dictate",
+    });
+    board.write({
+      tag: "设计.worker集",
+      content: JSON.stringify({
+        play_slots: { gm: true, narrator: false, auditor: false, perspective: false },
+      }),
+      source: "test",
+    });
+
+    const result = bindDictateProductsToPlaySpec(board);
+    expect(result.contextOrder.play_slots?.narrator).toBe(true);
+    const narr = result.contextOrder.slots.find((s) => s.ref === "narrator");
+    expect(narr).toBeTruthy();
+    const narrRefs = narr!.inserts.map((i) => i.ref);
+    expect(narrRefs).toContain("设计.模仿范例");
+    expect(narrRefs).toContain("设计.模仿要点");
+    expect(narrRefs).toContain("设计.叙事指南与故事推进");
+    expect(narrRefs).not.toContain("用户.需求");
+    expect(JSON.parse(result.workerSetJson).play_slots.narrator).toBe(true);
+    // 落档不改写创作期叙事指南
+    expect(board.getContentByTag("设计.叙事指南与故事推进")).toBe(
+      "用户输入用法：大纲扩写。禁止扮演停笔。",
+    );
   });
 
   it("does not invent variable mappings; binds declared map slots and catalog", () => {

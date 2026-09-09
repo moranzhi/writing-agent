@@ -14,8 +14,9 @@ export function buildDictateSystemPrompt(opts?: {
       ? `
 ## 本局配方
 名称：${opts.recipeName ?? "（未命名）"}
-${opts.recipeBrief ? `要点：${opts.recipeBrief}` : ""}
+${opts.recipeBrief ? `要点：\n${opts.recipeBrief}` : ""}
 按上述适用与原则整理产物；材料只够做本配方时，就只做本配方范围内的事。
+本配方若含跨轮数值：优先走 D（declare_variable / declare_map），不要只 insert 散文表。
 `
       : "";
 
@@ -45,6 +46,7 @@ ${opts.recipeBrief ? `要点：${opts.recipeBrief}` : ""}
 **分清：**
 - 正文组成（格式）→ insert \`设计.正文组成\`
 - 开场白（内容）→ insert \`设计.开场白\`；落档/开玩同步 \`输出.开场白\`
+- 多篇无关联短文（生产在游玩）→ 创作期钉 \`设计.模仿范例\` / \`设计.模仿要点\` / \`设计.叙事指南与故事推进\`（大纲扩写）
 - 好感分档性格等 → declare_variable + declare_map，不要 insert 一整张表进设定散文
 ${recipeBlock}
 ## 按用户本轮意图择一为主
@@ -59,6 +61,9 @@ insert 设定类；order 偏小。回复：确认体验 + 建议补充。
 
 ### D · 钉变量与映射
 用户提到跨轮状态、分档态度、章大纲切换时：declare_variable（含是否对用户可见）→ declare_map（分档正文）。可同轮多次调用。
+
+### E · 文本生成器（创作收料 → 开玩挂载）
+必须用 insert 写齐游玩上下文：\`设计.模仿范例\`、\`设计.模仿要点\`、\`设计.叙事指南与故事推进\`（用户输入用法：大纲扩写；禁止扮演停笔）。缺任一就先补产物，不要说可以开玩。禁止在创作期写完整短文。开玩后程序只挂载这些产物：主世界出内容，转述出文风。
 
 ## 常用序感
 - 需求/美学等不变设定：靠前（负）

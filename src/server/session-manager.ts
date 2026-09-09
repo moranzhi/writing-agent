@@ -109,6 +109,7 @@ import {
   creationFlowFromRecipeSeed,
   findRecipeCatalogEntry,
   formatCreationFlowForUser,
+  formatDictateRecipeBrief,
   findModuleByName,
   findStepByRef,
   type FlowStepTitleHint,
@@ -682,14 +683,17 @@ export class SessionManager {
       s.runtime.getBlackboard(),
       s.recipeOptions,
     );
+    const recipeBrief = await resolveDictateRecipeBriefForSession({
+      skillName: s.runtime.getActiveSkill()?.name,
+      recipeView,
+      recipeOptions: s.recipeOptions,
+    });
 
     const result = await runDictateTurn({
       llm,
       dialogue,
       recipeName: recipeView?.name,
-      recipeBrief: recipeView
-        ? [recipeView.declaration].filter(Boolean).join("；")
-        : undefined,
+      recipeBrief,
       handlers: {
         listProducts: () => this.listDictateProducts(s),
         writeProduct: (tag, content, order) => {
@@ -3584,6 +3588,35 @@ function resolveSelectedRecipeView(
     };
   }
   return { id: ref, name: ref, declaration: "" };
+}
+
+/** Boss 直聘：优先注入 recipe.yaml 方法论，缺则退回 catalog declaration */
+async function resolveDictateRecipeBriefForSession(params: {
+  skillName?: string | null;
+  recipeView: { id: string; name: string; declaration: string } | null;
+  recipeOptions?: RecipeCatalogEntry[];
+}): Promise<string | undefined> {
+  const view = params.recipeView;
+  if (!view) return undefined;
+  const entry = findRecipeCatalogEntry(
+    params.recipeOptions?.length ? { recipes: params.recipeOptions } : null,
+    view.id,
+  );
+  const skillName = params.skillName?.trim();
+  if (entry && skillName) {
+    try {
+      const skill = await loadSkill(skillName);
+      const packRoot = skill.skillPackRoot?.trim();
+      if (packRoot) {
+        const detail = await loadRecipeDetail(packRoot, entry);
+        const brief = formatDictateRecipeBrief(detail);
+        if (brief) return brief;
+      }
+    } catch (err) {
+      console.error("[会话] 加载转述配方要点失败", err);
+    }
+  }
+  return view.declaration?.trim() || undefined;
 }
 
 function buildWorkerSetUserView(

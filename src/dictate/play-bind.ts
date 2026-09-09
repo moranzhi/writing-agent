@@ -28,6 +28,10 @@ import {
 } from "../skills/play-slots.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
 import {
+  CREATION_SELECTED_RECIPE_TAG,
+  parseSelectedRecipeRef,
+} from "../skills/creation-flow.js";
+import {
   VARIABLE_CATALOG_TAG,
 } from "../skills/variable-catalog.js";
 import {
@@ -48,12 +52,17 @@ const SKIP_BIND_TAGS = new Set([
   "设计.worker集.草稿",
   CONTEXT_ORDER_TAG,
   "创作.进料模式",
+  CREATION_SELECTED_RECIPE_TAG,
   VARIABLE_CATALOG_TAG,
   VALUE_MAP_TAG,
 ]);
 
 /** 偏文风/呈现：有叙事转述时挂转述；否则仍挂主世界层 */
-const STYLE_TAG_RE = /叙事指南|文风|美学|纲领|禁忌|示例|正文组成|回复格式|监控栏|篇幅|结构/;
+const STYLE_TAG_RE =
+  /叙事指南|文风|美学|纲领|禁忌|示例|模仿|正文组成|回复格式|监控栏|篇幅|结构/;
+
+/** 这些配方开玩时刚需叙事转述（主世界出内容、转述出文风） */
+const RECIPES_REQUIRE_NARRATOR = new Set(["文本生成器"]);
 
 export type DictatePlayBindResult = {
   workerSetJson: string;
@@ -185,7 +194,7 @@ function buildNarratorInserts(products: DictateProduct[]): ContextOrderInsert[] 
     if (!isStyleProductTag(p.tag)) continue;
     inserts.push(insert(o++, p.tag, "full", "文风/呈现参考"));
   }
-  inserts.push(insert(o++, "运行.本轮.裁决", "full"));
+  inserts.push(insert(o++, "输出.用户展示", "full"));
   return inserts;
 }
 
@@ -204,7 +213,7 @@ function buildAuditorInserts(params: {
   for (const tag of params.runtimeTags) {
     inserts.push(insert(o++, tag, tag === "变量.当前" ? "fields" : "full"));
   }
-  inserts.push(insert(o++, "运行.本轮.裁决", "full"));
+  inserts.push(insert(o++, "输出.用户展示", "full"));
   inserts.push(insert(o++, "用户.最新输入", "full"));
   return inserts;
 }
@@ -261,7 +270,7 @@ export function buildDictateContextOrder(params: {
         inserts: [
           insert(0, WORKER_PERSONA_REF, "fixed", "槽位人设"),
           insert(1, "用户.最新输入", "full"),
-          insert(2, "运行.本轮.裁决", "full"),
+          insert(2, "输出.用户展示", "full"),
         ],
       });
     }
@@ -275,15 +284,27 @@ export function buildDictateContextOrder(params: {
   });
 }
 
-function resolvePlaySlots(existingRaw: string | undefined): PlaySlotsConfig {
+function resolvePlaySlots(
+  existingRaw: string | undefined,
+  board: Blackboard,
+): PlaySlotsConfig {
   const parsed = existingRaw?.trim()
     ? parseWorkerSetYaml(existingRaw)
     : null;
-  return parsed?.play_slots ?? defaultPlaySlots();
+  const slots = { ...(parsed?.play_slots ?? defaultPlaySlots()) };
+  const recipeRef = parseSelectedRecipeRef(
+    board.getContentByTag(CREATION_SELECTED_RECIPE_TAG),
+  );
+  if (recipeRef && RECIPES_REQUIRE_NARRATOR.has(recipeRef)) {
+    slots.gm = true;
+    slots.narrator = true;
+  }
+  return slots;
 }
 
 /**
  * 生成/更新 设计.worker集：保留已有 play_slots，重写 context_order 为产物挂载表。
+ * 文本生成器等配方会强制打开叙事转述。
  */
 export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBindResult {
   const products = collectDictateBindProducts(board);
@@ -291,7 +312,7 @@ export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBin
     board.getContentByTag(WORKER_SET_FINAL_TAG)?.trim() ||
     board.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim() ||
     "";
-  const playSlots = resolvePlaySlots(existing || undefined);
+  const playSlots = resolvePlaySlots(existing || undefined, board);
   const runtimeTags = collectRuntimeStateTags(board);
   const contextOrder = buildDictateContextOrder({
     products,
@@ -320,7 +341,13 @@ export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBin
   } catch {
     row = { play_slots: playSlots, brief: "Boss直聘落档自动生成" };
   }
-  if (!row.play_slots) row.play_slots = playSlots;
+  row.play_slots = playSlots;
+  if (playSlots.narrator) {
+    row.brief =
+      typeof row.brief === "string" && String(row.brief).includes("转述")
+        ? row.brief
+        : "Boss直聘：主世界出内容，叙事转述出文风";
+  }
   const withSlots = JSON.stringify(row, null, 2);
   const workerSetJson = mergeContextOrderIntoWorkerSetJson(withSlots, contextOrder);
 

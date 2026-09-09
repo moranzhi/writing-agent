@@ -59,6 +59,8 @@ export function displaySkillPackLabel(id) {
     "expand-assistant": "扩写助手",
     文本生成器: "文本生成器",
     "text-generator": "文本生成器",
+    交互式长文生成器: "交互式长文生成器",
+    数据化跑团体验: "数据化跑团体验",
   };
   return map[id] ?? id;
 }

@@ -12,6 +12,7 @@ import {
   listCallableCatalogModules,
   formatModuleCatalogForAgent,
   formatRecipeCatalogForAgent,
+  formatDictateRecipeBrief,
   formatSelectedRecipeForAgent,
   isCreationFlowComplete,
   loadAllRecipeDetails,
@@ -516,12 +517,28 @@ describe("creation-flow", () => {
     );
     expect(dictate?.recipes.some((r) => r.id === "文本生成器")).toBe(true);
     expect(dictate?.recipes.some((r) => r.name === "文本生成器")).toBe(true);
-    expect(dictate?.recipes.some((r) => r.name === "世界模拟器")).toBe(false);
+    expect(dictate?.recipes.some((r) => r.name === "交互式长文生成器")).toBe(true);
+    expect(dictate?.recipes.some((r) => r.name === "数据化跑团体验")).toBe(true);
+    expect(dictate?.recipes[0]?.id).toBe("数据化跑团体验");
     const entry = dictate!.recipes.find((r) => r.id === "文本生成器")!;
     expect(entry.family).toBe("dictate");
     const detail = await loadRecipeDetail("dialogue/world-simulator", entry);
-    expect(detail.core).toBeTruthy();
+    expect(detail.core).toMatch(/范例|模仿|转述|游玩/);
     expect(detail.seed).toBeNull();
+    expect(formatDictateRecipeBrief(detail)).toMatch(/模仿|范例|转述|开玩/);
+    expect(formatDictateRecipeBrief(detail)).toMatch(/模仿要点|学哪些面|要点|文风/);
+
+    const longform = dictate!.recipes.find((r) => r.id === "交互式长文生成器")!;
+    const longDetail = await loadRecipeDetail("dialogue/world-simulator", longform);
+    expect(longDetail.brief).toMatch(/长文/);
+    expect(longDetail.core).toMatch(/长文|分段/);
+
+    const rpg = dictate!.recipes.find((r) => r.id === "数据化跑团体验")!;
+    const rpgDetail = await loadRecipeDetail("dialogue/world-simulator", rpg);
+    expect(rpgDetail.brief).toMatch(/数据化跑团|真值|映射/);
+    expect(rpgDetail.core).toMatch(/真值|declare_variable|数值/);
+    expect(formatDictateRecipeBrief(rpgDetail)).toContain("declare_variable");
+    expect(formatDictateRecipeBrief(rpgDetail)).toContain("declare_map");
   });
 
   it("parses selected recipe ref", () => {
@@ -619,7 +636,7 @@ recipes:
     name: 缺声明
 `);
     expect(cat?.recipes).toEqual([
-      { id: "ok", name: "好配方", declaration: "有声明" },
+      { id: "ok", name: "好配方", declaration: "有声明", family: "recipe" },
     ]);
   });
 
