@@ -93,8 +93,8 @@
 
 设计.监控栏 → 回复呈现清单（看什么）
 设计.正文组成 → 壳 + 美化（怎么展示）
-运行.本轮.裁决 → body 事实；suggested_actions → 行动区
-输出.用户展示 → present.v1 或纯 Markdown（→ body）
+输出.用户展示（主世界正文）→ 转述提取/改写后的 body；suggested_actions → 行动区
+输出.用户展示（终稿）→ present.v1 或纯 Markdown（→ body）
 ```
 
 ## 5. 游玩灌数契约

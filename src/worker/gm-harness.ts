@@ -1,6 +1,6 @@
 /**
  * 主世界层（world-simulator）游玩期 tool harness：
- * 反复 completeWithTools 直到不再调用工具，最后一次正文视为裁决 JSON。
+ * 反复 completeWithTools 直到不再调用工具，最后一次正文视为故事 Markdown。
  */
 import type { ChatMessage, LlmProvider } from "../llm/client.js";
 import {

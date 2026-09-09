@@ -234,7 +234,7 @@ value, rev, updatedAt, source  # source: user | worker:<id> | system
 
 ### 5.4 维护 worker
 
-读：正文/裁决、维护规则、当前表 → 写：字段更新。  
+读：本轮正文、维护规则、当前表 → 写：字段更新。  
 可不写用户终稿；可与展示链解耦、**延后**跑。
 
 ### 5.5 副作用（含大纲、人设、事件）
@@ -479,7 +479,7 @@ phase:core（核心体验 + 交互）
 | 意图 | 典型停点 |
 |------|----------|
 | 自主长篇 | 大纲 / 主题 worker → `review`；正文链多段 → `continue`，直到用户叫停或大纲段落再 `review` |
-| 交互 / RP | 产出用户可见终稿的转述（如 narrator）→ `review`；世界裁决等中间层 → `continue` |
+| 交互 / RP | 产出用户可见终稿的槽（无转述＝主世界层；有转述＝narrator）→ `review`；有转述时主世界草稿 → `continue` |
 
 创作期按 **§7.2 创作单位** 分块验收（worker 与固定上下文同级），与上表正交。  
 design-flow / design-step / 创作调度必须为 **每个** run worker 写出 `acceptance`；缺省时不得假设「全都不用验收」——面向用户的可读输出默认倾向 `review`，纯中间层倾向 `continue`，吃不准就 ask_user。

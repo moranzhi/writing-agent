@@ -54,12 +54,13 @@ export const PLAY_SLOT_META: Record<
   gm: {
     label: "主世界层",
     purpose:
-      "读真值与 Progressive 投影并推进世界；无独立转述时直接写用户可见正文，有转述时出裁决包。",
+      "读真值与 Progressive 投影并推进世界；直接写本轮故事正文（Markdown）；无转述时原文即终稿。",
     defaultAcceptance: "review",
   },
   narrator: {
     label: "叙事转述",
-    purpose: "只读裁决包 + 文风常驻，输出用户可见正文（可选；默认关）。",
+    purpose:
+      "读主世界正文，提取/改写/镶壳为用户终稿；可补残稿，不改剧情（可选；默认关）。",
     defaultAcceptance: "review",
   },
   perspective: {
@@ -191,37 +192,39 @@ export function workerEntryForSlot(
 ): WorkerSetEntry {
   const meta = PLAY_SLOT_META[id];
   const ref = refForSlot(slots, id);
-  const soloGm = id === "gm" && !isNarratorEnabled(slots);
+  const withNarrator = isNarratorEnabled(slots);
+  const soloGm = id === "gm" && !withNarrator;
   return {
     ref,
     name: meta.label,
     role: id,
-    duty: soloGm
-      ? "读真值与投影，推进世界，并直接写出用户可见正文（无独立转述层，原文即终稿）。"
-      : meta.purpose,
-    when:
+    duty:
       id === "gm"
         ? soloGm
-          ? "每轮用户输入后上场；直接交用户可见正文"
-          : "每轮用户输入后首先上场（主 LLM / 裁决权威）"
+          ? "读真值与投影，推进世界，并直接写出用户可见正文（无独立转述层，原文即终稿）。"
+          : "读真值与投影，推进世界，写出本轮故事正文（Markdown）；文风润色与壳交给转述。"
+        : meta.purpose,
+    when:
+      id === "gm"
+        ? "每轮用户输入后上场；直接交故事正文"
         : id === "perspective"
           ? "强信息隔离且本轮需要该角色独立反应时（主世界层之后）"
           : id === "narrator"
-            ? "主世界层裁决包就绪后"
-            : "转述完成后；表维护合并进变量.当前，供下一轮主世界层读取",
+            ? "主世界层本轮正文就绪后"
+            : "终稿写入后；表维护合并进变量.当前，供下一轮主世界层读取",
     rationale:
       id === "gm"
         ? soloGm
           ? "默认少槽：主世界层兼呈现，避免转述再改写一遍"
-          : "有独立转述时：主世界层出裁决，正文交给转述"
+          : "有独立转述时：主世界专注剧情与扮演；转述再提取/改写/镶壳"
         : id === "perspective"
           ? "知密内容不能进主世界层上下文"
           : id === "narrator"
-            ? "用户可见正文与裁决分离，避免文风与规则互相挤压"
+            ? "文风与前端壳与世界推演分离，避免互相挤压"
             : "表与规则补充延后执行，改表结果作用于下一轮而非本轮重裁",
     acceptance:
-      id === "gm" && isNarratorEnabled(slots) ? "continue" : meta.defaultAcceptance,
-    outputs: soloGm ? ["输出.用户展示"] : undefined,
+      id === "gm" && withNarrator ? "continue" : meta.defaultAcceptance,
+    outputs: id === "gm" ? ["输出.用户展示"] : undefined,
     invocation: "turn",
   };
 }

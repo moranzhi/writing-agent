@@ -152,6 +152,7 @@ import {
 } from "../skills/play-turn.js";
 import {
   PRESENT_TAG,
+  isPlayFinalVisibleWorker,
   isPlayPresentWorker,
   parseShellAdaptationFromReplyFormat,
   presentOutputFromFallback,
@@ -1253,7 +1254,7 @@ export class PhaseRuntime {
   }
 
   /**
-   * 游玩层不走创作 HITL：转述必须交出用户可见正文，其它执行单元空产物也继续。
+   * 游玩层不走创作 HITL：终稿槽必须交出用户可见正文，其它执行单元空产物也继续。
    */
   private settlePlayWorkerResult(
     workerId: string,
@@ -1261,15 +1262,14 @@ export class PhaseRuntime {
   ): import("../worker/executor.js").WorkerRunResult {
     if (!isPlayLayerActive(this.session.slots)) return result;
     const outputs = { ...result.outputs };
+    const narratorEnabled = isNarratorEnabled(
+      parseWorkerSetYaml(
+        this.blackboard.getContentByTag("设计.worker集") ?? "",
+      )?.play_slots,
+    );
     if (
       Object.keys(outputs).length === 0 &&
-      isPlayPresentWorker(workerId, {
-        narratorEnabled: isNarratorEnabled(
-          parseWorkerSetYaml(
-            this.blackboard.getContentByTag("设计.worker集") ?? "",
-          )?.play_slots,
-        ),
-      })
+      isPlayFinalVisibleWorker(workerId, { narratorEnabled })
     ) {
       const shell =
         parseShellAdaptationFromReplyFormat(
@@ -1279,10 +1279,12 @@ export class PhaseRuntime {
       const preview = result.preview?.trim() ?? "";
       const looksAsk =
         /可验收|追问|请再补|askUser/.test(preview) || /^\s*-\s/.test(preview);
-      outputs[PRESENT_TAG] = presentOutputFromFallback(
-        looksAsk ? "" : preview,
-        shell,
-      );
+      // 主世界终稿用纯正文；转述仍可落 present 包
+      outputs[PRESENT_TAG] = isPlayPresentWorker(workerId)
+        ? presentOutputFromFallback(looksAsk ? "" : preview, shell)
+        : looksAsk
+          ? "（本轮场面未写完）"
+          : preview || "（本轮场面未写完）";
     }
     return {
       ...result,
@@ -2578,7 +2580,18 @@ export class PhaseRuntime {
       inferLifecycleStage(this.session) === "play" &&
       (tag === "输出.用户展示" || tag === "输出.开场白")
     ) {
-      this.appendDialogueHistory("助手", toWrite);
+      const narratorEnabled = isNarratorEnabled(
+        parseWorkerSetYaml(
+          this.blackboard.getContentByTag("设计.worker集") ?? "",
+        )?.play_slots,
+      );
+      // 有转述时：主世界草稿不进对话史，只记终稿（转述）；开场白始终记
+      if (
+        tag === "输出.开场白" ||
+        isPlayFinalVisibleWorker(workerId, { narratorEnabled })
+      ) {
+        this.appendDialogueHistory("助手", toWrite);
+      }
     }
     if (nextDoc) {
       this.applyTableSideEffects(prevDoc, nextDoc, workerId);
@@ -2586,7 +2599,7 @@ export class PhaseRuntime {
     if (tag === OPENING_CURRENT_VARS_TAG || tag === "变量.当前") {
       this.applyValueMapProjections(workerId);
     }
-    // 裁决包 / 旁观维护包 → 合并进变量.当前（可触发 side_effects）
+    // 遗留裁决包 / 旁观维护包 → 合并进变量.当前（可触发 side_effects）
     if (tag === SETTLEMENT_TAG) {
       this.applySettlementVariableChanges(toWrite, workerId);
     } else if (tag === MAINTAIN_TAG) {

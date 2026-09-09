@@ -1,6 +1,7 @@
 /**
- * 主世界层 → 叙事转述的裁决包（settlement / direction packet）。
- * 存黑板 tag：运行.本轮.裁决
+ * 遗留：settlement.v1 裁决包（运行.本轮.裁决）。
+ * 现行游玩管线：主世界层直接写 Markdown 正文；转述读正文；旁观维护读正文出 maintain.v1。
+ * 仍保留解析/合并，兼容旧存档或手工写入的 variable_changes。
  */
 import {
   createTableFromValues,

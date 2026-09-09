@@ -18,7 +18,7 @@ workers:
         - 用户.最新输入
         - 运行.事件流
     outputs:
-      - 运行.本轮.裁决
+      - 输出.用户展示
       - 运行.事件流
   - ref: narrator
     duty: 组装用户可见回复
@@ -30,14 +30,14 @@ workers:
       static:
         - 叙事.指南.确认稿
       dynamic:
-        - 运行.事件流
+        - 输出.用户展示
     outputs:
       - 输出.用户展示
 instantiate_hints:
   invoke: [opening-generator]
 tag_flow:
-  - "用户.最新输入 → 运行.本轮.裁决"
-  - "运行.本轮.裁决 → 输出.用户展示"
+  - "用户.最新输入 → 输出.用户展示"
+  - "输出.用户展示 → 输出.用户展示（转述终稿）"
 `;
 
 describe("formatWorkerSetForUser", () => {
@@ -62,7 +62,7 @@ describe("formatWorkerSetForUser", () => {
       false,
     );
     expect(view.workers[0].context.staticTags[0].tag).toBe("设计.worker集");
-    expect(view.workers[0].writes).toEqual(["运行.本轮.裁决", "运行.事件流"]);
+    expect(view.workers[0].writes).toEqual(["输出.用户展示", "运行.事件流"]);
     expect(view.workers[0].context.explicit).toBe(true);
     expect(view.workers[1].presentation?.[0].label).toBe("语气");
     expect(view.tagFlow).toHaveLength(2);

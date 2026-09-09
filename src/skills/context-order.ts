@@ -498,7 +498,7 @@ const SYNTH_FALLBACK_CONTEXT: Record<
       "设计.变量控制上下文",
     ],
     dynamic: [
-      "运行.本轮.裁决",
+      "输出.用户展示",
       "用户.最新输入",
       "变量.当前",
       "上下文.旁观.状态摘要",
@@ -528,12 +528,12 @@ const SYNTH_FALLBACK_CONTEXT: Record<
       "设计.正文组成",
       "设计.监控栏",
     ],
-    dynamic: ["运行.本轮.裁决"],
+    dynamic: ["输出.用户展示"],
     skipHistory: true,
   },
   "role-decide": {
     static: [],
-    dynamic: ["用户.最新输入", "运行.本轮.裁决"],
+    dynamic: ["用户.最新输入", "输出.用户展示"],
   },
 };
 

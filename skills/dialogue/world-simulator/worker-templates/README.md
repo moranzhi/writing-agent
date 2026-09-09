@@ -25,14 +25,14 @@ Runtime 执行时读 Worker 集条目，不直接读本目录。
 
 | 槽 | 默认 ref | 模板 |
 |----|----------|------|
-| auditor | `auditor` | `auditor.yaml` — maintain.v1；默认空操作；无长对话史（默认关） |
-| gm | `world-simulator` | `world-simulator.yaml` — 默认直接写用户可见正文；开转述时改出 settlement.v1；`play_slots.chance` 开时 harness 批量机遇工具 |
-| narrator | `narrator` | `narrator.yaml` — 只读裁决包写正文（默认关） |
+| auditor | `auditor` | `auditor.yaml` — maintain.v1；读本轮正文；默认空操作；无长对话史（默认关） |
+| gm | `world-simulator` | `world-simulator.yaml` — 始终写 Markdown 故事正文；`play_slots.chance` 开时 harness 批量机遇工具 |
+| narrator | `narrator` | `narrator.yaml` — 读主世界正文，提取/改写/镶壳（默认关） |
 | perspective | `role-decide` | `role-decide.yaml` — 可选知密视角 |
 | chance（拓扑开关） | `chance` | `play_slots.chance` 控制 gm harness；可选声明按需 `chance` ref 供显式 run_worker |
 
 变量 / Progressive：**不是**独立 LLM 模板；见 `docs/progressive-data-design.md`（真值 + side_effects）。  
-Runtime：写入 `运行.本轮.裁决` 时自动合并 `variable_changes` → `变量.当前`；写入 `运行.本轮.旁观` 时按需合并 `table_ops`。
+Runtime：写入 `运行.本轮.旁观` 时按需合并 `table_ops`；遗留 `运行.本轮.裁决` 仍可合并 `variable_changes`（兼容旧存档）。
 
 ## 其它文件
 

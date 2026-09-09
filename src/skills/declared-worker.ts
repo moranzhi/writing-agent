@@ -32,7 +32,6 @@ import {
 } from "./context-order.js";
 import type { ContextSegmentDef } from "./context-segments.js";
 import { PLAY_VISIBLE_BODY_INSTRUCTION } from "./present-packet.js";
-import { isNarratorEnabled } from "./play-slots.js";
 
 type WorkerTemplateDoc = {
   id?: string;
@@ -223,7 +222,7 @@ export function buildDeclaredWorkerSkill(params: {
   const visibleBodyRule =
     id === "narrator" ||
     id === "round-present" ||
-    (id === "world-simulator" && !isNarratorEnabled(params.workerSet?.play_slots))
+    id === "world-simulator"
       ? PLAY_VISIBLE_BODY_INSTRUCTION
       : "";
   const excerptWithRule = [excerpt, visibleBodyRule].filter(Boolean).join("\n\n");

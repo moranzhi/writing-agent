@@ -21,17 +21,15 @@ import {
 } from "../parse/json-doc.js";
 import { assembleWorkerContext } from "../skills/context-segments.js";
 import { isPlayLayerActive } from "../skills/play-turn.js";
-import { loadAppSettings } from "../config/settings.js";
-import { resolveActivePreset } from "../preset/store.js";
-import { assemblePlayWorkerMessages } from "../preset/play-frame.js";
-import { worldInfoPackFromSegments } from "../preset/world-info-pack.js";
 import {
   PRESENT_TAG,
   PRESENT_JSON_SCHEMA,
+  isPlayGmBodyWorker,
   isPlayPresentWorker,
   isPresentLikeObject,
   parsePresentPacket,
   parseShellAdaptationFromReplyFormat,
+  playGmBodyOutputInstruction,
   playPresentOutputInstruction,
   presentOutputFromFallback,
   stringifyPresentPacket,
@@ -46,7 +44,6 @@ import {
   GM_CHANCE_HARNESS_INSTRUCTION,
 } from "../skills/gm-tools.js";
 import { runGmHarness } from "./gm-harness.js";
-import { isNarratorEnabled } from "../skills/play-slots.js";
 import {
   mergeQuestionsPreferFragment,
   normalizeQuestions,
@@ -397,10 +394,15 @@ function lookupOutputValue(
 function parseWorkerResponse(
   raw: string,
   outputTags: string[],
-  opts?: { fallbackShell?: PresentShellId },
+  opts?: { fallbackShell?: PresentShellId; preferPlainBody?: boolean },
 ): WorkerRunResult {
   const fallbackShell = opts?.fallbackShell ?? "prose";
+  const preferPlainBody = opts?.preferPlainBody === true;
   const playTarget = playVisibleTarget(outputTags);
+  const packBody = (body: string) =>
+    preferPlainBody
+      ? body.trim() || "（本轮场面未写完）"
+      : presentOutputFromFallback(body, fallbackShell);
 
   const parsed = tryParseJsonDoc(raw);
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -411,10 +413,10 @@ function parseWorkerResponse(
           ? raw
           : "";
       return finalizeParsedOutputs(
-        { [playTarget]: presentOutputFromFallback(body, fallbackShell) },
+        { [playTarget]: packBody(body) },
         { summary: body.slice(0, 80) || "游玩正文" },
         outputTags,
-        { playVisible: true, fallbackShell },
+        { playVisible: true, fallbackShell, preferPlainBody },
       );
     }
     if (target && looksLikeStructuredDraft(raw)) {
@@ -449,7 +451,7 @@ function parseWorkerResponse(
 
   const obj = parsed as Record<string, unknown>;
 
-  if (playTarget && isPresentLikeObject(obj)) {
+  if (playTarget && isPresentLikeObject(obj) && !preferPlainBody) {
     const present = canonicalizePresentOutput(obj, fallbackShell);
     if (present) {
       return finalizeParsedOutputs(
@@ -473,15 +475,32 @@ function parseWorkerResponse(
     }
   }
 
-  // 游玩正文：片段里的场面字收成 present，不要扁形成创作稿
+  // 游玩正文：片段里的场面字收成 present（或主世界纯正文）
   if (playTarget && !isPresentLikeObject(obj)) {
     const scene = fragmentSceneText(obj);
     if (scene) {
       return finalizeParsedOutputs(
-        { [playTarget]: presentOutputFromFallback(scene, fallbackShell) },
+        { [playTarget]: packBody(scene) },
         obj,
         outputTags,
-        { playVisible: true, fallbackShell },
+        { playVisible: true, fallbackShell, preferPlainBody },
+      );
+    }
+  }
+
+  // 主世界偶发 JSON：尽量抽出可读字符串当正文
+  if (playTarget && preferPlainBody) {
+    const scene =
+      fragmentSceneText(obj) ||
+      (typeof obj.body === "string" ? obj.body.trim() : "") ||
+      (typeof obj.visible_now === "string" ? obj.visible_now.trim() : "") ||
+      raw.trim();
+    if (scene) {
+      return finalizeParsedOutputs(
+        { [playTarget]: packBody(scene) },
+        obj,
+        outputTags,
+        { playVisible: true, fallbackShell, preferPlainBody },
       );
     }
   }
@@ -510,6 +529,16 @@ function parseWorkerResponse(
     for (const tag of productOutputTags(outputTags)) {
       const val = lookupOutputValue(bag, tag);
       if (playTarget && tag === playTarget) {
+        if (preferPlainBody) {
+          const scene =
+            (typeof val === "string" ? val.trim() : "") ||
+            fragmentSceneText(val) ||
+            "";
+          if (scene) {
+            outputs[tag] = packBody(scene);
+            continue;
+          }
+        }
         const present = canonicalizePresentOutput(val, fallbackShell);
         if (present) {
           outputs[tag] = present;
@@ -526,7 +555,7 @@ function parseWorkerResponse(
   }
   recoverFragmentOutputs(obj, outputs, outputTags, fallbackShell);
 
-  if (playTarget && outputs[playTarget]) {
+  if (playTarget && outputs[playTarget] && !preferPlainBody) {
     const present = canonicalizePresentOutput(outputs[playTarget], fallbackShell);
     if (present) outputs[playTarget] = present;
   }
@@ -534,6 +563,7 @@ function parseWorkerResponse(
   return finalizeParsedOutputs(outputs, obj, outputTags, {
     playVisible: Boolean(playTarget),
     fallbackShell,
+    preferPlainBody,
     rawFallback: raw,
   });
 }
@@ -545,6 +575,7 @@ function finalizeParsedOutputs(
   opts?: {
     playVisible?: boolean;
     fallbackShell?: PresentShellId;
+    preferPlainBody?: boolean;
     rawFallback?: string;
   },
 ): WorkerRunResult {
@@ -552,6 +583,11 @@ function finalizeParsedOutputs(
   const playTarget = playVisibleTarget(outputTags);
   const playVisible = Boolean(opts?.playVisible || playTarget);
   const fallbackShell = opts?.fallbackShell ?? "prose";
+  const preferPlainBody = opts?.preferPlainBody === true;
+  const packBody = (body: string) =>
+    preferPlainBody
+      ? body.trim() || "（本轮场面未写完）"
+      : presentOutputFromFallback(body, fallbackShell);
 
   let askUser: QuestionItem[] | undefined;
   if (!playVisible) {
@@ -615,7 +651,7 @@ function finalizeParsedOutputs(
       scene ||
       summaryText ||
       usablePlayFallbackText(opts?.rawFallback);
-    outputs[playTarget] = presentOutputFromFallback(fallback, fallbackShell);
+    outputs[playTarget] = packBody(fallback);
   }
 
   if (Object.keys(outputs).length === 0 && (!askUser || askUser.length === 0)) {
@@ -782,54 +818,43 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     worker.id === "world-simulator" &&
     gmChanceToolsEnabled(playSlots);
 
+  const playGmBody =
+    isPlayLayerActive(params.slots) && isPlayGmBodyWorker(worker.id);
   const playPresent =
-    isPlayLayerActive(params.slots) &&
-    isPlayPresentWorker(worker.id, {
-      narratorEnabled: isNarratorEnabled(playSlots),
-    });
-  const playShell: PresentShellId | undefined = playPresent
-    ? parseShellAdaptationFromReplyFormat(
-        params.blackboard.getContentByTag("设计.正文组成") ??
-          params.blackboard.getContentByTag("设计.回复格式"),
-      )?.shell_id ?? "prose"
-    : undefined;
+    isPlayLayerActive(params.slots) && isPlayPresentWorker(worker.id);
+  const playShell: PresentShellId | undefined =
+    playPresent || playGmBody
+      ? parseShellAdaptationFromReplyFormat(
+          params.blackboard.getContentByTag("设计.正文组成") ??
+            params.blackboard.getContentByTag("设计.回复格式"),
+        )?.shell_id ?? "prose"
+      : undefined;
 
   const systemContent =
     promptBody +
-    (playPresent && playShell
-      ? playPresentOutputInstruction(playShell)
-      : WORKER_OUTPUT_INSTRUCTION) +
+    (playGmBody
+      ? playGmBodyOutputInstruction()
+      : playPresent && playShell
+        ? playPresentOutputInstruction(playShell)
+        : WORKER_OUTPUT_INSTRUCTION) +
     (useGmHarness ? GM_CHANCE_HARNESS_INSTRUCTION : "");
-  const playPreset = isPlayLayerActive(params.slots)
-    ? resolveActivePreset(loadAppSettings().activePresetId)
-    : null;
 
-  const messages = playPreset
-    ? assemblePlayWorkerMessages({
-        systemPrompt: systemContent,
-        preset: playPreset,
-        pack: worldInfoPackFromSegments({
-          segments: worker.contextSegments ?? [],
-          inputs,
-          blackboard: params.blackboard,
-          inputMerge,
-        }),
-      })
-    : [
-        { role: "system" as const, content: systemContent },
-        {
-          role: "user" as const,
-          content: assembleWorkerContext({
-            inputs,
-            segments: worker.contextSegments,
-            blackboard: params.blackboard,
-            inputMerge,
-            workerId: worker.id,
-            workerName: worker.name,
-            outputTags: worker.outputTags,
-          }),
-        },
-      ];
+  // 任务 messages 即可；preset 夹心由 wrapLlmForSession / PresetLlmProvider 统一装配
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemContent },
+    {
+      role: "user",
+      content: assembleWorkerContext({
+        inputs,
+        segments: worker.contextSegments,
+        blackboard: params.blackboard,
+        inputMerge,
+        workerId: worker.id,
+        workerName: worker.name,
+        outputTags: worker.outputTags,
+      }),
+    },
+  ];
 
   if (useGmHarness) {
     const systemMsg = messages.find((m) => m.role === "system");
@@ -841,8 +866,10 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       stream: params.stream,
       caller: `worker:${worker.id}`,
     });
-    return parseWorkerResponse(selectJsonPayload(harness.content), worker.outputTags, {
+    // 主世界 harness 终稿是 Markdown；勿强行抽 JSON
+    return parseWorkerResponse(harness.content, worker.outputTags, {
       fallbackShell: playShell,
+      preferPlainBody: playGmBody,
     });
   }
 
@@ -852,6 +879,18 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
         onContentDelta: (delta) => params.stream?.onOutputDelta?.(delta),
       }
     : undefined;
+
+  if (playGmBody) {
+    const completeOpts = { caller: `worker:${worker.id}`, responseFormat: "text" as const };
+    const result =
+      streamCallbacks && params.llm.completeStream
+        ? await params.llm.completeStream(messages, completeOpts, streamCallbacks)
+        : await params.llm.complete(messages, completeOpts);
+    return parseWorkerResponse(result.content, worker.outputTags, {
+      fallbackShell: playShell,
+      preferPlainBody: true,
+    });
+  }
 
   const result = await completeStructured(params.llm, messages, {
     schema: playPresent ? PRESENT_JSON_SCHEMA : {
@@ -880,7 +919,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
 export function parseWorkerResponseForTest(
   raw: string,
   outputTags: string[],
-  opts?: { fallbackShell?: PresentShellId },
+  opts?: { fallbackShell?: PresentShellId; preferPlainBody?: boolean },
 ): WorkerRunResult {
   return parseWorkerResponse(raw, outputTags, opts);
 }

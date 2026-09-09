@@ -76,8 +76,8 @@ boundary: |
 ```principles
 1. 合并优于重写；槽位优于发明演员。
 2. 面向用户的终稿点 acceptance=review（默认是 world-simulator；开了转述则是 narrator；写手是 chapter-writer）；旁观/outline 常用 continue；有转述时 gm 用 continue。
-3. 真值变更写在 gm 的 outputs（运行.本轮.变量变更 / 裁决包内 variable_changes），旁观维护只出 maintain.v1；不靠第三变量 Worker。
-4. 裁决包约定：启用转述时，运行.本轮.裁决 使用 settlement.v1（见 progressive-data-design / 模板）；Runtime 合并 variable_changes。无转述时主世界层直接写 输出.用户展示。
+3. 真值变更主路径：旁观维护 maintain.v1（读本轮正文改表）；可选正文隐藏段维护语句。主世界层只写故事正文，不交 settlement 裁决包。
+4. 正文约定：主世界层始终写「输出.用户展示」（Markdown）。无转述时原文即终稿；有转述时转述读该正文再提取/改写/镶壳并覆盖终稿。
 5. 键名稳定；未决进 open_questions。
 ```
 

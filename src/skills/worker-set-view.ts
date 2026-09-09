@@ -221,6 +221,7 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "设计.变量控制上下文",
       ],
       dynamic: [
+        "输出.用户展示",
         "用户.最新输入",
         "变量.当前",
         "上下文.旁观.状态摘要",
@@ -249,12 +250,12 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "运行.本轮.旁观",
       ],
     },
-    outputs: ["输出.用户展示", "运行.本轮.裁决", "运行.事件流", "运行.本轮.变量变更"],
+    outputs: ["输出.用户展示", "运行.事件流"],
   },
   "variable-update": {
     context: {
       static: ["设计.变量设计与更新规则"],
-      dynamic: ["运行.本轮.裁决", "变量.当前"],
+      dynamic: ["输出.用户展示", "变量.当前"],
     },
     outputs: ["运行.本轮.变量变更", "变量.当前"],
   },
@@ -267,7 +268,7 @@ const DEFAULT_WORKER_CONTRACTS: Record<
         "设计.正文组成",
         "设计.监控栏",
       ],
-      dynamic: ["运行.本轮.裁决", "用户.最新输入", "变量.当前"],
+      dynamic: ["输出.用户展示", "用户.最新输入", "变量.当前"],
     },
     outputs: ["输出.用户展示"],
   },

@@ -5,6 +5,8 @@ import {
   parseShellAdaptationFromReplyFormat,
   presentFromPlainText,
   presentOutputFromFallback,
+  isPlayFinalVisibleWorker,
+  isPlayGmBodyWorker,
   isPlayPresentWorker,
   shellDefaultRegions,
 } from "../src/skills/present-packet.js";
@@ -118,16 +120,24 @@ describe("shell adaptation from reply-format", () => {
 });
 
 describe("play present worker", () => {
-  it("recognizes narrator, round-present, and solo gm", () => {
+  it("structured present only for narrator / round-present", () => {
     expect(isPlayPresentWorker("narrator")).toBe(true);
     expect(isPlayPresentWorker("round-present")).toBe(true);
     expect(isPlayPresentWorker("world-simulator")).toBe(false);
+  });
+
+  it("gm body worker and final visible roles", () => {
+    expect(isPlayGmBodyWorker("world-simulator")).toBe(true);
+    expect(isPlayGmBodyWorker("narrator")).toBe(false);
     expect(
-      isPlayPresentWorker("world-simulator", { narratorEnabled: false }),
+      isPlayFinalVisibleWorker("world-simulator", { narratorEnabled: false }),
     ).toBe(true);
     expect(
-      isPlayPresentWorker("world-simulator", { narratorEnabled: true }),
+      isPlayFinalVisibleWorker("world-simulator", { narratorEnabled: true }),
     ).toBe(false);
+    expect(
+      isPlayFinalVisibleWorker("narrator", { narratorEnabled: true }),
+    ).toBe(true);
   });
 
   it("fallback packet uses the given shell", () => {

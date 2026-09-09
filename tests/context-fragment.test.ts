@@ -280,14 +280,14 @@ describe("context-order.v1", () => {
       template: {
         id: "world-simulator",
         label: "主世界层",
-        duty: "裁决",
+        duty: "写正文",
         suggested_context: { static: ["设计.worker集"], dynamic: ["用户.最新输入"] },
       },
       workerSet: parsed,
     });
-    expect(worker.contextSegments?.some((s) => s.inline?.includes("裁决"))).toBe(
-      true,
-    );
+    expect(
+      worker.contextSegments?.some((s) => s.inline?.includes("正文")),
+    ).toBe(true);
     expect(
       worker.contextSegments?.some(
         (s) => s.tier === "dynamic" && s.tags.includes("用户.最新输入"),

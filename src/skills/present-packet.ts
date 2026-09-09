@@ -192,21 +192,38 @@ export function stripPresentSourceFences(raw: string): string {
 }
 
 export const PLAY_VISIBLE_BODY_INSTRUCTION = [
-  "用户可见正文（present.v1 的 blocks.body，或纯 Markdown 主读）默认 **1000～2000 字**（按汉字计）；以「设计.监控栏／回复呈现」已钉字数为准。",
+  "用户可见正文（主世界层：纯 Markdown；转述：present.v1 的 blocks.body，或纯 Markdown 主读）默认 **1000～2000 字**（按汉字计）；以「设计.监控栏／回复呈现」已钉字数为准。",
   "采用完整长自然段叙述，不要单句成段。",
   "不要写成几句气泡短信就结束，除非用户明确要求极短。",
   "禁止把 tag 名（如「输出.用户展示」）、压缩摘要、过程日志写进正文。",
 ].join("\n");
 
-/** 游玩期把用户可见终稿写出的执行单元（有转述用转述；无则主世界层直接交原文） */
-export function isPlayPresentWorker(
+/**
+ * 游玩期走 present.v1 结构化投递的执行单元（转述 / 回合陈述）。
+ * 主世界层不在此列：始终自由写 Markdown 正文。
+ */
+export function isPlayPresentWorker(workerId: string): boolean {
+  const id = workerId.trim();
+  return id === "narrator" || id === "round-present";
+}
+
+/**
+ * 本轮最终用户可见正文的执行单元（写入对话.历史 / 空产物兜底）。
+ * 无转述：主世界层；有转述：转述（主世界草稿可被覆盖，不进历史）。
+ */
+export function isPlayFinalVisibleWorker(
   workerId: string,
   opts?: { narratorEnabled?: boolean },
 ): boolean {
   const id = workerId.trim();
   if (id === "narrator" || id === "round-present") return true;
-  if (id === "world-simulator" && opts?.narratorEnabled === false) return true;
+  if (id === "world-simulator" && opts?.narratorEnabled !== true) return true;
   return false;
+}
+
+/** 游玩主世界层：自由 Markdown 正文（程序可事后落入 present 壳，模型不交 JSON） */
+export function isPlayGmBodyWorker(workerId: string): boolean {
+  return workerId.trim() === "world-simulator";
 }
 
 /** 按能力探测走 json_schema / forced_tool 时用的 present.v1 形状（全 required，可 strict） */
@@ -243,21 +260,35 @@ export const PRESENT_JSON_SCHEMA: Record<string, unknown> = {
   },
 };
 
+/** 游玩主世界层：直接写 Markdown，禁止 JSON 裁决包 */
+export function playGmBodyOutputInstruction(): string {
+  return `
+
+---
+
+## 运行时输出协议（主世界正文）
+
+直接输出本轮 **Markdown / 自然语言故事正文**（写入「输出.用户展示」）。
+不要输出 JSON、不要交 settlement/裁决包、不要套 present.v1 外壳。
+重心在场面推进与人物扮演；残稿也可以交，有转述时会再处理。
+不要写追问、askUser、自评或「可验收产物」。`;
+}
+
 /** 游玩转述：按探测到的 structured 投递写出 present.v1，不要创作追问 */
 export function playPresentOutputInstruction(shell: PresentShellId): string {
   return `
 
 ---
 
-## 运行时输出协议（游玩正文）
+## 运行时输出协议（游玩终稿）
 
-本步产物是给用户看的终稿。程序按已探测的模型能力用 schema / tool / json_object 投递，你输出 **一个 present.v1 对象**：
+本步读主世界层已写正文，产出给用户看的终稿。程序按已探测的模型能力用 schema / tool / json_object 投递，你输出 **一个 present.v1 对象**：
 
 {"schema":"present.v1","shell":"${shell}","blocks":{"body":"用户可读正文","monitor":"","header":"","footer":"","aside":""},"meta":{"suggested_actions":[]}}
 
 \`shell\` 必须是 \`${shell}\`。只填该壳已有区域，没有的键留空字符串。
 prose 壳也可直接输出 Markdown，程序会落入 body。
-材料不够也先写一版场面。不要写追问、askUser、自评或「可验收产物」。`;
+可补全残缺叙述与版式，但不得改剧情事实。不要写追问、askUser、自评或「可验收产物」。`;
 }
 
 export function stringifyPresentPacket(packet: PresentPacket): string {
