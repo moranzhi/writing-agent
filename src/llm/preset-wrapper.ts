@@ -1,4 +1,5 @@
 import { loadAppSettings } from "../config/settings.js";
+import { frameMessagesWithPreset } from "../preset/play-frame.js";
 import { resolveActivePreset } from "../preset/store.js";
 import type { PresetPackage } from "../types/preset.js";
 import type {
@@ -23,7 +24,7 @@ function readActivePreset(): PresetPackage | null {
 
 /**
  * 统计在内、预设在外：痕迹里的 messages / generation 就是发给模型的那一份。
- * 当前没有选用预设时仍包一层，请求原样转发。
+ * 有选用预设时：在此按 prompt_order 夹心包裹，并合并 generation。
  */
 export function wrapLlmForSession(
   inner: LlmProvider,
@@ -36,10 +37,7 @@ export function wrapLlmForSession(
   return new PresetLlmProvider(tracked, getPreset);
 }
 
-/**
- * 在所有 LLM 请求上合并当前 preset 的生成参数。
- * prompt / marker 不在此前置，由 play worker 按扩展 prompt_order 填洞。
- */
+/** 所有 LLM 请求：preset 夹心 + 生成参数。无选用预设则原样转发。 */
 export class PresetLlmProvider implements LlmProvider {
   constructor(
     private readonly inner: LlmProvider,
@@ -52,9 +50,8 @@ export class PresetLlmProvider implements LlmProvider {
   ): { messages: ChatMessage[]; options: CompleteOptions | undefined } {
     const preset = this.getPreset();
     if (!preset) return { messages, options };
-    // 生成参数全局合并；prompt/marker 只在 play worker 按 prompt_order 填洞，这里不再前置。
     return {
-      messages,
+      messages: frameMessagesWithPreset(preset, messages),
       options: {
         ...options,
         generation: options?.generation ?? preset.generation,
@@ -97,6 +94,8 @@ export class PresetLlmProvider implements LlmProvider {
     return this.inner.completeWithTools(prepared.messages, {
       ...options,
       ...prepared.options,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
     });
   }
 
@@ -111,7 +110,12 @@ export class PresetLlmProvider implements LlmProvider {
     const prepared = this.prepare(messages, options);
     return this.inner.completeWithToolsStream(
       prepared.messages,
-      { ...options, ...prepared.options },
+      {
+        ...options,
+        ...prepared.options,
+        tools: options.tools,
+        toolChoice: options.toolChoice,
+      },
       callbacks,
     );
   }

@@ -62,6 +62,7 @@ export function worldInfoPackFromProbeInput(
   };
 }
 
+/** 已夹心的试跑 messages（仅 UI / 对照）；真正发模型走任务消息 + PresetLlmProvider。 */
 export function assemblePresetProbe(
   preset: PresetPackage,
   input: PresetProbeInput,
@@ -71,6 +72,32 @@ export function assemblePresetProbe(
     preset,
     pack: worldInfoPackFromProbeInput(input),
   });
+}
+
+/** 交给 wrapLlmForSession 的任务消息（未夹心）。 */
+export function buildPresetProbeTaskMessages(
+  input: PresetProbeInput,
+): ChatMessage[] {
+  const pack = worldInfoPackFromProbeInput(input);
+  const parts: string[] = [];
+  for (const e of pack.worldBookBefore) {
+    parts.push(`### ${e.name}\n\n${e.content}`);
+  }
+  if (pack.history.trim()) parts.push(pack.history.trim());
+  for (const e of pack.worldBookAfter) {
+    parts.push(`### ${e.name}\n\n${e.content}`);
+  }
+  for (const e of pack.postTurn) {
+    parts.push(`### ${e.name}\n\n${e.content}`);
+  }
+  const ctx = parts.join("\n\n").trim();
+  const user = ctx
+    ? `${ctx}\n\n## 本轮输入\n${pack.turn}`
+    : pack.turn;
+  return [
+    { role: "system", content: PROBE_SYSTEM_PROMPT },
+    { role: "user", content: user },
+  ];
 }
 
 export function serializeProbeMessages(
@@ -94,11 +121,11 @@ export async function runPresetProbe(params: {
     throw new Error("缺少本轮输入");
   }
 
-  const messages = assemblePresetProbe(params.preset, {
-    ...params.input,
-    message,
-  });
-  const serialized = serializeProbeMessages(messages);
+  const input = { ...params.input, message };
+  // UI 仍展示「理想分袋夹心」；发模型只交任务消息，由统一包装层夹心
+  const serialized = serializeProbeMessages(
+    assemblePresetProbe(params.preset, input),
+  );
 
   if (!params.complete) {
     return {
@@ -111,7 +138,7 @@ export async function runPresetProbe(params: {
   }
 
   try {
-    const result = await params.complete(messages);
+    const result = await params.complete(buildPresetProbeTaskMessages(input));
     return {
       messages: serialized,
       reply: result.content,

@@ -303,7 +303,7 @@ Runtime Session
 
 因此，同一个 preset 可以用于多个创作流程；同一个创作流程也可以切换不同 preset。二者是正交关系。
 
-生成参数可全局合并进 LLM 请求。**prompt 条目 + marker 填洞只在 play worker 上用**：创作步 / 总管 tool loop 不得把角色卡骨架套到 design-step 上，也不得在填洞后再叠一份相同的 user 上下文。
+生成参数与 **prompt 条目 + marker 填洞** 均在 `wrapLlmForSession`（`PresetLlmProvider`）统一做：凡 LLM 请求先夹心再发。调用方只交任务 messages；任务 system / 创作上下文进 `worldBookBefore` 等洞，**禁止**在 `prompt_order` 之外再前置一条 system。无选用预设时原样转发。
 
 ## 6. 第一版导入策略
 

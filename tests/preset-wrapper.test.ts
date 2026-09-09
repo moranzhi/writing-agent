@@ -53,7 +53,7 @@ function recordingProvider(): {
 }
 
 describe("wrapLlmForSession", () => {
-  it("context trace matches the exact messages and generation sent to the inner LLM", async () => {
+  it("frames task messages with preset prompt_order and merges generation", async () => {
     const { provider, received } = recordingProvider();
     const ctx: LlmTrackingContext = {};
     const llm = wrapLlmForSession(provider, { current: ctx }, () => samplePreset);
@@ -64,14 +64,15 @@ describe("wrapLlmForSession", () => {
     );
 
     expect(received).toHaveLength(1);
-    expect(received[0].messages).toEqual([{ role: "user", content: "TASK" }]);
+    expect(received[0].messages.map((m) => [m.role, m.content])).toEqual([
+      ["system", "PRESET_RULES"],
+      ["user", "TASK"],
+    ]);
     expect(received[0].generation).toMatchObject({
       temperature: 0.91,
       maxOutputTokens: 1234,
     });
-    expect(ctx.pendingContextTrace?.messages).toEqual([
-      { role: "user", content: "TASK" },
-    ]);
+    expect(ctx.pendingContextTrace?.messages).toEqual(received[0].messages);
     expect(ctx.pendingContextTrace?.generation).toMatchObject({
       temperature: 0.91,
       maxOutputTokens: 1234,
@@ -80,7 +81,44 @@ describe("wrapLlmForSession", () => {
     expect(ctx.pendingContextTrace?.model).toBe("rec-model");
   });
 
-  it("completeStream also records the merged request", async () => {
+  it("puts task system inside worldBookBefore, not before the preset shell", async () => {
+    const { provider, received } = recordingProvider();
+    const llm = wrapLlmForSession(provider, undefined, () => samplePreset);
+
+    await llm.completeWithTools(
+      [
+        { role: "system", content: "SKILL" },
+        { role: "user", content: "do it" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "1",
+              type: "function",
+              function: { name: "t", arguments: "{}" },
+            },
+          ],
+        },
+        { role: "tool", content: "{}", tool_call_id: "1" },
+      ],
+      { tools: [], caller: "dictate_agent" },
+    );
+
+    expect(received[0].messages[0].content).toBe("PRESET_RULES");
+    expect(
+      received[0].messages.some(
+        (m) => m.content === "### 任务契约\n\nSKILL",
+      ),
+    ).toBe(true);
+    expect(received[0].messages.some((m) => m.content === "do it")).toBe(true);
+    expect(received[0].messages.map((m) => m.role).slice(-2)).toEqual([
+      "assistant",
+      "tool",
+    ]);
+  });
+
+  it("completeStream also records the framed request", async () => {
     const { provider, received } = recordingProvider();
     const ctx: LlmTrackingContext = {};
     const llm = wrapLlmForSession(provider, { current: ctx }, () => samplePreset);
@@ -93,7 +131,9 @@ describe("wrapLlmForSession", () => {
     );
 
     expect(chunks.join("")).toBe("ok");
-    expect(received[0].messages).toEqual([{ role: "user", content: "TASK" }]);
+    expect(received[0].messages.some((m) => m.content === "PRESET_RULES")).toBe(
+      true,
+    );
     expect(ctx.pendingContextTrace?.messages).toEqual(received[0].messages);
   });
 });

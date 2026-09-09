@@ -46,9 +46,11 @@ describe("assemblePresetProbe", () => {
     });
 
     expect(messages.map((m) => [m.role, m.content])).toEqual([
-      ["system", PROBE_SYSTEM_PROMPT],
       ["system", "MAIN"],
-      ["system", `### 试跑设定\n\n${DEFAULT_PROBE_CONTEXT.loreBefore}`],
+      [
+        "system",
+        `### 任务契约\n\n${PROBE_SYSTEM_PROMPT}\n\n### 试跑设定\n\n${DEFAULT_PROBE_CONTEXT.loreBefore}`,
+      ],
       ["system", DEFAULT_PROBE_CONTEXT.history],
       ["system", `### 本轮状态\n\n${DEFAULT_PROBE_CONTEXT.loreAfter}`],
       ["user", "我推开门。"],
@@ -66,8 +68,8 @@ describe("assemblePresetProbe", () => {
     });
 
     expect(messages.map((m) => m.content)).toEqual([
-      PROBE_SYSTEM_PROMPT,
       "MAIN",
+      `### 任务契约\n\n${PROBE_SYSTEM_PROMPT}`,
       "你好",
       "PHI",
     ]);
