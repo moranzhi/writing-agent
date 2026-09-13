@@ -102,9 +102,165 @@
   box-shadow: 0 0 0 1px var(--st-border-strong);
 }
 
+.stats-pricing {
+  margin: 0 24px 16px;
+  padding: 12px 14px;
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius);
+}
+
+.stats-pricing .stats-section-label {
+  margin: 0;
+}
+
+.stats-pricing-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.stats-pricing-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--st-muted);
+  line-height: 1.45;
+}
+
+.stats-pricing-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.stats-field-url {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.stats-field-url input {
+  min-width: 0;
+  width: 100%;
+}
+
+.stats-pricing-suggested {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.stats-suggest {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--st-border);
+  border-radius: 6px;
+  background: #fafafa;
+  color: var(--st-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stats-suggest:hover {
+  background: #f4f4f5;
+  border-color: var(--st-border-strong);
+}
+
+.stats-suggest:focus-visible,
+.stats-pricing button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--st-accent-soft);
+}
+
+.stats-pricing button:disabled,
+.stats-suggest:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.stats-pricing-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-pricing-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--st-border);
+}
+
+.stats-pricing-meta {
+  min-width: 0;
+  flex: 1 1 14rem;
+}
+
+.stats-pricing-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--st-text);
+}
+
+.stats-pricing-url {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--st-accent);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-pricing-url:hover {
+  text-decoration: underline;
+}
+
+.stats-pricing-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.stats-pricing-sub[data-state="error"] {
+  color: var(--st-danger);
+}
+
+.stats-pricing-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stats-pricing-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.stats-pricing-status[data-state="error"] {
+  color: var(--st-danger);
+}
+
+.stats-section-label {
+  margin: 0 24px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--st-text);
+}
+
 .stats-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
   margin: 0 24px 12px;
 }
@@ -143,8 +299,22 @@
   background: color-mix(in srgb, var(--st-accent-soft) 55%, var(--st-surface));
 }
 
-.stats-metric[data-emphasis="total"] .stats-metric-value {
+.stats-metric[data-emphasis="total"] .stats-metric-value,
+.stats-metric[data-emphasis="cost"] .stats-metric-value {
   color: var(--st-accent);
+}
+
+.stats-metric[data-emphasis="cost"] {
+  border-color: color-mix(in srgb, var(--st-accent) 28%, var(--st-border));
+  background: color-mix(in srgb, var(--st-accent-soft) 55%, var(--st-surface));
+}
+
+.stats-metric-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--st-muted);
 }
 
 .stats-status {
@@ -173,6 +343,19 @@
   overflow: auto;
   max-height: min(70vh, 720px);
   margin: 0 24px;
+}
+
+.stats-table-wrap-model {
+  max-height: none;
+  margin-bottom: 18px;
+}
+
+.stats-by-model {
+  margin-bottom: 4px;
+}
+
+.stats-unpriced {
+  color: var(--st-muted);
 }
 
 .stats-table {
@@ -258,7 +441,7 @@
   margin-bottom: 4px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .stats-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -267,8 +450,10 @@
 @media (max-width: 640px) {
   .stats-main .st-main-head,
   .stats-toolbar,
+  .stats-pricing,
   .stats-summary,
   .stats-status,
+  .stats-section-label,
   .stats-table-wrap {
     margin-left: 14px;
     margin-right: 14px;

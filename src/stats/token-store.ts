@@ -129,7 +129,7 @@ export function readRecords(query: TokenStatsQuery = {}): TokenUsageRecord[] {
     const lines = readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
     for (let j = lines.length - 1; j >= 0 && records.length < limit; j--) {
       try {
-        const record = JSON.parse(lines[j]) as TokenUsageRecord;
+        const record = JSON.parse(lines[j].trim()) as TokenUsageRecord;
         if (query.bookId && record.bookId !== query.bookId) continue;
         if (query.orchestratorId && record.orchestratorId !== query.orchestratorId) {
           continue;
@@ -171,7 +171,10 @@ function accumulateCaller(
 }
 
 export function summarizeTokenUsage(query: TokenStatsQuery = {}): TokenStatsSummary {
-  const records = readRecords({ ...query, limit: query.limit ?? 2000 });
+  return summarizeRecords(readRecords({ ...query, limit: query.limit ?? 2000 }));
+}
+
+export function summarizeRecords(records: TokenUsageRecord[]): TokenStatsSummary {
   const summary: TokenStatsSummary = {
     totalCalls: records.length,
     promptTokens: 0,

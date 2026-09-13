@@ -24,7 +24,7 @@
         <header class="st-main-head">
           <div>
             <h1>Token 统计</h1>
-            <p class="st-sub">按时间筛选本机调用记录（<code>stats/*.jsonl</code>）</p>
+            <p class="st-sub">按时间筛选本机调用；花销按你指定的官方价目文档估算（<code>stats/*.jsonl</code>）</p>
           </div>
         </header>
 
@@ -52,11 +52,60 @@
           </div>
         </div>
 
+        <section class="stats-pricing" aria-label="价格来源">
+          <div class="stats-pricing-head">
+            <p class="stats-section-label">价格来源</p>
+            <p class="stats-pricing-hint">
+              粘贴厂商官方价目页，解析型号单价后按调用时间估算（含缓存命中与高峰/闲时，若文档有写）。
+            </p>
+          </div>
+          <form class="stats-pricing-add" id="pricing-form">
+            <label class="stats-field stats-field-url">
+              官方文档 URL
+              <input
+                type="url"
+                id="pricing-url"
+                placeholder="https://api-docs.deepseek.com/quick_start/pricing"
+                autocomplete="off"
+              />
+            </label>
+            <button type="submit" class="btn-primary" id="btn-add-pricing">从文档计算</button>
+          </form>
+          <div class="stats-pricing-suggested" id="pricing-suggested"></div>
+          <ul class="stats-pricing-list" id="pricing-sources"></ul>
+          <p class="stats-pricing-status" id="pricing-status" hidden aria-live="polite"></p>
+        </section>
+
         <div class="stats-summary" id="summary" aria-live="polite"></div>
         <p class="stats-status" id="status" data-state="idle" aria-live="polite"></p>
 
+        <section class="stats-by-model" aria-label="按模型花销">
+          <p class="stats-section-label">按模型</p>
+          <div class="stats-table-wrap stats-table-wrap-model">
+            <table class="stats-table" id="model-table">
+              <thead>
+                <tr>
+                  <th scope="col">model</th>
+                  <th scope="col" class="num">调用</th>
+                  <th scope="col" class="num">prompt</th>
+                  <th scope="col" class="num">completion</th>
+                  <th scope="col" class="num">cached</th>
+                  <th scope="col" class="num">估算花销</th>
+                  <th scope="col">单价</th>
+                </tr>
+              </thead>
+              <tbody id="model-rows"></tbody>
+            </table>
+            <div class="stats-empty" id="model-empty" hidden>
+              <strong>没有可汇总的型号</strong>
+              先查出调用记录，并添加官方价目文档。
+            </div>
+          </div>
+        </section>
+
+        <p class="stats-section-label">调用记录</p>
         <div class="stats-table-wrap">
-          <table class="stats-table">
+          <table class="stats-table" id="call-table">
             <thead>
               <tr>
                 <th scope="col">时间</th>
@@ -66,6 +115,7 @@
                 <th scope="col" class="num">completion</th>
                 <th scope="col" class="num">total</th>
                 <th scope="col" class="num">cached</th>
+                <th scope="col" class="num">花销</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
