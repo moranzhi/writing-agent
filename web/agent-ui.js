@@ -164,28 +164,32 @@ function canEditMessage(msg) {
 }
 
 function canRefreshMessage(msg) {
+  if (!msg?.id) return false;
+  if (typeof msg.canRefresh === "boolean") return msg.canRefresh;
   if (msg.role === "user") return false;
   const kind = msg.kind ?? "system_info";
   return kind === "worker_questions" || kind === "worker_output";
 }
 
-/** ‹ n/total › 进退 + 可重出；后续输入基于当前激活版本 */
+/** ‹ n/total › 仅在有多版时出现；↻ 仅在这条真能重跑时出现 */
 function renderVariantNavHtml(msg) {
   if (!msg?.id) return "";
   const total = Math.max(1, Number(msg.branchTotal) || 1);
   const index = Math.min(total, Math.max(1, (msg.branchIndex ?? 0) + 1));
   const refreshable = canRefreshMessage(msg);
-  if (total <= 1 && !refreshable) return "";
+  const showPager = total > 1;
+  if (!showPager && !refreshable) return "";
   const id = esc(msg.id);
-  const prevDis = index <= 1 ? " disabled" : "";
-  const nextDis = index >= total ? " disabled" : "";
+  const pager = showPager
+    ? `<button type="button" class="msg-action" data-msg-action="variant-prev" data-msg-id="${id}"${index <= 1 ? " disabled" : ""} aria-label="上一版">‹</button>
+    <span class="msg-variant-count">${index}/${total}</span>
+    <button type="button" class="msg-action" data-msg-action="variant-next" data-msg-id="${id}"${index >= total ? " disabled" : ""} aria-label="下一版">›</button>`
+    : "";
   const refresh = refreshable
     ? `<button type="button" class="msg-action msg-action-primary" data-msg-action="refresh" data-msg-id="${id}" title="重出一版（新版本）">↻</button>`
     : "";
-  return `<span class="msg-variant-nav" title="切换版本；在此版本上继续输入">
-    <button type="button" class="msg-action" data-msg-action="variant-prev" data-msg-id="${id}"${prevDis} aria-label="上一版">‹</button>
-    <span class="msg-variant-count">${index}/${total}</span>
-    <button type="button" class="msg-action" data-msg-action="variant-next" data-msg-id="${id}"${nextDis} aria-label="下一版">›</button>
+  return `<span class="msg-variant-nav" title="${showPager ? "切换版本；在此版本上继续输入" : "重出一版"}">
+    ${pager}
     ${refresh}
   </span>`;
 }
@@ -330,6 +334,7 @@ function showMsgMenu(card, x, y) {
   const delBtn = document.getElementById("msg-menu-delete");
   const rollbackBtn = document.getElementById("msg-menu-rollback");
   const ctxBtn = document.getElementById("msg-menu-context");
+  const compareBtn = document.getElementById("msg-menu-compare");
   if (editBtn) editBtn.toggleAttribute("hidden", !canEdit);
   if (delBtn) delBtn.toggleAttribute("hidden", !canDelete);
   if (rollbackBtn) {
@@ -338,6 +343,7 @@ function showMsgMenu(card, x, y) {
       rollbackMode === "pending-input" ? "回到这一轮输入" : "回退到这里";
   }
   if (ctxBtn) ctxBtn.toggleAttribute("hidden", !hasContext);
+  if (compareBtn) compareBtn.toggleAttribute("hidden", !hasContext);
   menu.hidden = false;
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
@@ -385,6 +391,10 @@ function wireMsgActionMenu(handlers) {
     }
     if (action === "view-context") {
       msgMenuState.handlers?.onViewContext?.(contextMessageId);
+      return;
+    }
+    if (action === "compare") {
+      msgMenuState.handlers?.onCompareModels?.(contextMessageId);
       return;
     }
     if (action === "edit") {
@@ -4414,20 +4424,7 @@ function renderReviewWorkspace(review, opts = {}) {
   const copy = reviewComposerCopy(review.workerId, {
     outputTags: review.outputTags,
   });
-  const sourceMsg =
-    opts.sourceMessage ||
-    (review.sourceMessageId
-      ? { id: review.sourceMessageId, kind: "worker_output", branchIndex: 0, branchTotal: 1 }
-      : null);
-  // 有源消息时尽量用真实 branch 元数据；至少给出可重出入口
-  const navMsg = opts.sourceMessage
-    ? {
-        ...opts.sourceMessage,
-        kind: opts.sourceMessage.kind || "worker_output",
-      }
-    : sourceMsg
-      ? { ...sourceMsg, kind: "worker_output" }
-      : null;
+  const navMsg = opts.sourceMessage || null;
   const variantNav = navMsg ? renderVariantNavHtml(navMsg) : "";
 
   return `
@@ -5096,15 +5093,7 @@ function fillCoordRail(visible, view, handlers) {
 function resolveReviewSourceMessage(view) {
   const id = view?.reviewArtifact?.sourceMessageId;
   if (!id) return null;
-  const found = (view.messages ?? []).find((m) => m.id === id);
-  if (found) return found;
-  return {
-    id,
-    role: "system",
-    kind: "worker_output",
-    branchIndex: 0,
-    branchTotal: 1,
-  };
+  return (view.messages ?? []).find((m) => m.id === id) ?? null;
 }
 
 function mountReviewWorkspace(stage, view, handlers, opts = {}) {

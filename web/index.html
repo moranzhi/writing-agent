@@ -83,6 +83,7 @@
           <header class="main-head" id="main-head">
             <div class="main-head-left" aria-hidden="true"></div>
             <nav class="main-app-nav" aria-label="应用">
+              <div id="persona-picker-host" class="persona-picker-host" hidden></div>
               <a href="/modules.html">技能</a>
               <a href="/shells.html">呈现壳</a>
               <a href="/stats.html">Token</a>
@@ -232,8 +233,13 @@
       <button type="button" class="context-menu-item context-menu-danger" id="book-menu-delete" data-action="delete">删除</button>
     </menu>
 
+    <menu id="save-action-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" data-save-menu-action="edit-products">编辑产物</button>
+    </menu>
+
     <menu id="msg-action-menu" class="context-menu" hidden>
       <button type="button" class="context-menu-item" id="msg-menu-context" data-msg-menu-action="view-context" hidden>查看上下文</button>
+      <button type="button" class="context-menu-item" id="msg-menu-compare" data-msg-menu-action="compare" hidden>对比</button>
       <button type="button" class="context-menu-item" id="msg-menu-edit" data-msg-menu-action="edit">编辑</button>
       <button type="button" class="context-menu-item" id="msg-menu-copy" data-msg-menu-action="copy">复制</button>
       <button type="button" class="context-menu-item context-menu-separator-before" id="msg-menu-rollback" data-msg-menu-action="rollback" hidden>回退到这里</button>
@@ -245,6 +251,17 @@
       <button type="button" class="context-menu-item" id="flow-menu-reenter" data-flow-menu-action="reenter">进入继续修改</button>
       <button type="button" class="context-menu-item context-menu-danger context-menu-separator-before" id="flow-menu-delete" data-flow-menu-action="delete">删除产物</button>
     </menu>
+
+    <dialog id="dialog-snapshot-products" class="dialog dialog-wide" aria-labelledby="snapshot-products-title">
+      <form method="dialog" class="context-trace-form" id="form-snapshot-products">
+        <h2 id="snapshot-products-title">快照产物</h2>
+        <p class="dialog-desc" id="snapshot-products-meta"></p>
+        <div id="snapshot-products-body" class="step-artifact-body snapshot-products-body"></div>
+        <div class="dialog-actions">
+          <button type="submit" class="btn btn-primary" value="close">关闭</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="dialog-step-artifact" class="dialog dialog-wide" aria-labelledby="step-artifact-title">
       <form method="dialog" class="context-trace-form">
@@ -266,6 +283,29 @@
           <button type="submit" class="btn btn-primary" value="close">关闭</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="dialog-model-compare-pick" class="dialog" aria-labelledby="compare-pick-title">
+      <form method="dialog" id="form-model-compare-pick">
+        <h2 id="compare-pick-title">选择要对比的模型</h2>
+        <p class="dialog-desc">用同一份已保存的请求上下文，并行调用所选 API 配置。</p>
+        <div id="compare-profile-list" class="compare-profile-list"></div>
+        <div class="dialog-actions">
+          <button type="submit" class="btn" value="cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="btn-start-model-compare">开始对比</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dialog-model-compare" class="dialog dialog-compare" aria-labelledby="compare-title">
+      <div class="compare-shell">
+        <div class="dialog-head-row">
+          <h2 id="compare-title">模型对比</h2>
+          <button type="button" class="btn" id="btn-close-model-compare">关闭</button>
+        </div>
+        <p class="dialog-desc" id="compare-meta"></p>
+        <div id="compare-results" class="compare-results"></div>
+      </div>
     </dialog>
 
     <script type="module" src="/app.js"></script>

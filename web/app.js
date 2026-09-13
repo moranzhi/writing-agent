@@ -32,12 +32,22 @@ import {
   initMarkdownRender,
   isMarkdownRenderEnabled,
 } from "./markdown.js";
+import { wireDirectiveAutocomplete } from "./directive-autocomplete.js";
+import {
+  refreshDirectiveHighlight,
+  wireDirectiveHighlight,
+} from "./directive-highlight.js";
 
 let sessionId = null;
 let activeBookId = null;
 let lastView = null;
 let books = [];
 let composerForceInput = false;
+/** 全局用户角色（不依赖会话）；含 description */
+let globalPersonas = [];
+let globalActivePersonaId = null;
+/** 面板内正在编辑的角色 id；`__new__` 表示新建 */
+let personaEditingId = null;
 let pendingComposerDraft = "";
 let pendingComposerDraftSeq = 0;
 /** 正在提交底栏：重绘时不要把已捕获的正文再塞进 pending */
@@ -560,6 +570,259 @@ function composerModeChip(spec) {
   return `<span class="composer-mode-chip" data-task="${esc(id)}"${tone} title="${esc(tip)}">${esc(label)}</span>`;
 }
 
+function activePersonaRecord() {
+  return (
+    globalPersonas.find((p) => p.id === globalActivePersonaId) ||
+    globalPersonas[0] ||
+    null
+  );
+}
+
+function shortPersonaDesc(text) {
+  const t = String(text || "").trim();
+  if (!t) return "（无人设描述）";
+  return t.length > 72 ? `${t.slice(0, 72)}…` : t;
+}
+
+function personaPickerHtml() {
+  const personas = globalPersonas;
+  const active = activePersonaRecord();
+  const activeName = active?.name || "玩家";
+  const wasOpen = $("persona-menu")?.open === true;
+
+  const cards = personas
+    .map((p) => {
+      const activeCls = p.id === active?.id ? " is-active" : "";
+      if (personaEditingId === p.id) {
+        return `<div class="persona-edit" data-persona-edit="${esc(p.id)}">
+          <input type="text" name="name" value="${esc(p.name)}" placeholder="角色名" maxlength="40" />
+          <textarea name="description" placeholder="简单人设描述（外貌、性格、身份…）">${esc(p.description || "")}</textarea>
+          <div class="persona-edit-actions">
+            <button type="button" class="btn-sm" data-persona-act="cancel-edit">取消</button>
+            <button type="button" class="btn-sm btn-primary" data-persona-act="save-edit" data-id="${esc(p.id)}">保存</button>
+          </div>
+        </div>`;
+      }
+      return `<div class="persona-card${activeCls}" data-persona-id="${esc(p.id)}" role="button" tabindex="0">
+        <div class="persona-card-name">${esc(p.name)}</div>
+        <div class="persona-card-desc">${esc(shortPersonaDesc(p.description))}</div>
+        <div class="persona-card-actions">
+          <button type="button" data-persona-act="edit" data-id="${esc(p.id)}">编辑</button>
+          ${
+            personas.length > 1
+              ? `<button type="button" data-persona-act="delete" data-id="${esc(p.id)}">删除</button>`
+              : ""
+          }
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  const newForm =
+    personaEditingId === "__new__"
+      ? `<div class="persona-edit" data-persona-edit="__new__">
+          <input type="text" name="name" value="" placeholder="角色名" maxlength="40" />
+          <textarea name="description" placeholder="简单人设描述（外貌、性格、身份…）"></textarea>
+          <div class="persona-edit-actions">
+            <button type="button" class="btn-sm" data-persona-act="cancel-edit">取消</button>
+            <button type="button" class="btn-sm btn-primary" data-persona-act="save-new">创建</button>
+          </div>
+        </div>`
+      : "";
+
+  return `<details class="more-menu persona-menu" id="persona-menu"${wasOpen ? " open" : ""}>
+    <summary class="persona-menu-sum" title="用户角色（@玩家）">
+      <span class="persona-menu-sum-label">我</span>
+      <span class="persona-menu-sum-name">${esc(activeName)}</span>
+    </summary>
+    <div class="persona-menu-panel" role="menu">
+      <div class="persona-menu-head">
+        <span class="persona-menu-head-title">用户角色</span>
+        <button type="button" class="persona-menu-add" data-persona-act="add">＋ 新建</button>
+      </div>
+      ${newForm}
+      ${cards || `<p class="empty" style="margin:8px;font-size:12px">还没有角色</p>`}
+    </div>
+  </details>`;
+}
+
+function renderPersonaPicker() {
+  const host = $("persona-picker-host");
+  if (!host) return;
+  if (!globalPersonas.length && personaEditingId !== "__new__") {
+    host.hidden = false;
+    host.innerHTML = `<details class="more-menu persona-menu" id="persona-menu">
+      <summary class="persona-menu-sum" title="用户角色"><span class="persona-menu-sum-label">我</span><span class="persona-menu-sum-name">未设置</span></summary>
+      <div class="persona-menu-panel">
+        <div class="persona-menu-head">
+          <span class="persona-menu-head-title">用户角色</span>
+          <button type="button" class="persona-menu-add" data-persona-act="add">＋ 新建</button>
+        </div>
+      </div>
+    </details>`;
+    wirePersonaMenu();
+    refreshDirectiveHighlight();
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = personaPickerHtml();
+  wirePersonaMenu();
+  refreshDirectiveHighlight();
+}
+
+async function loadPersonas() {
+  try {
+    const data = await api("/api/personas");
+    globalPersonas = (data.personas || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description || "",
+    }));
+    globalActivePersonaId = data.activeId ?? data.active?.id ?? null;
+    if (lastView) {
+      lastView.personas = globalPersonas.map((p) => ({
+        id: p.id,
+        name: p.name,
+      }));
+      const active = activePersonaRecord();
+      lastView.activePersona = active
+        ? {
+            id: active.id,
+            name: active.name,
+            description: active.description || "",
+          }
+        : null;
+    }
+    renderPersonaPicker();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function keepPersonaMenuOpen() {
+  const menu = $("persona-menu");
+  if (menu) menu.open = true;
+}
+
+function wirePersonaMenu() {
+  const host = $("persona-picker-host");
+  if (!host) return;
+
+  host.onclick = async (e) => {
+    const actBtn = e.target.closest("[data-persona-act]");
+    if (actBtn && host.contains(actBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const act = actBtn.getAttribute("data-persona-act");
+      const id = actBtn.getAttribute("data-id");
+      try {
+        if (act === "add") {
+          personaEditingId = "__new__";
+          renderPersonaPicker();
+          keepPersonaMenuOpen();
+          host.querySelector(".persona-edit input[name=name]")?.focus();
+          return;
+        }
+        if (act === "edit") {
+          personaEditingId = id;
+          renderPersonaPicker();
+          keepPersonaMenuOpen();
+          host.querySelector(".persona-edit input[name=name]")?.focus();
+          return;
+        }
+        if (act === "cancel-edit") {
+          personaEditingId = null;
+          renderPersonaPicker();
+          keepPersonaMenuOpen();
+          return;
+        }
+        if (act === "save-new") {
+          const box = host.querySelector("[data-persona-edit='__new__']");
+          const name = box?.querySelector("input[name=name]")?.value?.trim() || "";
+          const description =
+            box?.querySelector("textarea[name=description]")?.value || "";
+          if (!name) {
+            host.querySelector(".persona-edit input[name=name]")?.focus();
+            return;
+          }
+          await api("/api/personas", {
+            method: "POST",
+            body: JSON.stringify({ name, description, activate: true }),
+          });
+          personaEditingId = null;
+          await loadPersonas();
+          keepPersonaMenuOpen();
+          return;
+        }
+        if (act === "save-edit") {
+          const box = host.querySelector(
+            `[data-persona-edit="${CSS.escape(id || "")}"]`,
+          );
+          const name = box?.querySelector("input[name=name]")?.value?.trim() || "";
+          const description =
+            box?.querySelector("textarea[name=description]")?.value || "";
+          if (!name) return;
+          await api(`/api/personas/${encodeURIComponent(id)}`, {
+            method: "PUT",
+            body: JSON.stringify({ name, description }),
+          });
+          personaEditingId = null;
+          await loadPersonas();
+          keepPersonaMenuOpen();
+          return;
+        }
+        if (act === "delete") {
+          if (!confirm("删除这个用户角色？")) return;
+          await api(`/api/personas/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+          });
+          personaEditingId = null;
+          await loadPersonas();
+          keepPersonaMenuOpen();
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+        alert(err.message || "操作失败");
+      }
+      return;
+    }
+
+    const card = e.target.closest(".persona-card[data-persona-id]");
+    if (card && host.contains(card) && !e.target.closest(".persona-card-actions")) {
+      e.preventDefault();
+      const pid = card.getAttribute("data-persona-id");
+      if (!pid || pid === globalActivePersonaId) return;
+      try {
+        const data = await api(
+          `/api/personas/${encodeURIComponent(pid)}/activate`,
+          { method: "POST" },
+        );
+        globalActivePersonaId = data.activeId ?? pid;
+        if (Array.isArray(data.personas)) {
+          globalPersonas = data.personas.map((p) => ({
+            id: p.id,
+            name: p.name,
+            description: p.description || "",
+          }));
+        }
+        personaEditingId = null;
+        if (sessionId) {
+          const view = await api(
+            `/api/sessions/${encodeURIComponent(sessionId)}`,
+          );
+          renderSession(view);
+        } else {
+          renderPersonaPicker();
+        }
+        $("persona-menu")?.removeAttribute("open");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+}
+
 function composerInputShell(spec, { textareaHtml, trailing = "" } = {}) {
   const chip = composerModeChip(spec);
   const tone = spec.acceptAction?.tone
@@ -567,9 +830,20 @@ function composerInputShell(spec, { textareaHtml, trailing = "" } = {}) {
     : "";
   return `<div class="composer-input-shell" data-task="${esc(spec.task?.id || "")}"${tone}>
     ${chip}
-    ${textareaHtml}
+    <div class="composer-input-field">
+      <div class="composer-input-backdrop" aria-hidden="true"></div>
+      ${textareaHtml}
+    </div>
     ${trailing ? `<div class="composer-shell-actions">${trailing}</div>` : ""}
   </div>`;
+}
+
+function wireComposerDirectiveUi(input) {
+  if (!input) return;
+  wireDirectiveAutocomplete(input);
+  wireDirectiveHighlight(input, {
+    getPersona: () => activePersonaRecord(),
+  });
 }
 
 function composerMoreMenuHtml() {
@@ -664,6 +938,7 @@ function clearComposerInput() {
   autosizeComposerInput(input);
   syncPickReplanButton(input);
   refreshReviewComposerChrome();
+  refreshDirectiveHighlight(input);
 }
 
 /** 正文已提交：立刻清空底栏，且后续重绘不要把刚发出去的字再塞回来。 */
@@ -703,7 +978,10 @@ function renderComposer(view, loading) {
     root.querySelector("[data-act=retry_run]")?.addEventListener("click", () => retryRun());
     applyPendingComposerDraft();
     const input = $("composer-input");
-    if (input) autosizeComposerInput(input);
+    if (input) {
+      autosizeComposerInput(input);
+      wireComposerDirectiveUi(input);
+    }
     return;
   }
   if (spec.mode === "idle") {
@@ -991,6 +1269,7 @@ function applyPendingComposerDraft() {
   syncPickReplanButton(input);
   input.focus();
   refreshReviewComposerChrome();
+  refreshDirectiveHighlight(input);
 }
 
 /** 无输入框的确认态：Enter = 主按钮 */
@@ -1099,6 +1378,7 @@ function wireComposerForm(opts = {}) {
   input?.addEventListener("input", grow);
   input?.addEventListener("change", grow);
   requestAnimationFrame(grow);
+  wireComposerDirectiveUi(input);
   input?.focus();
 }
 
@@ -1192,6 +1472,106 @@ function hideBookMenu() {
   bookMenuBookId = null;
 }
 
+let saveMenuState = { bookId: null, saveId: null, label: "" };
+
+function hideSaveMenu() {
+  const menu = $("save-action-menu");
+  if (menu) menu.hidden = true;
+  saveMenuState = { bookId: null, saveId: null, label: "" };
+}
+
+function showSaveMenu(bookId, saveId, label, x, y) {
+  const menu = $("save-action-menu");
+  if (!menu) return;
+  hideBookMenu();
+  saveMenuState = { bookId, saveId, label: label || "" };
+  menu.hidden = false;
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
+  }
+}
+
+async function openSnapshotProductsEditor(bookId, saveId, label) {
+  const dlg = $("dialog-snapshot-products");
+  const title = $("snapshot-products-title");
+  const meta = $("snapshot-products-meta");
+  const body = $("snapshot-products-body");
+  if (!dlg || !body) return;
+  if (title) title.textContent = label ? `产物 · ${label}` : "快照产物";
+  if (meta) meta.textContent = "按创作步骤展开；点「改」手改正文后保存。";
+  body.innerHTML = `<p class="empty-sm">加载中…</p>`;
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.setAttribute("open", "");
+
+  try {
+    const data = await api(
+      `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}`,
+    );
+    const products = Array.isArray(data.products) ? data.products : [];
+    if (!products.length) {
+      body.innerHTML = `<p class="empty-sm">这份快照里还没有可编辑产物。</p>`;
+      return;
+    }
+    body.innerHTML = products
+      .map((p, i) => {
+        const preview = String(p.content || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 160);
+        return `<div class="snap-product" data-idx="${i}" data-tag="${esc(p.tag)}">
+          <div class="snap-product-head">
+            <span class="snap-product-label">${esc(p.label || p.tag)}</span>
+            <span class="snap-product-tag">${esc(p.tag)}</span>
+            <button type="button" class="btn-sm snap-product-edit" data-snap-edit="${i}">改</button>
+          </div>
+          <div class="snap-product-preview" data-snap-preview="${i}">${esc(preview)}${
+            String(p.content || "").length > 160 ? "…" : ""
+          }</div>
+        </div>`;
+      })
+      .join("");
+    body.dataset.bookId = bookId;
+    body.dataset.saveId = saveId;
+    body._products = products;
+  } catch (err) {
+    body.innerHTML = `<p class="empty-sm">${esc(err.message || "读取失败")}</p>`;
+  }
+}
+
+async function saveSnapshotProductEdit(bookId, saveId, tag, content, rowEl, products, idx) {
+  const data = await api(
+    `/api/books/${encodeURIComponent(bookId)}/saves/${encodeURIComponent(saveId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ tag, content }),
+    },
+  );
+  const next = Array.isArray(data.products) ? data.products : products;
+  const body = $("snapshot-products-body");
+  if (body) body._products = next;
+  const updated = next.find((p) => p.tag === tag) || { tag, content, label: tag };
+  products[idx] = updated;
+  const preview = String(updated.content || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+  rowEl.innerHTML = `
+    <div class="snap-product-head">
+      <span class="snap-product-label">${esc(updated.label || updated.tag)}</span>
+      <span class="snap-product-tag">${esc(updated.tag)}</span>
+      <button type="button" class="btn-sm snap-product-edit" data-snap-edit="${idx}">改</button>
+    </div>
+    <div class="snap-product-preview" data-snap-preview="${idx}">${esc(preview)}${
+      String(updated.content || "").length > 160 ? "…" : ""
+    }</div>`;
+}
+
 function refreshBookMenuLabels() {
   const n = selectedBookIds.size;
   const multi = bookSelectMode && n > 0;
@@ -1221,6 +1601,7 @@ function refreshBookMenuLabels() {
 function showBookMenu(bookId, x, y) {
   const menu = $("book-action-menu");
   if (!menu) return;
+  hideSaveMenu();
   bookMenuBookId = bookId;
   refreshBookMenuLabels();
   menu.hidden = false;
@@ -1371,6 +1752,7 @@ function renderExplorerRow({
   onClick,
   onDelete,
   onRename,
+  onContextMenu,
   child,
   twistie,
   expanded,
@@ -1417,7 +1799,13 @@ function renderExplorerRow({
     e.stopPropagation();
     onDelete?.();
   });
-  if (bookId && !child) {
+  if (onContextMenu) {
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onContextMenu(e);
+    });
+  } else if (bookId && !child) {
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       if (bookSelectMode && !selectedBookIds.has(bookId)) {
@@ -1459,6 +1847,8 @@ function renderProductContents(book, product, list) {
         meta: playHere && !activePlaySaveId ? "进行中" : "工作副本",
         active: playHere && !activePlaySaveId,
         onClick: () => void openCurrentPlay(book.id),
+        onContextMenu: (e) =>
+          showSaveMenu(book.id, "play-working", "当前游玩", e.clientX, e.clientY),
       }),
     );
   }
@@ -1481,6 +1871,8 @@ function renderProductContents(book, product, list) {
         onClick: () => void loadPlaySave(book.id, run.id),
         onRename: () => void renamePlaySave(book.id, run.id, run.label),
         onDelete: () => void deletePlaySave(book.id, run.id, run.label, "游玩存档"),
+        onContextMenu: (e) =>
+          showSaveMenu(book.id, run.id, run.label, e.clientX, e.clientY),
       }),
     );
   }
@@ -1541,10 +1933,12 @@ function renderBookContents(book, list) {
       renderExplorerRow({
         name: product.label,
         meta: bits.join(" · "),
-        title: "打开定稿，双击改名",
+        title: "打开定稿，双击改名；右键编辑产物",
         onClick: () => navigateToProduct(book.id, product.id),
         onRename: () => void renamePlaySave(book.id, product.id, product.label),
         onDelete: () => void deletePlaySave(book.id, product.id, product.label, "定稿"),
+        onContextMenu: (e) =>
+          showSaveMenu(book.id, product.id, product.label, e.clientX, e.clientY),
       }),
     );
   }
@@ -1919,6 +2313,17 @@ function renderHeader(view, loading) {
   if (btnInst) btnInst.hidden = !showSaveInstance;
   const btnExport = $("btn-export");
   if (btnExport) btnExport.disabled = !(view.messages?.length);
+  if (view.activePersona?.id) {
+    globalActivePersonaId = view.activePersona.id;
+    const hit = globalPersonas.find((p) => p.id === view.activePersona.id);
+    if (hit) {
+      hit.name = view.activePersona.name || hit.name;
+      if (view.activePersona.description != null) {
+        hit.description = view.activePersona.description;
+      }
+    }
+  }
+  renderPersonaPicker();
 }
 
 function closeWorkspace({ emptyCopy = "" } = {}) {
@@ -2099,6 +2504,7 @@ function renderSession(view, loading = false) {
       messageAction("delete", messageId);
     },
     onViewContext: (messageId) => showContextTraceDialog(messageId),
+    onCompareModels: (messageId) => openModelComparePicker(messageId),
     onSwitchVariant: (messageId, direction) =>
       messageAction("variant", messageId, { direction }),
     onRetryRun: () => retryRun(),
@@ -2745,6 +3151,200 @@ function showContextTraceDialog(messageId) {
   dlg.showModal();
 }
 
+let comparePickerMessageId = null;
+let comparePollTimer = null;
+let compareActiveJobId = null;
+
+function stopComparePoll() {
+  if (comparePollTimer) {
+    clearTimeout(comparePollTimer);
+    comparePollTimer = null;
+  }
+}
+
+async function openModelComparePicker(messageId) {
+  if (!sessionId) return;
+  const msg = (lastView?.messages ?? []).find((m) => m.id === messageId);
+  const review = lastView?.reviewArtifact;
+  const hasTrace =
+    msg?.contextTrace?.messages?.length ||
+    (review &&
+      (review.sourceMessageId === messageId || review.id === messageId) &&
+      review.contextTrace?.messages?.length);
+  if (!hasTrace) {
+    alert("这条消息没有可重放的上下文（可能已被修剪）");
+    return;
+  }
+  comparePickerMessageId = messageId;
+  const list = $("compare-profile-list");
+  const dlg = $("dialog-model-compare-pick");
+  if (!list || !dlg) return;
+  list.innerHTML = `<p class="dialog-desc">加载 API 配置…</p>`;
+  dlg.showModal();
+  try {
+    const data = await api("/api/profiles");
+    const profiles = (data.profiles ?? []).filter((p) => p.apiKey?.trim());
+    if (!profiles.length) {
+      list.innerHTML = `<p class="dialog-desc">没有可用的 API 配置，请先到设置页添加。</p>`;
+      return;
+    }
+    list.innerHTML = profiles
+      .map(
+        (p, i) => `
+      <label class="compare-profile-item">
+        <input type="checkbox" name="compare-profile" value="${esc(p.id)}" ${i < 2 ? "checked" : ""} />
+        <span>
+          <strong>${esc(p.name)}</strong>
+          <div class="muted">${esc(p.model)}</div>
+        </span>
+      </label>`,
+      )
+      .join("");
+  } catch (err) {
+    list.innerHTML = `<p class="dialog-desc">${esc(err.message || "加载失败")}</p>`;
+  }
+}
+
+async function startModelCompareFromPicker() {
+  if (!sessionId || !comparePickerMessageId) return;
+  const checked = [
+    ...document.querySelectorAll('input[name="compare-profile"]:checked'),
+  ].map((el) => el.value);
+  if (checked.length < 1) {
+    alert("请至少选择一个 API 配置");
+    return;
+  }
+  $("dialog-model-compare-pick")?.close();
+  try {
+    const job = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(comparePickerMessageId)}/compare`,
+      {
+        method: "POST",
+        body: JSON.stringify({ profileIds: checked }),
+      },
+    );
+    openModelCompareWindow(job);
+  } catch (err) {
+    alert(err.message || "无法开始对比");
+  }
+}
+
+function openModelCompareWindow(job) {
+  stopComparePoll();
+  compareActiveJobId = job.id;
+  const dlg = $("dialog-model-compare");
+  const meta = $("compare-meta");
+  if (!dlg || !meta) return;
+  meta.textContent = `任务 ${job.id.slice(0, 8)} · 原文模型 ${job.original?.model || "?"} · 共 ${job.candidates?.length ?? 0} 个候选`;
+  renderCompareJob(job);
+  dlg.showModal();
+  scheduleComparePoll();
+}
+
+function scheduleComparePoll() {
+  stopComparePoll();
+  if (!compareActiveJobId || !sessionId) return;
+  comparePollTimer = setTimeout(async () => {
+    try {
+      const job = await api(
+        `/api/sessions/${encodeURIComponent(sessionId)}/compare/${encodeURIComponent(compareActiveJobId)}`,
+      );
+      renderCompareJob(job);
+      if (job.status === "running") scheduleComparePoll();
+    } catch (err) {
+      const meta = $("compare-meta");
+      if (meta) meta.textContent = err.message || "轮询失败";
+    }
+  }, 800);
+}
+
+function renderCompareJob(job) {
+  const host = $("compare-results");
+  if (!host) return;
+  const original = job.original ?? {};
+  const cards = [
+    `<article class="compare-card">
+      <div class="compare-card-head">
+        <strong>原文</strong>
+        <span>${esc(original.model || "当前结果")}</span>
+      </div>
+      <div class="compare-card-status">对照 · 不会写入废案</div>
+      <pre class="compare-card-body">${esc(original.text || "")}</pre>
+    </article>`,
+    ...(job.candidates ?? []).map((c) => {
+      const statusText =
+        c.status === "done"
+          ? c.usage?.totalTokens
+            ? `完成 · ${Number(c.usage.totalTokens).toLocaleString("zh-CN")} tokens`
+            : "完成"
+          : c.status === "error"
+            ? `失败 · ${c.error || ""}`
+            : c.status === "running"
+              ? "生成中…"
+              : "排队中";
+      const body =
+        c.status === "done"
+          ? [
+              c.thinking ? `【思考】\n${c.thinking}\n\n【正文】\n` : "",
+              c.content || "",
+            ].join("")
+          : c.error || "";
+      const adoptBtn =
+        c.status === "done"
+          ? `<div class="compare-card-actions">
+              <button type="button" class="btn btn-primary" data-adopt-profile="${esc(c.profileId)}">采用此结果</button>
+            </div>`
+          : "";
+      return `<article class="compare-card">
+        <div class="compare-card-head">
+          <strong>${esc(c.profileName || c.profileId)}</strong>
+          <span>${esc(c.model || "")}</span>
+        </div>
+        <div class="compare-card-status ${c.status === "error" ? "is-error" : ""}">${esc(statusText)}</div>
+        <pre class="compare-card-body">${esc(body)}</pre>
+        ${adoptBtn}
+      </article>`;
+    }),
+  ];
+  host.innerHTML = cards.join("");
+}
+
+async function adoptCompareResult(profileId) {
+  if (!sessionId || !compareActiveJobId || !profileId) return;
+  const seq = beginUiRequest();
+  try {
+    const view = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/compare/${encodeURIComponent(compareActiveJobId)}/adopt`,
+      {
+        method: "POST",
+        body: JSON.stringify({ profileId }),
+      },
+    );
+    if (isStaleUiRequest(seq)) return;
+    stopComparePoll();
+    $("dialog-model-compare")?.close();
+    compareActiveJobId = null;
+    renderSession(view, false);
+  } catch (err) {
+    alert(err.message || "采用失败");
+  }
+}
+
+$("btn-start-model-compare")?.addEventListener("click", () => {
+  void startModelCompareFromPicker();
+});
+$("btn-close-model-compare")?.addEventListener("click", () => {
+  stopComparePoll();
+  compareActiveJobId = null;
+  $("dialog-model-compare")?.close();
+});
+$("compare-results")?.addEventListener("click", (e) => {
+  const profileId = e.target.closest("[data-adopt-profile]")?.getAttribute("data-adopt-profile");
+  if (!profileId) return;
+  if (!confirm("采用此结果？其它成功候选会作为废案保留，可用左右切换查看。")) return;
+  void adoptCompareResult(profileId);
+});
+
 $("btn-copy-context")?.addEventListener("click", async () => {
   const body = $("context-trace-body")?.textContent ?? "";
   try {
@@ -2805,14 +3405,103 @@ $("book-action-menu")?.addEventListener("click", (e) => {
 });
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#book-action-menu")) hideBookMenu();
+  if (!e.target.closest("#save-action-menu")) hideSaveMenu();
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     hideBookMenu();
+    hideSaveMenu();
     if (bookSelectMode || selectedBookIds.size) setBookSelectMode(false);
   }
 });
-document.addEventListener("scroll", hideBookMenu, true);
+document.addEventListener("scroll", () => {
+  hideBookMenu();
+  hideSaveMenu();
+}, true);
+
+$("save-action-menu")?.addEventListener("click", (e) => {
+  const action = e.target
+    .closest("[data-save-menu-action]")
+    ?.getAttribute("data-save-menu-action");
+  const { bookId, saveId, label } = saveMenuState;
+  hideSaveMenu();
+  if (!bookId || !saveId || !action) return;
+  if (action === "edit-products") {
+    void openSnapshotProductsEditor(bookId, saveId, label);
+  }
+});
+
+$("snapshot-products-body")?.addEventListener("click", (e) => {
+  const body = $("snapshot-products-body");
+  if (!body) return;
+  const bookId = body.dataset.bookId;
+  const saveId = body.dataset.saveId;
+  const products = body._products;
+  if (!bookId || !saveId || !Array.isArray(products)) return;
+
+  const editBtn = e.target.closest("[data-snap-edit]");
+  if (editBtn) {
+    const idx = Number(editBtn.getAttribute("data-snap-edit"));
+    const p = products[idx];
+    const row = body.querySelector(`.snap-product[data-idx="${idx}"]`);
+    if (!p || !row) return;
+    row.innerHTML = `
+      <div class="snap-product-head">
+        <span class="snap-product-label">${esc(p.label || p.tag)}</span>
+        <span class="snap-product-tag">${esc(p.tag)}</span>
+      </div>
+      <textarea class="snap-product-ta" data-snap-ta="${idx}"></textarea>
+      <div class="snap-product-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-snap-save="${idx}">保存</button>
+        <button type="button" class="btn btn-sm" data-snap-cancel="${idx}">取消</button>
+      </div>`;
+    const ta = row.querySelector("textarea");
+    if (ta) {
+      ta.value = p.content || "";
+      ta.focus();
+    }
+    return;
+  }
+
+  const cancelBtn = e.target.closest("[data-snap-cancel]");
+  if (cancelBtn) {
+    const idx = Number(cancelBtn.getAttribute("data-snap-cancel"));
+    const p = products[idx];
+    const row = body.querySelector(`.snap-product[data-idx="${idx}"]`);
+    if (!p || !row) return;
+    const preview = String(p.content || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+    row.innerHTML = `
+      <div class="snap-product-head">
+        <span class="snap-product-label">${esc(p.label || p.tag)}</span>
+        <span class="snap-product-tag">${esc(p.tag)}</span>
+        <button type="button" class="btn-sm snap-product-edit" data-snap-edit="${idx}">改</button>
+      </div>
+      <div class="snap-product-preview" data-snap-preview="${idx}">${esc(preview)}${
+        String(p.content || "").length > 160 ? "…" : ""
+      }</div>`;
+    return;
+  }
+
+  const saveBtn = e.target.closest("[data-snap-save]");
+  if (saveBtn) {
+    const idx = Number(saveBtn.getAttribute("data-snap-save"));
+    const p = products[idx];
+    const row = body.querySelector(`.snap-product[data-idx="${idx}"]`);
+    const ta = row?.querySelector("textarea");
+    if (!p || !row || !ta) return;
+    saveBtn.disabled = true;
+    void saveSnapshotProductEdit(bookId, saveId, p.tag, ta.value, row, products, idx).catch(
+      (err) => {
+        saveBtn.disabled = false;
+        alert(err.message || "保存失败");
+      },
+    );
+  }
+});
+
 $("form-new-book")?.addEventListener("submit", (e) => {
   e.preventDefault();
   createBook();
@@ -2881,7 +3570,7 @@ async function init() {
   syncThemeMenuUi();
   try {
     void populateDirectorSelect();
-    await loadBooks();
+    await Promise.all([loadBooks(), loadPersonas()]);
     if (books.length) {
       showCatalog();
     } else {

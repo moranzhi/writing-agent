@@ -11,6 +11,11 @@ import type { RunSnapshot, RunSnapshotMeta, SnapshotKind } from "../types/run-sn
 import { toRunSnapshotMeta } from "../types/run-snapshot.js";
 import { materializeInstanceSnapshotPayload } from "../book/snapshot-filters.js";
 import {
+  listSnapshotProducts,
+  patchBlackboardTagContent,
+  type SnapshotProductRow,
+} from "../book/snapshot-products.js";
+import {
   INSTANCE_OPENING_SNAPSHOT_LABEL,
   OPENING_OUTPUT_TAG,
 } from "../skills/opening-seal.js";
@@ -110,6 +115,7 @@ import {
   findRecipeCatalogEntry,
   formatCreationFlowForUser,
   formatDictateRecipeBrief,
+  formatModuleCatalogForDictate,
   findModuleByName,
   findStepByRef,
   type FlowStepTitleHint,
@@ -159,12 +165,23 @@ import {
 } from "../skills/question-protocol.js";
 import type { QuestionAnswer } from "../types/questions.js";
 import {
+  expandAtDirectives,
+  type DirectiveContext,
+} from "../directives/expand.js";
+import {
+  getActivePersona,
+  listPersonas,
+  personaForLifecycle,
+} from "../persona/store.js";
+import {
   appendBranchVariant,
+  cloneCheckpoint,
   createMessageBranchState,
   createUserVariantMessage,
   ensureBranchForEdit,
   ensureBranchForRefresh,
   findPrecedingUserIndex,
+  canAttemptRefresh,
   isRefreshableMessage,
   recordPreMessageCheckpoint,
   switchBranchVariant,
@@ -172,6 +189,13 @@ import {
   type MessageBranchState,
   type SessionCheckpoint,
 } from "./message-branch.js";
+import {
+  createCompareJob,
+  findCandidate,
+  getCompareJob,
+  runCompareJob,
+  type ModelCompareJob,
+} from "./model-compare.js";
 
 /** 这些消息种类挂载全量 LLM 上下文痕迹（右键可查看） */
 const CONTEXT_TRACE_MESSAGE_KINDS = new Set<AgentMessageKind>([
@@ -201,6 +225,8 @@ export type ChatMessage = {
   branchGroupId?: string;
   branchIndex?: number;
   branchTotal?: number;
+  /** 视图用：这条现在能不能点「重出一版」 */
+  canRefresh?: boolean;
 };
 
 export type SessionView = {
@@ -280,6 +306,10 @@ export type SessionView = {
       { totalTokens: number; cachedTokens: number; cacheMissTokens: number; calls: number }
     >;
   };
+  /** 用户角色列表（快速切换） */
+  personas?: Array<{ id: string; name: string }>;
+  /** 当前选中的用户角色 */
+  activePersona?: { id: string; name: string; description: string } | null;
 };
 
 export type SessionAction =
@@ -546,7 +576,9 @@ export class SessionManager {
     const onMessage = this.buildOnMessageHandler(() => managed);
     const thinkingHandlers = this.buildStreamHandlers(id, () => managed);
 
-    const llm = createDefaultMainAgentLlm(trackingRef);
+    const llm = createDefaultMainAgentLlm(trackingRef, () =>
+      this.personaForManaged(managed),
+    );
     const runtime = new PhaseRuntime({
       autoStubWorker: !hasRealLlmConfig(),
       llm,
@@ -677,7 +709,9 @@ export class SessionManager {
     s: ManagedSession,
     _userText: string,
   ): Promise<void> {
-    const llm = createDefaultMainAgentLlm(s.trackingRef);
+    const llm = createDefaultMainAgentLlm(s.trackingRef, () =>
+      this.personaForManaged(s),
+    );
     let dialogue = extractDictateDialogue(s.messages);
     const recipeView = resolveSelectedRecipeView(
       s.runtime.getBlackboard(),
@@ -688,12 +722,17 @@ export class SessionManager {
       recipeView,
       recipeOptions: s.recipeOptions,
     });
+    const moduleGuide = await resolveDictateModuleGuideForSession({
+      skillName: s.runtime.getActiveSkill()?.name,
+      moduleCatalog: s.moduleCatalog,
+    });
 
     const result = await runDictateTurn({
       llm,
       dialogue,
       recipeName: recipeView?.name,
       recipeBrief,
+      moduleGuide,
       handlers: {
         listProducts: () => this.listDictateProducts(s),
         writeProduct: (tag, content, order) => {
@@ -1037,6 +1076,7 @@ export class SessionManager {
    * 保证黑板上有 输出.开场白，供开玩主区展示。
    * 优先级：设计.开场白（转述产物）> 已有 输出.开场白 > 其它产物拼装 > 非转述聊天兜底。
    * 切勿用 dictate_reply（常含确认/建议补充）盖过已钉的设计.开场白。
+   * 返回值已展开 @ 指令（进游玩时绑定当前用户角色 / 掷骰）。
    */
   private ensurePlayOpeningWritten(
     s: ManagedSession,
@@ -1049,19 +1089,36 @@ export class SessionManager {
         ?.content?.trim() ||
       "";
     if (fromDesign) {
+      const expanded = this.expandDirectivesText(
+        fromDesign,
+        this.playDirectiveContext(),
+      );
       const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
-      if (existing !== fromDesign) {
+      if (existing !== expanded) {
         board.write({
           tag: OPENING_OUTPUT_TAG,
-          content: fromDesign,
+          content: expanded,
           source: "runtime",
         });
       }
-      return fromDesign;
+      return expanded;
     }
 
     const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
-    if (existing) return existing;
+    if (existing) {
+      const expanded = this.expandDirectivesText(
+        existing,
+        this.playDirectiveContext(),
+      );
+      if (expanded !== existing) {
+        board.write({
+          tag: OPENING_OUTPUT_TAG,
+          content: expanded,
+          source: "runtime",
+        });
+      }
+      return expanded;
+    }
 
     const fromProducts = this.deriveOpeningFromDictateProducts(s);
     const fromMessages = fromProducts
@@ -1070,12 +1127,43 @@ export class SessionManager {
     const opening = (fromProducts || fromMessages).trim();
     if (!opening) return "";
 
+    const expanded = this.expandDirectivesText(
+      opening,
+      this.playDirectiveContext(),
+    );
     board.write({
       tag: OPENING_OUTPUT_TAG,
-      content: opening,
+      content: expanded,
       source: "runtime",
     });
-    return opening;
+    return expanded;
+  }
+
+  private personaForManaged(s: ManagedSession): ReturnType<
+    typeof personaForLifecycle
+  > {
+    if (!s.runtime) return personaForLifecycle("design");
+    return personaForLifecycle(inferLifecycleStage(s.runtime.getSession()));
+  }
+
+  private playDirectiveContext(): DirectiveContext {
+    const p = getActivePersona();
+    if (!p) return {};
+    return {
+      persona: { name: p.name, description: p.description },
+    };
+  }
+
+  private directiveContextFor(s: ManagedSession): DirectiveContext {
+    const p = this.personaForManaged(s);
+    if (!p) return {};
+    return { persona: p };
+  }
+
+  /** 发送 / 开场白：匹配即替换；骰子写入展开后正文，不重掷。 */
+  private expandDirectivesText(text: string, ctx: DirectiveContext): string {
+    if (!text.includes("@") && !text.includes("{{user}}")) return text;
+    return expandAtDirectives(text, ctx).text;
   }
 
   private deriveOpeningFromMessages(messages: ChatMessage[] | undefined): string {
@@ -1320,6 +1408,57 @@ export class SessionManager {
     return toRunSnapshotMeta(next);
   }
 
+  /** 快照内创作产物（按流程步骤序）；含 play-working */
+  getGameSnapshotProducts(
+    bookId: string,
+    snapshotId: string,
+  ): { save: RunSnapshotMeta; products: SnapshotProductRow[] } {
+    if (!getBook(bookId)) throw new Error("Book 不存在");
+    const snapshot = loadRunSnapshotFile(bookId, snapshotId);
+    if (!snapshot) throw new Error("存档不存在");
+    return {
+      save: toRunSnapshotMeta(snapshot),
+      products: listSnapshotProducts(snapshot.blackboardItems),
+    };
+  }
+
+  /** 手改快照某一产物 tag；写回文件。当前游玩工作副本会同步活板。 */
+  patchGameSnapshotProduct(
+    bookId: string,
+    snapshotId: string,
+    tag: string,
+    content: string,
+  ): { save: RunSnapshotMeta; products: SnapshotProductRow[] } {
+    if (!getBook(bookId)) throw new Error("Book 不存在");
+    const trimmedTag = tag.trim();
+    if (!trimmedTag) throw new Error("tag 不能为空");
+    const snapshot = loadRunSnapshotFile(bookId, snapshotId);
+    if (!snapshot) throw new Error("存档不存在");
+    const blackboardItems = patchBlackboardTagContent(
+      snapshot.blackboardItems,
+      trimmedTag,
+      content,
+    );
+    const next: RunSnapshot = { ...snapshot, blackboardItems };
+    saveRunSnapshotFile(next);
+
+    if (snapshotId === PLAY_WORKING_SNAPSHOT_ID) {
+      const active = this.getActiveSessionForBook(bookId);
+      if (active) {
+        try {
+          this.writeUserBoardTag(active.id, trimmedTag, content);
+        } catch {
+          /* 快照已写回 */
+        }
+      }
+    }
+
+    return {
+      save: toRunSnapshotMeta(next),
+      products: listSnapshotProducts(blackboardItems),
+    };
+  }
+
   private latestInstanceSnapshot(bookId: string): RunSnapshot | null {
     const meta = this.listGameSnapshots(bookId).find((s) => s.kind === "instance");
     if (!meta) return null;
@@ -1448,7 +1587,9 @@ export class SessionManager {
   reloadAllLlms(): number {
     let count = 0;
     for (const s of this.sessions.values()) {
-      const llm = reloadDefaultMainAgentLlm(s.trackingRef);
+      const llm = reloadDefaultMainAgentLlm(s.trackingRef, () =>
+        this.personaForManaged(s),
+      );
       s.runtime.reloadLlm(llm, !hasRealLlmConfig());
       count += 1;
     }
@@ -1478,7 +1619,11 @@ export class SessionManager {
       this.captureCheckpoint(s),
     );
     const reason = s.runtime.getSession().waitingReason;
-    const trimmed = text.trim();
+    const trimmedRaw = text.trim();
+    const trimmed = this.expandDirectivesText(
+      trimmedRaw,
+      this.directiveContextFor(s),
+    );
     const sidecarAnswers =
       reason?.kind === "review_artifact" &&
       reason.questions?.length &&
@@ -1660,7 +1805,10 @@ export class SessionManager {
   /** 编辑用户消息 → 新分支 + 从该点重跑 */
   async editMessage(id: string, messageId: string, newText: string): Promise<SessionView> {
     const s = this.require(id);
-    const trimmed = newText.trim();
+    const trimmed = this.expandDirectivesText(
+      newText.trim(),
+      this.directiveContextFor(s),
+    );
     if (!trimmed) throw new Error("内容不能为空");
 
     const idx = s.messages.findIndex((m) => m.id === messageId);
@@ -1905,6 +2053,172 @@ export class SessionManager {
     if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
     this.persist(s);
     return this.toView(id);
+  }
+
+  /**
+   * 多模型对比：冻结该消息 contextTrace，对各 profile 并行重放；不改会话。
+   * 采用结果见 adoptModelCompare。
+   */
+  async startModelCompare(
+    id: string,
+    messageId: string,
+    profileIds: string[],
+  ): Promise<ModelCompareJob> {
+    const s = this.require(id);
+    const resolved = this.resolveMessageContextTrace(s, messageId);
+    if (!resolved?.trace?.messages?.length) {
+      throw new Error("这条消息没有可重放的上下文（可能已被修剪）");
+    }
+    const { message, trace } = resolved;
+    const job = createCompareJob({
+      sessionId: id,
+      messageId: message.id,
+      profileIds,
+      original: {
+        text: String(message.body ?? message.text ?? ""),
+        thinking: message.thinking,
+        model: trace.model ?? message.tokenUsage?.model,
+      },
+    });
+    void runCompareJob(job, trace).catch((err) => {
+      job.status = "error";
+      const detail = err instanceof Error ? err.message : String(err);
+      for (const c of job.candidates) {
+        if (c.status === "pending" || c.status === "running") {
+          c.status = "error";
+          c.error = detail;
+          c.finishedAt = new Date().toISOString();
+        }
+      }
+    });
+    return job;
+  }
+
+  getModelCompare(id: string, jobId: string): ModelCompareJob {
+    const job = getCompareJob(jobId);
+    if (!job || job.sessionId !== id) {
+      throw new Error("对比任务不存在或已过期");
+    }
+    return job;
+  }
+
+  /**
+   * 采用某一 profile 的对比结果：写入消息 branch；
+   * 选用版为 active，其余成功候选与原文一并留作废案（可 swipe）。
+   */
+  async adoptModelCompare(
+    id: string,
+    jobId: string,
+    profileId: string,
+  ): Promise<SessionView> {
+    const s = this.require(id);
+    const job = this.getModelCompare(id, jobId);
+    const chosen = findCandidate(job, profileId);
+    if (!chosen || chosen.status !== "done" || chosen.content == null) {
+      throw new Error("只能采用已成功生成的结果");
+    }
+
+    const idx = s.messages.findIndex((m) => m.id === job.messageId);
+    if (idx < 0) throw new Error("原消息已不存在，无法采用");
+    const target = s.messages[idx];
+
+    const checkpoint =
+      s.branchState.preMessageCheckpoints[idx] ??
+      s.runtime.getLastWorkerRunSnapshot() ??
+      this.captureCheckpoint(s);
+
+    const branch = ensureBranchForRefresh(s.branchState, s.messages, idx, {
+      runtimeSession: checkpoint.runtimeSession,
+      blackboardItems: checkpoint.blackboardItems,
+    });
+
+    const baseCheckpoint = this.captureCheckpoint(s);
+    const successCandidates = job.candidates.filter(
+      (c) => c.status === "done" && c.content != null,
+    );
+    const tailAfter = s.messages.slice(idx + 1).map((m) => ({ ...m }));
+
+    let chosenVariantIndex = branch.activeIndex;
+    for (const candidate of successCandidates) {
+      const head: ChatMessage = {
+        ...target,
+        id: randomUUID(),
+        text: candidate.content!,
+        body: candidate.content!,
+        thinking: candidate.thinking,
+        createdAt: new Date().toISOString(),
+        tokenUsage: {
+          totalTokens: candidate.usage?.totalTokens ?? 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          cachedTokens: candidate.usage?.cachedTokens,
+          cacheMissTokens: candidate.usage?.cacheMissTokens,
+          caller: `model-compare:${candidate.profileId}`,
+          model: candidate.model,
+        },
+        branchGroupId: branch.groupId,
+        branchIndex: branch.variants.length,
+      };
+      const variantIndex = branch.variants.length;
+      branch.variants.push({
+        messages: [head, ...tailAfter.map((m) => ({ ...m }))],
+        checkpoint: cloneCheckpoint(baseCheckpoint),
+      });
+      if (candidate.profileId === profileId) {
+        chosenVariantIndex = variantIndex;
+      }
+    }
+
+    branch.activeIndex = chosenVariantIndex;
+    const active = branch.variants[chosenVariantIndex];
+    if (!active) throw new Error("采用失败：版本缺失");
+
+    s.messages = [
+      ...s.messages.slice(0, branch.anchorIndex),
+      ...(active.messages as ChatMessage[]),
+    ];
+    s.runtime.restoreFromCheckpoint(
+      active.checkpoint.runtimeSession,
+      active.checkpoint.blackboardItems,
+    );
+    for (const m of s.messages.slice(branch.anchorIndex)) {
+      m.branchGroupId = branch.groupId;
+      m.branchIndex = branch.activeIndex;
+      m.branchTotal = branch.variants.length;
+    }
+
+    this.syncCreationDialogue(s);
+    if (s.bookId) this.syncBookPreview(s.bookId, s.messages);
+    this.persist(s);
+    return this.toView(id);
+  }
+
+  private resolveMessageContextTrace(
+    s: ManagedSession,
+    messageId: string,
+  ): { message: ChatMessage; trace: LlmContextTrace } | null {
+    const msg = s.messages.find((m) => m.id === messageId);
+    if (msg?.contextTrace?.messages?.length) {
+      return { message: msg, trace: msg.contextTrace };
+    }
+    const review = buildReviewArtifactView(
+      s.runtime.getSession(),
+      s.messages,
+      s.runtime.getBlackboard(),
+      s.moduleCatalog,
+    );
+    if (
+      review?.contextTrace?.messages?.length &&
+      (review.sourceMessageId === messageId || review.id === messageId)
+    ) {
+      const source =
+        (review.sourceMessageId
+          ? s.messages.find((m) => m.id === review.sourceMessageId)
+          : undefined) ?? msg;
+      if (!source) return null;
+      return { message: source, trace: review.contextTrace };
+    }
+    return null;
   }
 
   async approve(
@@ -2290,7 +2604,11 @@ export class SessionManager {
 
     const runtime = new PhaseRuntime({
       autoStubWorker: !hasRealLlmConfig(),
-      llm: createDefaultMainAgentLlm(trackingRef),
+      llm: createDefaultMainAgentLlm(trackingRef, () =>
+        managedRef
+          ? this.personaForManaged(managedRef)
+          : personaForLifecycle("design"),
+      ),
       onMessage,
       ...thinkingHandlers,
       initialSession: params.runtimeSession,
@@ -3056,7 +3374,19 @@ export class SessionManager {
     }
 
     const tokens = getSessionTokenTotals(id);
-    const messages = this.enrichDisplayMessages(session, [...s.messages]);
+    const lastWorkerSnap = s.runtime.getLastWorkerRunSnapshot();
+    const messages = this.enrichDisplayMessages(session, [...s.messages]).map(
+      (m, idx) => ({
+        ...m,
+        canRefresh: canAttemptRefresh(m, {
+          lastWorkerId: lastWorkerSnap?.workerId,
+          hasLastWorkerSnapshot: Boolean(lastWorkerSnap),
+          hasMessageCheckpoint: Boolean(
+            s.branchState.preMessageCheckpoints[idx],
+          ),
+        }),
+      }),
+    );
     const lifecycleStage = inferLifecycleStage(session);
     const skillPackId =
       sessionSkillPackId(session) ?? (book ? bookSkillPackId(book) : undefined);
@@ -3161,6 +3491,13 @@ export class SessionManager {
         lastTotal: tokens.last?.totalTokens,
         byCaller: tokens.byCaller,
       },
+      personas: listPersonas().map((p) => ({ id: p.id, name: p.name })),
+      activePersona: (() => {
+        const p = getActivePersona();
+        return p
+          ? { id: p.id, name: p.name, description: p.description }
+          : null;
+      })(),
     };
   }
 
@@ -3617,6 +3954,29 @@ async function resolveDictateRecipeBriefForSession(params: {
     }
   }
   return view.declaration?.trim() || undefined;
+}
+
+/** Boss 直聘：注入能力何时落盘（modules meta）；优先会话已载 catalog */
+async function resolveDictateModuleGuideForSession(params: {
+  skillName?: string | null;
+  moduleCatalog?: ModuleCatalog | null;
+}): Promise<string | undefined> {
+  let catalog = params.moduleCatalog ?? null;
+  if (!catalog?.modules?.length) {
+    const skillName = params.skillName?.trim();
+    if (!skillName) return undefined;
+    try {
+      const skill = await loadSkill(skillName);
+      const packRoot = skill.skillPackRoot?.trim();
+      if (!packRoot) return undefined;
+      catalog = await loadModuleCatalog(packRoot);
+    } catch (err) {
+      console.error("[会话] 加载转述能力目录失败", err);
+      return undefined;
+    }
+  }
+  if (!catalog?.modules?.length) return undefined;
+  return formatModuleCatalogForDictate(catalog);
 }
 
 function buildWorkerSetUserView(
