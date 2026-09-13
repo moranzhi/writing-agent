@@ -57,6 +57,8 @@ export async function runDictateTurn(params: {
   systemPrompt?: string;
   recipeName?: string;
   recipeBrief?: string;
+  /** modules catalog 的何时落盘块（formatModuleCatalogForDictate） */
+  moduleGuide?: string;
   driver?: AgentDriver;
 }): Promise<DictateTurnResult> {
   const driver = params.driver ?? createLocalLlmDriver(params.llm);
@@ -69,6 +71,7 @@ export async function runDictateTurn(params: {
     buildDictateSystemPrompt({
       recipeName: params.recipeName,
       recipeBrief: params.recipeBrief,
+      moduleGuide: params.moduleGuide,
     });
   const assembled = buildDictateMessages({
     systemPrompt,

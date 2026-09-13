@@ -21,7 +21,7 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
           content: {
             type: "string",
             description:
-              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白=可读开场（Markdown）",
+              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白=可读开场 Markdown，必须含字面 @玩家（用户角色名位，禁止写死姓名）",
           },
           order: {
             type: "number",

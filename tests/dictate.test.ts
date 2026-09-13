@@ -8,6 +8,10 @@ import {
   isDictateModeValue,
   sortDictateProducts,
 } from "../src/dictate/index.js";
+import {
+  formatModuleCatalogForDictate,
+  loadModuleCatalog,
+} from "../src/skills/creation-flow.js";
 
 describe("dictate context", () => {
   it("assembles full dialogue + products with almost no filtering", () => {
@@ -65,7 +69,10 @@ describe("dictate context", () => {
   it("system prompt requires insert toolcall and relative order", () => {
     const prompt = buildDictateSystemPrompt({
       recipeName: "数据化跑团体验",
-      recipeBrief: "设定 + 真值 + 分档映射\n怎么做：\n- declare_variable\n- declare_map",
+      recipeBrief:
+        "设定 + 真值 + 分档映射\n怎么做：\n- declare_variable\n- declare_map",
+      moduleGuide:
+        "【能力 · 何时落盘】\n- 美学纲领与交互范式：…\n  落盘：insert 「设计.美学纲领与交互范式」\n  何时用：还不能回答站位",
     });
     expect(prompt).toContain("设计.正文组成");
     expect(prompt).toContain("设计.开场白");
@@ -82,6 +89,25 @@ describe("dictate context", () => {
     expect(prompt).toContain("大纲扩写");
     expect(prompt).toContain("禁止扮演停笔");
     expect(prompt).toContain("只挂载这些产物");
+    expect(prompt).toContain("【能力 · 何时落盘】");
+    expect(prompt).toContain("设计.美学纲领与交互范式");
+    expect(prompt).toContain("每轮通常只推进一刀");
+    expect(prompt).toContain("勿因配方名叫数据化就抢跑 D");
+  });
+
+  it("formats module catalog for dictate with land tags and when", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    expect(catalog).toBeTruthy();
+    const block = formatModuleCatalogForDictate(catalog!);
+    expect(block).toContain("【能力 · 何时落盘】");
+    expect(block).toContain("美学纲领与交互范式");
+    expect(block).toContain("落盘：insert 「设计.美学纲领与交互范式」");
+    expect(block).toContain("何时用");
+    expect(block).toContain("何时不用");
+    expect(block).toContain("declare_variable");
+    expect(block).toContain("设计.开场白");
+    expect(block).toContain("〔落档程序〕");
+    expect(block).not.toContain("role=prototype");
   });
 
   it("sorts products by relative order: neg then 0 then pos", () => {

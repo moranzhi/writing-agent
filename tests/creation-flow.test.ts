@@ -535,10 +535,11 @@ describe("creation-flow", () => {
 
     const rpg = dictate!.recipes.find((r) => r.id === "数据化跑团体验")!;
     const rpgDetail = await loadRecipeDetail("dialogue/world-simulator", rpg);
-    expect(rpgDetail.brief).toMatch(/数据化跑团|真值|映射/);
-    expect(rpgDetail.core).toMatch(/真值|declare_variable|数值/);
+    expect(rpgDetail.brief).toMatch(/美学|真值|映射/);
+    expect(rpgDetail.core).toMatch(/美学|真值|declare_variable|何时落盘/);
     expect(formatDictateRecipeBrief(rpgDetail)).toContain("declare_variable");
-    expect(formatDictateRecipeBrief(rpgDetail)).toContain("declare_map");
+    expect(formatDictateRecipeBrief(rpgDetail)).toContain("何时落盘");
+    expect(formatDictateRecipeBrief(rpgDetail)).toMatch(/美学纲领|体验核心/);
   });
 
   it("parses selected recipe ref", () => {

@@ -1332,6 +1332,65 @@ export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
   ].join("\n");
 }
 
+/** Boss 直聘不经 DAG：这些能力由落档/开玩程序处理，创作对话一般不 insert */
+const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
+  "worker-spec",
+  "context-order",
+  "refine",
+]);
+
+/**
+ * 注入 Boss 直聘：能力何时落盘（meta when/when_not）+ insert 目标 tag。
+ * 不写 DAG / design-step 话术；不塞执行全文。
+ */
+export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
+  const lines = catalog.modules.map((m) => {
+    const programSide = DICTATE_PROGRAM_SIDE_MODULE_IDS.has(m.id) || m.auto;
+    const flags = [
+      m.repeatable ? "〔可反复〕" : "",
+      m.closer ? "〔收口〕" : "",
+      programSide ? "〔落档程序〕" : "",
+      m.kind ? MODULE_NODE_KIND_FLAGS[m.kind] : "",
+    ]
+      .filter(Boolean)
+      .join("");
+    const land = dictateLandHint(m);
+    const parts: string[] = [
+      `- ${m.name}${flags}：${m.declaration}`,
+      `  落盘：${land}`,
+    ];
+    if (m.when) parts.push(`  何时用：${indentMultiline(m.when, "  ")}`);
+    if (m.when_not) parts.push(`  何时不用：${indentMultiline(m.when_not, "  ")}`);
+    if (m.boundary) parts.push(`  边界：${indentMultiline(m.boundary, "  ")}`);
+    return parts.join("\n");
+  });
+  return [
+    "【能力 · 何时落盘】",
+    "对照下方「何时用 / 何时不用 / 边界」与已有产物判定：条件成立才 insert（或 declare_*）；含糊或未到时机 → 本轮不落、只短确认或问挡住的 1 点。",
+    "每轮通常只推进条件已成立的一刀；勿因用户一次说了很多就批量抢跑下游。",
+    "标〔落档程序〕的：创作对话一般不 insert，开玩/落档时由程序处理。",
+    "标〔收口〕的开场白：美学与必要上游齐后再写；未齐不硬塞。",
+    "不要把能力执行全文塞进聊天；规格只走 toolcall。",
+    lines.join("\n"),
+  ].join("\n");
+}
+
+function dictateLandHint(m: ModuleCatalogEntry): string {
+  if (DICTATE_PROGRAM_SIDE_MODULE_IDS.has(m.id) || m.auto) {
+    return "落档/开玩程序处理；创作期一般不 insert";
+  }
+  if (m.id === "variable-design") {
+    return "declare_variable / declare_map；长文规则可另 insert 「设计.变量设计与更新规则」";
+  }
+  if (m.id === "opening-setup") {
+    return "insert 「设计.开场白」（Boss 直聘简化 tag；初值与开场同真相）";
+  }
+  if (m.artifact?.trim()) {
+    return `insert 「${m.artifact.trim()}」`;
+  }
+  return "按配方约定 insert 对应 设计.*";
+}
+
 /** 多行字段：首行接在标签后，续行缩进 */
 function indentMultiline(text: string, indent: string): string {
   const lines = text.split(/\r?\n/);
