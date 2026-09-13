@@ -5,7 +5,7 @@
 recipes:
   - id: 数据化跑团体验
     name: 数据化跑团体验
-    declaration: 回合互动跑团；跨轮数值真值 + 分档映射投影（带数值）
+    declaration: AIRP / 交互式小说；设定为主，可选跨轮真值与分档映射
   - id: 文本生成器
     name: 文本生成器
     declaration: 创作收范例与模仿面；开玩后主世界出正文、转述出文风/壳
