@@ -2,9 +2,13 @@ let state = {
   settings: { activeProfileId: null, activePresetId: null },
   profiles: [],
   presets: [],
+  personas: [],
+  activePersonaId: null,
+  creationDefaultId: null,
 };
 
 let editingProfileId = null;
+let editingPersonaId = null;
 let activeSection = "api";
 let lastImportedPresetId = null;
 /** presetId → entries API payload */
@@ -13,16 +17,21 @@ const expandedPresetEntries = new Map();
 const openPresetEntryId = new Map();
 
 const profilesListEl = document.getElementById("profiles-list");
+const personasListEl = document.getElementById("personas-list");
 const presetsListEl = document.getElementById("presets-list");
 const importReportEl = document.getElementById("import-report");
 const profileDialog = document.getElementById("profile-dialog");
 const profileForm = document.getElementById("profile-form");
 const profileDialogTitle = document.getElementById("profile-dialog-title");
+const personaDialog = document.getElementById("persona-dialog");
+const personaForm = document.getElementById("persona-form");
+const personaDialogTitle = document.getElementById("persona-dialog-title");
 const presetFileEl = document.getElementById("preset-file");
 const panelTitleEl = document.getElementById("panel-title");
 const panelSubtitleEl = document.getElementById("panel-subtitle");
 const panelActionsEl = document.getElementById("panel-actions");
 const sectionApiEl = document.getElementById("section-api");
+const sectionPersonaEl = document.getElementById("section-persona");
 const sectionPresetEl = document.getElementById("section-preset");
 const sectionStorageEl = document.getElementById("section-storage");
 const activeSettingsBarEl = document.getElementById("active-settings-bar");
@@ -43,9 +52,9 @@ const probeReplyEl = document.getElementById("probe-reply");
 
 const DEFAULT_PROBE_CONTEXT = {
   message: "我推开门。",
-  loreBefore: "一座雨夜的港口旅馆。柜台点着油灯。",
-  history: "店员：今晚只剩阁楼那间。\n你：好。",
-  loreAfter: "时间：深夜。地点：旅馆大厅。",
+  loreBefore: "写作要求：对本轮输入做忠实扩写；只展开已给出的动作与信息，不另起情节。",
+  history: "扩写范围仅限本轮输入，勿补前因后果或无关对话。",
+  loreAfter: "",
   postTurn: "",
 };
 
@@ -94,11 +103,15 @@ function renderActiveBar() {
   const preset = state.presets.find(
     (p) => p.id === state.settings.activePresetId,
   );
+  const persona = state.personas.find((p) => p.id === state.activePersonaId);
 
   activeSettingsBarEl.innerHTML = `
     <span class="label">当前生效</span>
     <span class="active-tag ${profile ? "" : "missing"}">
       API: ${profile ? escapeHtml(`${profile.name} · ${profile.model}`) : "未选用"}
+    </span>
+    <span class="active-tag ${persona ? "" : "missing"}">
+      角色: ${persona ? escapeHtml(persona.name) : "未选用"}
     </span>
     <span class="active-tag ${preset ? "" : "missing"}">
       预设: ${preset ? escapeHtml(preset.name) : "未选用"}
@@ -111,6 +124,7 @@ function switchSection(section) {
     el.classList.toggle("active", el.dataset.section === section);
   });
   sectionApiEl.classList.toggle("hidden", section !== "api");
+  sectionPersonaEl?.classList.toggle("hidden", section !== "persona");
   sectionPresetEl.classList.toggle("hidden", section !== "preset");
   sectionStorageEl?.classList.toggle("hidden", section !== "storage");
   renderPanelHeader();
@@ -126,6 +140,16 @@ function renderPanelHeader() {
     btn.className = "btn-primary";
     btn.textContent = "新增";
     btn.addEventListener("click", () => openProfileDialog());
+    panelActionsEl.appendChild(btn);
+  } else if (activeSection === "persona") {
+    panelTitleEl.textContent = "用户角色";
+    panelSubtitleEl.textContent =
+      "游玩用当前选用；创作用「创作默认」（建议名为 @玩家）";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-primary";
+    btn.textContent = "新增";
+    btn.addEventListener("click", () => openPersonaDialog());
     panelActionsEl.appendChild(btn);
   } else if (activeSection === "preset") {
     panelTitleEl.textContent = "预设";
@@ -259,14 +283,139 @@ function renderPresets() {
   }
 }
 
+const GENERATION_FIELDS = [
+  { key: "temperature", label: "temperature", step: "0.01", placeholder: "如 1" },
+  { key: "topP", label: "top P", step: "0.01", placeholder: "如 0.95" },
+  { key: "topK", label: "top K", step: "1", placeholder: "可选" },
+  { key: "minP", label: "min P", step: "0.01", placeholder: "可选" },
+  {
+    key: "frequencyPenalty",
+    label: "frequency penalty",
+    step: "0.01",
+    placeholder: "可选",
+  },
+  {
+    key: "presencePenalty",
+    label: "presence penalty",
+    step: "0.01",
+    placeholder: "可选",
+  },
+  {
+    key: "repetitionPenalty",
+    label: "repetition penalty",
+    step: "0.01",
+    placeholder: "可选",
+  },
+  {
+    key: "maxContextTokens",
+    label: "最大上下文",
+    step: "1",
+    placeholder: "输入预算",
+  },
+  {
+    key: "maxOutputTokens",
+    label: "最大输出",
+    step: "1",
+    placeholder: "如 60000",
+  },
+  { key: "seed", label: "seed", step: "1", placeholder: "可选" },
+  {
+    key: "variants",
+    label: "n / variants",
+    step: "1",
+    placeholder: "可选",
+  },
+];
+
+function generationFieldValue(gen, key) {
+  const v = gen?.[key];
+  return v === undefined || v === null ? "" : String(v);
+}
+
+function renderGenerationForm(gen) {
+  const g = gen ?? {};
+  const numberFields = GENERATION_FIELDS.map(
+    (f) => `
+      <label class="entry-field gen-field">
+        ${escapeHtml(f.label)}
+        <input
+          type="number"
+          class="entry-name-input"
+          data-gen-field="${escapeHtml(f.key)}"
+          step="${escapeHtml(f.step)}"
+          placeholder="${escapeHtml(f.placeholder)}"
+          value="${escapeHtml(generationFieldValue(g, f.key))}"
+        />
+      </label>`,
+  ).join("");
+
+  return `
+    <div class="preset-gen-editor">
+      <div class="preset-gen-head">
+        <strong>生成参数</strong>
+        <span class="preset-gen-hint">上半 · 采样与容量；空字段表示不发送</span>
+      </div>
+      <div class="preset-gen-grid">
+        ${numberFields}
+        <label class="entry-field gen-field">
+          reasoning effort
+          <input
+            type="text"
+            class="entry-name-input"
+            data-gen-field="reasoningEffort"
+            placeholder="如 low / medium / high"
+            value="${escapeHtml(generationFieldValue(g, "reasoningEffort"))}"
+          />
+        </label>
+        <label class="entry-field gen-field">
+          verbosity
+          <input
+            type="text"
+            class="entry-name-input"
+            data-gen-field="verbosity"
+            placeholder="可选"
+            value="${escapeHtml(generationFieldValue(g, "verbosity"))}"
+          />
+        </label>
+        <label class="entry-field gen-field gen-field-check">
+          <span>stream</span>
+          <input
+            type="checkbox"
+            data-gen-field="stream"
+            ${g.stream === true ? "checked" : ""}
+          />
+        </label>
+      </div>
+      <div class="preset-gen-actions">
+        <button type="button" class="btn-primary" data-action="save-generation">保存生成参数</button>
+      </div>
+    </div>`;
+}
+
+function collectGenerationFromPanel(panel) {
+  const generation = {};
+  for (const input of panel.querySelectorAll("[data-gen-field]")) {
+    const key = input.dataset.genField;
+    if (!key) continue;
+    if (input.type === "checkbox") {
+      if (input.checked) generation.stream = true;
+      continue;
+    }
+    const raw = input.value.trim();
+    if (!raw) continue;
+    if (key === "reasoningEffort" || key === "verbosity") {
+      generation[key] = raw;
+    } else {
+      const n = Number(raw);
+      if (Number.isFinite(n)) generation[key] = n;
+    }
+  }
+  return generation;
+}
+
 function renderPresetEntriesPanel(presetId, data) {
   const panel = document.getElementById(`preset-entries-${presetId}`);
   if (!panel || !data) return;
-
-  const gen = data.generation ?? {};
-  const genLines = Object.entries(gen)
-    .filter(([, v]) => v !== undefined && v !== null)
-    .map(([k, v]) => `${k}: ${v}`);
 
   const openId = openPresetEntryId.get(presetId) ?? null;
 
@@ -324,8 +473,8 @@ function renderPresetEntriesPanel(presetId, data) {
 
   panel.innerHTML = `
     <div class="preset-entries-inner" data-preset-id="${escapeHtml(presetId)}">
-      ${genLines.length ? `<div class="preset-gen-params"><strong>生成参数</strong> ${escapeHtml(genLines.join(" · "))}</div>` : ""}
-      <p class="preset-entries-summary">共 ${data.entries.length} 条 · 启用 ${data.enabledCount ?? 0} · 注入 ${data.injectingCount ?? 0}。点条目展开编辑；启用开关即时保存。</p>
+      ${renderGenerationForm(data.generation)}
+      <p class="preset-entries-summary">下半 · 共 ${data.entries.length} 条 · 启用 ${data.enabledCount ?? 0} · 注入 ${data.injectingCount ?? 0}。点条目展开编辑；启用开关即时保存。</p>
       ${entriesHtml || '<p class="empty-hint">无条目</p>'}
     </div>`;
 }
@@ -375,11 +524,36 @@ async function patchPresetEntry(presetId, patch) {
   return data;
 }
 
+async function patchPresetGeneration(presetId, generation) {
+  const data = await api(`/api/presets/${encodeURIComponent(presetId)}/entries`, {
+    method: "PATCH",
+    body: JSON.stringify({ generation }),
+  });
+  expandedPresetEntries.set(presetId, data);
+  renderPresets();
+  const n = data.reloadedSessions ?? 0;
+  showToast(
+    n > 0
+      ? `生成参数已保存，并热更新 ${n} 个会话`
+      : "生成参数已保存（选用此预设后才会进入请求）",
+  );
+  return data;
+}
+
 async function loadAll() {
   const data = await api("/api/settings");
   state.settings = data.settings;
   state.profiles = data.profiles;
   state.presets = data.presets;
+  try {
+    const personasData = await api("/api/personas");
+    state.personas = personasData.personas ?? [];
+    state.activePersonaId = personasData.activeId ?? null;
+    state.creationDefaultId = personasData.creationDefaultId ?? null;
+  } catch {
+    state.personas = [];
+    state.activePersonaId = null;
+  }
   if (contextTraceKeepEl) {
     contextTraceKeepEl.value = String(
       state.settings.contextTraceKeepLatest ?? 5,
@@ -387,7 +561,87 @@ async function loadAll() {
   }
   renderActiveBar();
   renderProfiles();
+  renderPersonas();
   renderPresets();
+}
+
+function renderPersonas() {
+  if (!personasListEl) return;
+  personasListEl.innerHTML = "";
+  if (!state.personas.length) {
+    personasListEl.innerHTML =
+      `<div class="empty-hint">还没有用户角色。点右上角「新增」。</div>`;
+    return;
+  }
+  for (const p of state.personas) {
+    const active = p.id === state.activePersonaId;
+    const creationDefault = p.id === state.creationDefaultId;
+    const card = document.createElement("div");
+    card.className = `config-card persona-config-card${active ? " is-active" : ""}`;
+    const desc = (p.description || "").trim();
+    card.innerHTML = `
+      <div class="config-card-head">
+        <div>
+          <div class="config-card-title">${escapeHtml(p.name)}${
+            creationDefault ? `<span class="badge">创作默认</span>` : ""
+          }</div>
+          <div class="config-card-meta">${
+            desc
+              ? escapeHtml(desc.slice(0, 80)) + (desc.length > 80 ? "…" : "")
+              : "（无人设正文）"
+          }</div>
+        </div>
+        ${activateButtonHtml(active, p.id, "activate-persona")}
+      </div>
+      <div class="config-card-actions">
+        <label class="persona-card-check">
+          <input type="checkbox" data-action="creation-default" data-id="${escapeHtml(p.id)}"${
+            creationDefault ? " checked" : ""
+          } />
+          创作默认
+        </label>
+        <button type="button" class="btn-secondary" data-action="edit-persona" data-id="${escapeHtml(p.id)}">编辑</button>
+        <button type="button" class="btn-secondary danger-outline" data-action="delete-persona" data-id="${escapeHtml(p.id)}">删除</button>
+      </div>`;
+    personasListEl.appendChild(card);
+  }
+}
+
+function openPersonaDialog(persona = null) {
+  editingPersonaId = persona?.id ?? null;
+  personaDialogTitle.textContent = persona ? "编辑用户角色" : "新增用户角色";
+  personaForm.name.value = persona?.name ?? "";
+  personaForm.description.value = persona?.description ?? "";
+  personaForm.creationDefault.checked = persona
+    ? persona.id === state.creationDefaultId
+    : false;
+  personaDialog.showModal();
+}
+
+async function savePersona() {
+  const payload = {
+    name: personaForm.name.value,
+    description: personaForm.description.value,
+    activate: true,
+    creationDefault: Boolean(personaForm.creationDefault?.checked),
+  };
+  if (editingPersonaId) {
+    await api(`/api/personas/${encodeURIComponent(editingPersonaId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    await api(`/api/personas/${encodeURIComponent(editingPersonaId)}/activate`, {
+      method: "POST",
+    });
+  } else {
+    await api("/api/personas", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+  personaDialog.close();
+  await loadAll();
+  showToast("用户角色已保存");
 }
 
 function openProfileDialog(profile = null) {
@@ -463,6 +717,62 @@ document.querySelectorAll(".st-rail-item").forEach((btn) => {
 
 document.getElementById("profile-cancel").addEventListener("click", () => {
   profileDialog.close();
+});
+
+document.getElementById("persona-cancel")?.addEventListener("click", () => {
+  personaDialog?.close();
+});
+
+personaForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await savePersona();
+  } catch (err) {
+    showToast(err.message, true);
+  }
+});
+
+personasListEl?.addEventListener("change", async (e) => {
+  const input = e.target.closest("input[data-action='creation-default']");
+  if (!input) return;
+  const id = input.dataset.id;
+  try {
+    await api(`/api/personas/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ creationDefault: Boolean(input.checked) }),
+    });
+    await loadAll();
+    showToast(input.checked ? "已设为创作默认" : "已取消创作默认");
+  } catch (err) {
+    showToast(err.message, true);
+    await loadAll();
+  }
+});
+
+personasListEl?.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  if (btn.matches("input[data-action='creation-default']")) return;
+  const id = btn.dataset.id;
+  const action = btn.dataset.action;
+  try {
+    if (action === "activate-persona") {
+      await api(`/api/personas/${encodeURIComponent(id)}/activate`, {
+        method: "POST",
+      });
+      await loadAll();
+      showToast("用户角色已选用");
+    } else if (action === "edit-persona") {
+      openPersonaDialog(state.personas.find((p) => p.id === id));
+    } else if (action === "delete-persona") {
+      if (!confirm("删除这个用户角色？")) return;
+      await api(`/api/personas/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadAll();
+      showToast("已删除");
+    }
+  } catch (err) {
+    showToast(err.message, true);
+  }
 });
 
 document.getElementById("profile-save").addEventListener("click", () => {
@@ -573,6 +883,11 @@ presetsListEl.addEventListener("click", async (e) => {
       const content = article.querySelector('[data-field="content"]')?.value ?? "";
       openPresetEntryId.set(presetId, id);
       await patchPresetEntry(presetId, { id, name, content });
+    } else if (action === "save-generation") {
+      const panel = btn.closest(".preset-entries-inner");
+      const presetId = panel?.dataset.presetId;
+      if (!presetId) return;
+      await patchPresetGeneration(presetId, collectGenerationFromPanel(panel));
     }
   } catch (err) {
     showToast(err.message, true);

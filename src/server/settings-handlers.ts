@@ -26,6 +26,7 @@ import {
   patchPresetEntries,
   type PresetEntryPatch,
 } from "../preset/entries.js";
+import { patchPresetGeneration } from "../preset/generation.js";
 import { runPresetProbe } from "../preset/probe.js";
 import {
   deletePreset,
@@ -33,10 +34,21 @@ import {
   importAndSavePreset,
   listPresets,
 } from "../preset/store.js";
+import type { GenerationParameters } from "../types/preset.js";
 import {
   createLlmForPreset,
   hasRealLlmConfig,
 } from "../runtime/llm-factory.js";
+import {
+  createPersona,
+  deletePersona,
+  getActivePersona,
+  getCreationDefaultPersona,
+  listPersonas,
+  setActivePersonaId,
+  updatePersona,
+} from "../persona/store.js";
+import { listDirectiveCatalog } from "../directives/expand.js";
 import { sessionManager } from "./session-manager.js";
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -50,6 +62,16 @@ async function readBody(req: IncomingMessage): Promise<string> {
 function json(res: ServerResponse, status: number, data: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(data));
+}
+
+function personasPayload(extra: Record<string, unknown> = {}) {
+  const creation = getCreationDefaultPersona();
+  return {
+    personas: listPersonas(),
+    activeId: getActivePersona()?.id ?? null,
+    creationDefaultId: creation?.id ?? null,
+    ...extra,
+  };
 }
 
 export async function handleSettingsApi(
@@ -332,18 +354,25 @@ export async function handleSettingsApi(
       const body = JSON.parse(await readBody(req)) as {
         entries?: PresetEntryPatch[];
         entry?: PresetEntryPatch;
+        generation?: GenerationParameters | Record<string, unknown>;
       };
       const patches = body.entries?.length
         ? body.entries
         : body.entry
           ? [body.entry]
           : [];
-      if (!patches.length) {
-        json(res, 400, { error: "缺少 entries 或 entry" });
+      const hasGeneration = Object.prototype.hasOwnProperty.call(
+        body,
+        "generation",
+      );
+      if (!patches.length && !hasGeneration) {
+        json(res, 400, { error: "缺少 entries、entry 或 generation" });
         return true;
       }
       try {
-        const next = patchPresetEntries(preset, patches);
+        let next = preset;
+        if (patches.length) next = patchPresetEntries(next, patches);
+        if (hasGeneration) next = patchPresetGeneration(next, body.generation);
         const entries = listAllPresetEntries(next);
         const settings = loadAppSettings();
         let reloadedSessions = 0;
@@ -408,6 +437,99 @@ export async function handleSettingsApi(
         saveAppSettings(settings);
       }
       json(res, 200, { ok: true });
+      return true;
+    }
+  }
+
+  if (pathname === "/api/directives/catalog" && req.method === "GET") {
+    json(res, 200, { items: listDirectiveCatalog() });
+    return true;
+  }
+
+  if (pathname === "/api/personas" && req.method === "GET") {
+    const active = getActivePersona();
+    json(res, 200, {
+      ...personasPayload(),
+      active,
+      creationDefault: getCreationDefaultPersona(),
+    });
+    return true;
+  }
+
+  if (pathname === "/api/personas" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req)) as {
+        name?: string;
+        description?: string;
+        activate?: boolean;
+        creationDefault?: boolean;
+      };
+      const persona = createPersona({
+        name: body.name ?? "",
+        description: body.description,
+        activate: body.activate,
+        creationDefault: body.creationDefault,
+      });
+      json(res, 201, {
+        ...personasPayload({ persona }),
+      });
+    } catch (e) {
+      json(res, 400, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    return true;
+  }
+
+  const personaMatch = pathname.match(
+    /^\/api\/personas\/([^/]+)(\/activate)?$/,
+  );
+  if (personaMatch) {
+    const id = decodeURIComponent(personaMatch[1]);
+    const activate = Boolean(personaMatch[2]);
+
+    if (activate && req.method === "POST") {
+      try {
+        const persona = setActivePersonaId(id);
+        json(res, 200, {
+          ...personasPayload({ persona, activeId: persona.id }),
+        });
+      } catch (e) {
+        json(res, 404, {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return true;
+    }
+
+    if (req.method === "PUT") {
+      try {
+        const body = JSON.parse(await readBody(req)) as {
+          name?: string;
+          description?: string;
+          creationDefault?: boolean;
+        };
+        const persona = updatePersona(id, body);
+        json(res, 200, {
+          ...personasPayload({ persona }),
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+      }
+      return true;
+    }
+
+    if (req.method === "DELETE") {
+      try {
+        deletePersona(id);
+        json(res, 200, {
+          ...personasPayload({ ok: true }),
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+      }
       return true;
     }
   }

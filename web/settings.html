@@ -22,6 +22,7 @@
       <aside class="st-rail" aria-label="设置分类">
         <p class="st-rail-label">设置</p>
         <button type="button" class="st-rail-item active" data-section="api">API</button>
+        <button type="button" class="st-rail-item" data-section="persona">用户角色</button>
         <button type="button" class="st-rail-item" data-section="preset">预设</button>
         <button type="button" class="st-rail-item" data-section="storage">上下文</button>
         <p class="st-rail-note">保存在本机 <code>~/.writing-agent/</code>，明文、不同步。</p>
@@ -42,6 +43,19 @@
         <div class="st-body">
           <section class="settings-section" id="section-api">
             <div id="profiles-list" class="card-list"></div>
+          </section>
+
+          <section class="settings-section hidden" id="section-persona">
+            <div class="settings-card storage-card">
+              <h3>用户角色</h3>
+              <p class="settings-help">
+                游玩时，对话里 <code>@玩家</code> / <code>{{user}}</code> 会换成当前选中角色的名字；
+                <code>@人设</code> 与预设的 persona 洞用其正文。可在输入框旁快速切换。
+                创作阶段不用当前选用，而用下方勾选的「创作默认」填入预设用户设定。
+                建议把创作默认的名称写成 <code>@玩家</code>：模型会按这个称呼写开场白，替换后仍是占位，进游玩再换成当前角色。
+              </p>
+            </div>
+            <div id="personas-list" class="card-list"></div>
           </section>
 
           <section class="settings-section hidden" id="section-preset">
@@ -158,11 +172,36 @@
             <option value="high">high · 增强</option>
             <option value="max">max · 深度</option>
           </select>
-          <span class="field-hint">写入 reasoning_effort；「探测」始终用 low，与此项无关。带 function tools 的请求会强制 none（兼容 gpt-5.6-luna 等）。GLM 建议 low / high / max。</span>
+          <span class="field-hint">写入请求的思考参数。GLM-5.3：仅 low/high/max（none 会映射为 low），并附带 thinking.enabled；旧 GLM 只用 thinking、不发 reasoning_effort。探测始终用 low。带 function tools 时：非 GLM 强制 none；GLM-5.3 保留合法档。</span>
         </label>
         <div class="dialog-actions">
           <button type="button" id="profile-cancel" class="btn-secondary">取消</button>
           <button type="button" id="profile-save" class="btn-secondary">仅保存</button>
+          <button type="submit" class="btn-primary">保存并选用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="persona-dialog" class="profile-dialog">
+      <form id="persona-form" method="dialog">
+        <h3 id="persona-dialog-title">新增用户角色</h3>
+        <label>
+          名称
+          <input name="name" required placeholder="例如 林晚，或创作默认用 @玩家" autocomplete="off" />
+        </label>
+        <label>
+          人设
+          <textarea name="description" rows="6" placeholder="性格、外貌、背景……（可空）"></textarea>
+        </label>
+        <label class="check-label">
+          <input type="checkbox" name="creationDefault" />
+          <span>
+            作为创作默认用户设定
+            <span class="field-hint">创作阶段填入预设的用户设定洞。建议名称写成 @玩家，这样开场白会自然用该占位，进游玩再换成当前角色。</span>
+          </span>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="persona-cancel" class="btn-secondary">取消</button>
           <button type="submit" class="btn-primary">保存并选用</button>
         </div>
       </form>
