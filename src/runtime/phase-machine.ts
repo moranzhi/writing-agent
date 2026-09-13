@@ -367,8 +367,10 @@ export function getAllowedEvents(
         "runtime_failed",
       ];
     case "done":
-    case "error":
       return [];
+    case "error":
+      // UI 提供「说明后重试」：允许用户发言拉回 running
+      return ["user_submitted_input"];
     default:
       return [];
   }
@@ -393,6 +395,7 @@ export function canApplyEvent(
       return reason?.kind === "skill_selection";
     case "user_submitted_input":
       return (
+        session.phase === "error" ||
         reason?.kind === "intake" ||
         reason?.kind === "input" ||
         reason?.kind === "worker_questions" ||

@@ -219,7 +219,7 @@ function existingOutputIsProduct(text: string | undefined): boolean {
 
 function usablePlayFallbackText(raw?: string): string {
   if (!raw?.trim()) return "";
-  if (isQuestionOnlyText(raw)) return "";
+  if (isPlayMetaAsk(raw)) return "";
   const parsed = tryParseJsonDoc(raw);
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     return "";
@@ -348,14 +348,24 @@ function looksLikeStructuredDraft(text: string): boolean {
   return Boolean(extractJsonObjectText(t));
 }
 
-/** 几乎只有提问、没有稿。 */
+/** 几乎只有提问、没有稿。对话里夹问句不算。 */
 function isQuestionOnlyText(text: string): boolean {
   const t = text.trim();
   if (!t) return true;
   if (looksLikeStructuredDraft(t)) return false;
   const qs = extractQuestionsFromText(t);
   if (!qs.length) return false;
+  const qChars = qs.join("").length;
+  if (t.length >= 80 && qChars <= t.length * 0.55) return false;
   return looksLikeProseNotSpec(t) || /你的选择|请(?:描述|选择|确认|补充)/.test(t);
+}
+
+/** 游玩正文：只把短追问口吻当成没写完，不因场面里有「？」丢掉整稿。 */
+function isPlayMetaAsk(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (t.length > 280) return false;
+  return /可验收|追问|请再补|askUser/.test(t);
 }
 
 function canonicalizeKnownOutputs(outputs: Record<string, string>): void {
@@ -408,10 +418,7 @@ function parseWorkerResponse(
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
     const target = playTarget ?? productOutputTags(outputTags)[0] ?? outputTags[0];
     if (playTarget) {
-      const body =
-        raw.trim() && !isQuestionOnlyText(raw)
-          ? raw
-          : "";
+      const body = raw.trim() && !isPlayMetaAsk(raw) ? raw : "";
       return finalizeParsedOutputs(
         { [playTarget]: packBody(body) },
         { summary: body.slice(0, 80) || "游玩正文" },

@@ -445,4 +445,27 @@ describe("sanitizeWorkerSetOutputs", () => {
     const view = parsePresentPacket(result.outputs["输出.用户展示"], "prose");
     expect(view.packet.shell).toBe("turn_panel");
   });
+
+  it("play gm body: keeps a scene that contains dialogue questions", () => {
+    const scene = `神代流把耳机摘下，皱着眉。
+
+「你在干什么？」她问。与他刚进监控室时不同，教练的吼声还在耳边。
+
+只要玩家公开跪下认错，她就会放行。`;
+    const result = parseWorkerResponseForTest(scene, ["输出.用户展示"], {
+      preferPlainBody: true,
+    });
+    expect(result.askUser).toBeUndefined();
+    expect(result.outputs["输出.用户展示"]).toContain("你在干什么");
+    expect(result.outputs["输出.用户展示"]).not.toBe("（本轮场面未写完）");
+  });
+
+  it("play gm body: short ask-only text still counts as unfinished", () => {
+    const result = parseWorkerResponseForTest(
+      "这一步还没写出可验收的产物。请再补一点你最在意的体验。",
+      ["输出.用户展示"],
+      { preferPlainBody: true },
+    );
+    expect(result.outputs["输出.用户展示"]).toBe("（本轮场面未写完）");
+  });
 });

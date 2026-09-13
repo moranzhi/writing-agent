@@ -337,6 +337,18 @@ describe("phase runtime", () => {
     expect(runtime.getSession().waitingReason).toBeUndefined();
   });
 
+  it("submitInput recovers from error phase", async () => {
+    const runtime = new PhaseRuntime({ autoStubWorker: true });
+    await runtime.start();
+    await runtime.submitInput("随便写点");
+    await runtime.failRun("fetch failed");
+    expect(runtime.getSession().phase).toBe("error");
+
+    await runtime.submitInput("重试一下");
+    expect(runtime.getSession().phase).not.toBe("error");
+    expect(runtime.getSession().slots.lastUserInput).toBe("重试一下");
+  });
+
   it("recoverOrphanedRun turns stuck running into node pick when DAG exists", async () => {
     const runtime = new PhaseRuntime();
     await runtime.start();
