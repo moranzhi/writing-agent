@@ -36,6 +36,7 @@ import { toActiveSkillSnapshot } from "../skills/snapshot.js";
 import { runWorkerSkill } from "../worker/executor.js";
 import { resolveWorkerId } from "../worker/resolve-id.js";
 import { resolveWorkerLlmProvider } from "../skills/worker-llm.js";
+import { personaForLifecycle } from "../persona/store.js";
 import {
   DIALOGUE_HISTORY_TAG,
   appendDialogueHistoryTurn,
@@ -2272,6 +2273,8 @@ export class PhaseRuntime {
       bindings: (await loadSkill(activeSkill.name)).workerLlmBindings,
       slots,
       fallbackLlm: this.llm,
+      getPersona: () =>
+        personaForLifecycle(inferLifecycleStage(this.session)),
     });
 
     this.onMessage(

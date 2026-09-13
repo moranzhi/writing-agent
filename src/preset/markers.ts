@@ -5,16 +5,17 @@ import type {
   PresetPromptRole,
 } from "../types/preset.js";
 
-/** 酒馆角色卡 / WI marker：导入后保留位置，运行时不填我们的正文。 */
+/** 酒馆角色卡 / WI marker：导入后保留位置；personaDescription 由当前用户角色填。 */
 export const ST_UNFILLED_MARKERS = new Set([
   "worldInfoBefore",
-  "personaDescription",
   "charDescription",
   "charPersonality",
   "scenario",
   "worldInfoAfter",
   "dialogueExamples",
 ]);
+
+export const PERSONA_DESCRIPTION_MARKER = "personaDescription";
 
 export const CHAT_HISTORY_MARKER = "chatHistory";
 export const WORLD_BOOK_BEFORE = "worldBookBefore";

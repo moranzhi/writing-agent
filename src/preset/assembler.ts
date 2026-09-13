@@ -3,16 +3,20 @@ import type { PresetPackage } from "../types/preset.js";
 import { isStUnfilledMarker } from "./markers.js";
 
 export type MarkerResolver = (identifier: string) => string | null;
+export type ContentExpander = (content: string) => string;
 
 const defaultMarkerResolver: MarkerResolver = () => null;
+const defaultContentExpander: ContentExpander = (c) => c;
 
 /**
  * 按 prompt_order 装配 preset 消息。
  * 酒馆角色卡 / WI marker 不走 resolver（空洞跳过）；自有洞由 resolver 填。
+ * contentExpander：对最终正文做身份宏展开（@玩家 / {{user}}）。
  */
 export function assemblePresetMessages(
   preset: PresetPackage,
   resolveMarker: MarkerResolver = defaultMarkerResolver,
+  contentExpander: ContentExpander = defaultContentExpander,
 ): ChatMessage[] {
   const promptById = new Map(preset.prompts.map((p) => [p.id, p]));
   const messages: ChatMessage[] = [];
@@ -35,6 +39,7 @@ export function assemblePresetMessages(
     }
 
     if (!content) continue;
+    content = contentExpander(content);
 
     messages.push({
       role: entry.role,

@@ -48,6 +48,7 @@ describe("assemblePlayWorkerMessages", () => {
       systemPrompt: "SKILL",
       preset: report.preset,
       pack,
+      persona: null,
     });
 
     expect(messages.map((m) => [m.role, m.content])).toEqual([
@@ -107,6 +108,7 @@ describe("assemblePlayWorkerMessages", () => {
         turn: "本轮",
         postTurn: [],
       },
+      persona: null,
     });
     expect(messages[0]).toEqual({ role: "system", content: "<世界书>" });
     expect(messages.some((m) => m.content === "创作步骤契约")).toBe(false);
@@ -147,5 +149,54 @@ describe("assemblePlayWorkerMessages", () => {
       return null;
     });
     expect(messages.map((m) => m.content)).toEqual(["HIST"]);
+  });
+
+  it("fills personaDescription and expands @玩家 with the given persona", () => {
+    const report = importSillyTavernPreset({
+      prompts: [
+        {
+          identifier: "personaDescription",
+          name: "Persona",
+          role: "system",
+          marker: true,
+        },
+        {
+          identifier: "main",
+          name: "Main",
+          role: "system",
+          content: "对 @玩家 说话",
+        },
+        {
+          identifier: "chatHistory",
+          name: "History",
+          role: "system",
+          marker: true,
+        },
+      ],
+      prompt_order: [
+        {
+          character_id: 1,
+          order: [
+            { identifier: "personaDescription", enabled: true },
+            { identifier: "main", enabled: true },
+            { identifier: "chatHistory", enabled: true },
+          ],
+        },
+      ],
+    });
+    const messages = assemblePlayWorkerMessages({
+      systemPrompt: "SKILL",
+      preset: report.preset,
+      pack: {
+        worldBookBefore: [],
+        history: "昨日",
+        worldBookAfter: [],
+        turn: "本轮",
+        postTurn: [],
+      },
+      persona: { name: "@玩家", description: "占位人设" },
+    });
+    expect(messages.some((m) => m.content === "占位人设")).toBe(true);
+    expect(messages.some((m) => m.content === "对 @玩家 说话")).toBe(true);
   });
 });

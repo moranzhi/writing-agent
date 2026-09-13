@@ -1,7 +1,15 @@
+import { expandIdentityDirectives } from "../directives/expand.js";
 import type { ChatMessage } from "../llm/client.js";
+import {
+  getActivePersona,
+  type PersonaDirective,
+} from "../persona/store.js";
 import type { PresetPackage } from "../types/preset.js";
 import { assemblePresetMessages } from "./assembler.js";
-import { applyExtendedMarkers } from "./markers.js";
+import {
+  applyExtendedMarkers,
+  PERSONA_DESCRIPTION_MARKER,
+} from "./markers.js";
 import {
   resolveWorldInfoMarker,
   type WorldInfoEntry,
@@ -35,11 +43,28 @@ export function assemblePlayWorkerMessages(params: {
   systemPrompt: string;
   preset: PresetPackage;
   pack: WorldInfoPack;
+  /** 缺省用当前选用（试跑 / 未绑会话）。创作期应传入创作默认人设。 */
+  persona?: PersonaDirective | null;
 }): ChatMessage[] {
   const framed = applyExtendedMarkers(params.preset);
   const pack = withTaskSystem(params.pack, params.systemPrompt);
-  return assemblePresetMessages(framed, (id) =>
-    resolveWorldInfoMarker(pack, id),
+  const persona =
+    params.persona !== undefined ? params.persona : getActivePersona();
+  const dirCtx = persona
+    ? { persona: { name: persona.name, description: persona.description } }
+    : {};
+  return assemblePresetMessages(
+    framed,
+    (id) => {
+      if (id === PERSONA_DESCRIPTION_MARKER) {
+        const desc = persona?.description?.trim();
+        if (desc) return desc;
+        const name = persona?.name?.trim();
+        return name ? `姓名：${name}` : null;
+      }
+      return resolveWorldInfoMarker(pack, id);
+    },
+    (content) => expandIdentityDirectives(content, dirCtx).text,
   );
 }
 
@@ -72,6 +97,7 @@ function formatHistoryMessages(msgs: ChatMessage[]): string {
 export function frameMessagesWithPreset(
   preset: PresetPackage,
   messages: ChatMessage[],
+  persona?: PersonaDirective | null,
 ): ChatMessage[] {
   let splitAt = messages.length;
   for (let i = 0; i < messages.length; i++) {
@@ -112,6 +138,7 @@ export function frameMessagesWithPreset(
       turn,
       postTurn: [],
     },
+    persona,
   });
 
   return continuation.length > 0 ? [...framed, ...continuation] : framed;

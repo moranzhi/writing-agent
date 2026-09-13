@@ -7,6 +7,7 @@ import {
   wrapLlmForSession,
   type LlmTrackingRef,
 } from "../llm/preset-wrapper.js";
+import type { PersonaDirective } from "../persona/store.js";
 import type { ParsedWorkerSkill, SkillWorkerLlmBindings } from "./types.js";
 
 export type { LlmTrackingContext } from "../llm/token-tracker.js";
@@ -16,6 +17,7 @@ export function createLlmForProfileId(
   profileId: string,
   fallback: LlmProvider,
   trackingRef?: LlmTrackingRef,
+  getPersona?: () => PersonaDirective | null,
 ): LlmProvider {
   const profile = getApiProfile(profileId);
   if (!profile?.apiKey?.trim()) {
@@ -25,6 +27,8 @@ export function createLlmForProfileId(
   return wrapLlmForSession(
     new OpenAiCompatibleProvider(profileToLlmConfig(profile)),
     trackingRef,
+    undefined,
+    getPersona,
   );
 }
 
@@ -43,14 +47,17 @@ export function resolveWorkerLlmProvider(options: {
   slots: Record<string, unknown>;
   fallbackLlm: LlmProvider;
   trackingRef?: LlmTrackingRef;
+  getPersona?: () => PersonaDirective | null;
 }): LlmProvider {
-  const { worker, bindings, slots, fallbackLlm, trackingRef } = options;
+  const { worker, bindings, slots, fallbackLlm, trackingRef, getPersona } =
+    options;
 
   if (worker.llmProfileId?.trim()) {
     return createLlmForProfileId(
       worker.llmProfileId.trim(),
       fallbackLlm,
       trackingRef,
+      getPersona,
     );
   }
 
@@ -62,6 +69,7 @@ export function resolveWorkerLlmProvider(options: {
         workerBinding.byRole[roleId].trim(),
         fallbackLlm,
         trackingRef,
+        getPersona,
       );
     }
   }
@@ -71,6 +79,7 @@ export function resolveWorkerLlmProvider(options: {
       workerBinding.profileId.trim(),
       fallbackLlm,
       trackingRef,
+      getPersona,
     );
   }
 
@@ -79,6 +88,7 @@ export function resolveWorkerLlmProvider(options: {
       bindings.defaultProfileId.trim(),
       fallbackLlm,
       trackingRef,
+      getPersona,
     );
   }
 

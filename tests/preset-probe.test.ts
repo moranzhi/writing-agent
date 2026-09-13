@@ -52,7 +52,6 @@ describe("assemblePresetProbe", () => {
         `### 任务契约\n\n${PROBE_SYSTEM_PROMPT}\n\n### 试跑设定\n\n${DEFAULT_PROBE_CONTEXT.loreBefore}`,
       ],
       ["system", DEFAULT_PROBE_CONTEXT.history],
-      ["system", `### 本轮状态\n\n${DEFAULT_PROBE_CONTEXT.loreAfter}`],
       ["user", "我推开门。"],
       ["system", "PHI"],
     ]);

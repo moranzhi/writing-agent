@@ -5,12 +5,12 @@ import type { WorldInfoPack } from "./world-info-pack.js";
 
 /** 试跑窗口用的短契约，不是 play worker SKILL。 */
 export const PROBE_SYSTEM_PROMPT =
-  "试跑本条预设：根据已拼好的上下文写一轮短回复。产物是对白或叙述，对应本轮用户输入。";
+  "试跑本条预设：对本轮输入做忠实扩写。不增删情节，不另起冲突。";
 
 export const DEFAULT_PROBE_CONTEXT = {
-  loreBefore: "一座雨夜的港口旅馆。柜台点着油灯。",
-  history: "店员：今晚只剩阁楼那间。\n你：好。",
-  loreAfter: "时间：深夜。地点：旅馆大厅。",
+  loreBefore: "写作要求：对本轮输入做忠实扩写；只展开已给出的动作与信息，不另起情节。",
+  history: "扩写范围仅限本轮输入，勿补前因后果或无关对话。",
+  loreAfter: "",
   postTurn: "",
 };
 

@@ -6,6 +6,10 @@ import {
   listAllPresetEntries,
   listEnabledPresetEntries,
 } from "../src/preset/entries.js";
+import {
+  applyPresetGeneration,
+  normalizeGeneration,
+} from "../src/preset/generation.js";
 import { importSillyTavernPreset } from "../src/preset/importer.js";
 
 const samplePreset = {
@@ -168,5 +172,37 @@ describe("applyPresetEntryPatches", () => {
     expect(
       assemblePresetMessages(edited).some((m) => m.content === "hello main"),
     ).toBe(true);
+  });
+});
+
+describe("normalizeGeneration / applyPresetGeneration", () => {
+  it("keeps finite numbers and clears empty fields on replace", () => {
+    expect(
+      normalizeGeneration({
+        temperature: "0.9",
+        topP: "",
+        maxOutputTokens: 4096,
+        reasoningEffort: "  high  ",
+        verbosity: "   ",
+        stream: true,
+        seed: "not-a-number",
+      }),
+    ).toEqual({
+      temperature: 0.9,
+      maxOutputTokens: 4096,
+      reasoningEffort: "high",
+      stream: true,
+    });
+  });
+
+  it("replaces preset generation wholesale", () => {
+    const report = importSillyTavernPreset(samplePreset);
+    expect(report.preset.generation.temperature).toBe(1);
+    const next = applyPresetGeneration(report.preset, {
+      topP: 0.8,
+      maxOutputTokens: 2048,
+    });
+    expect(next.generation).toEqual({ topP: 0.8, maxOutputTokens: 2048 });
+    expect(next.prompts).toBe(report.preset.prompts);
   });
 });
