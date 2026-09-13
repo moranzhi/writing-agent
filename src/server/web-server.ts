@@ -70,6 +70,8 @@ const server = createServer(async (req, res) => {
           "GET /api/directors",
           "GET /api/modules",
           "GET /api/stats/tokens",
+          "GET /api/stats/pricing",
+          "POST /api/stats/pricing/sources",
         ],
       });
       return;
@@ -240,7 +242,7 @@ const server = createServer(async (req, res) => {
       }
 
       const messageActionMatch = sub.match(
-        /^\/messages\/([^/]+)\/(edit|refresh|variant|delete|restart)$/,
+        /^\/messages\/([^/]+)\/(edit|refresh|variant|delete|restart|compare)$/,
       );
       if (req.method === "POST" && messageActionMatch) {
         const messageId = decodeURIComponent(messageActionMatch[1]);
@@ -248,6 +250,7 @@ const server = createServer(async (req, res) => {
         const body = JSON.parse(await readBody(req).catch(() => "{}")) as {
           text?: string;
           direction?: string;
+          profileIds?: string[];
         };
         let view;
         try {
@@ -277,6 +280,17 @@ const server = createServer(async (req, res) => {
             view = await sessionManager.deleteMessage(sessionId, messageId);
           } else if (action === "restart") {
             view = await sessionManager.restartFromMessage(sessionId, messageId);
+          } else if (action === "compare") {
+            const profileIds = Array.isArray(body.profileIds)
+              ? body.profileIds.filter((x): x is string => typeof x === "string")
+              : [];
+            const job = await sessionManager.startModelCompare(
+              sessionId,
+              messageId,
+              profileIds,
+            );
+            json(res, 200, job);
+            return;
           } else {
             json(res, 400, { error: "未知 action" });
             return;
@@ -289,6 +303,39 @@ const server = createServer(async (req, res) => {
         }
         json(res, 200, view);
         return;
+      }
+
+      const compareJobMatch = sub.match(/^\/compare\/([^/]+)(?:\/(adopt))?$/);
+      if (compareJobMatch) {
+        const jobId = decodeURIComponent(compareJobMatch[1]);
+        const adopt = compareJobMatch[2] === "adopt";
+        try {
+          if (req.method === "GET" && !adopt) {
+            json(res, 200, sessionManager.getModelCompare(sessionId, jobId));
+            return;
+          }
+          if (req.method === "POST" && adopt) {
+            const body = JSON.parse(await readBody(req).catch(() => "{}")) as {
+              profileId?: string;
+            };
+            if (!body.profileId?.trim()) {
+              json(res, 400, { error: "缺少 profileId" });
+              return;
+            }
+            const view = await sessionManager.adoptModelCompare(
+              sessionId,
+              jobId,
+              body.profileId.trim(),
+            );
+            json(res, 200, view);
+            return;
+          }
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "对比操作失败",
+          });
+          return;
+        }
       }
 
       if (req.method === "POST" && sub === "/lifecycle") {
