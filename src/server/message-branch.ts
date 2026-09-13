@@ -215,6 +215,23 @@ export function isRefreshableMessage(msg: BranchableMessage): boolean {
   return kind === "worker_questions" || kind === "worker_output";
 }
 
+/** 与 refreshMessage 同一套门槛：类型对，且有 worker 快照或该条检查点。 */
+export function canAttemptRefresh(
+  msg: BranchableMessage,
+  opts: {
+    lastWorkerId?: string;
+    hasLastWorkerSnapshot: boolean;
+    hasMessageCheckpoint: boolean;
+  },
+): boolean {
+  if (!isRefreshableMessage(msg)) return false;
+  const workerId =
+    (typeof msg.actor === "string" && msg.actor.trim()) ||
+    opts.lastWorkerId?.trim();
+  if (!workerId) return false;
+  return opts.hasMessageCheckpoint || opts.hasLastWorkerSnapshot;
+}
+
 export function findPrecedingUserIndex(messages: BranchableMessage[], fromIndex: number): number {
   for (let i = fromIndex - 1; i >= 0; i--) {
     if (messages[i].role === "user") return i;

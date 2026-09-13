@@ -5,6 +5,8 @@ import {
   ensureBranchForEdit,
   recordPreMessageCheckpoint,
   switchBranchVariant,
+  canAttemptRefresh,
+  isRefreshableMessage,
 } from "../src/server/message-branch.js";
 import { createSession } from "../src/runtime/phase-machine.js";
 
@@ -60,5 +62,63 @@ describe("message-branch", () => {
     const branch = ensureBranchForEdit(state, messages, 0, state.preMessageCheckpoints[0]!);
     expect(branch.variants).toHaveLength(1);
     expect(branch.variants[0].messages[0].text).toBe("首句");
+  });
+});
+
+describe("canAttemptRefresh", () => {
+  const output = {
+    id: "w1",
+    role: "system" as const,
+    text: "场面",
+    createdAt: "1",
+    kind: "worker_output",
+    actor: "world-simulator",
+  };
+
+  it("rejects user bubbles", () => {
+    expect(
+      isRefreshableMessage({
+        id: "u1",
+        role: "user",
+        text: "行动",
+        createdAt: "1",
+        kind: "user_input",
+      }),
+    ).toBe(false);
+    expect(
+      canAttemptRefresh(
+        {
+          id: "u1",
+          role: "user",
+          text: "行动",
+          createdAt: "1",
+          kind: "user_input",
+        },
+        {
+          lastWorkerId: "world-simulator",
+          hasLastWorkerSnapshot: true,
+          hasMessageCheckpoint: true,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("allows worker output when a snapshot exists", () => {
+    expect(
+      canAttemptRefresh(output, {
+        lastWorkerId: "world-simulator",
+        hasLastWorkerSnapshot: true,
+        hasMessageCheckpoint: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects worker output with no snapshot and no checkpoint", () => {
+    expect(
+      canAttemptRefresh(output, {
+        hasLastWorkerSnapshot: false,
+        hasMessageCheckpoint: false,
+      }),
+    ).toBe(false);
   });
 });
