@@ -5,6 +5,7 @@
 
 import {
   applyRejectedGenerationField,
+  forceReasoningEffortNoneWhenTools,
   isToolsReasoningEffortConflictError,
   parseRejectedGenerationField,
 } from "./generation-compat.js";
@@ -186,7 +187,7 @@ async function postChat(
   const tried = new Set<string>();
 
   if (isToolsReasoningEffortConflictError(first.text, first.status)) {
-    retryBody.reasoning_effort = "none";
+    forceReasoningEffortNoneWhenTools(retryBody, config.model);
     tried.add("reasoning_effort_none");
     return postOnce(config, retryBody);
   }

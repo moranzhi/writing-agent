@@ -45,6 +45,20 @@ function toolCallsFromAccumulator(acc: ToolCallAccumulator): ParsedToolCall[] {
   return out;
 }
 
+/** DeepSeek `reasoning_content`；部分中转用 `reasoning` / `thinking` */
+function readReasoningDelta(row: Record<string, unknown>): string {
+  for (const key of ["reasoning_content", "reasoning", "thinking"] as const) {
+    const val = row[key];
+    if (typeof val === "string" && val) return val;
+  }
+  return "";
+}
+
+function readContentText(row: Record<string, unknown>): string {
+  const val = row.content;
+  return typeof val === "string" && val ? val : "";
+}
+
 /** 解析 OpenAI 兼容 SSE 流，累积 reasoning / content / tool_calls */
 export async function consumeOpenAiToolStream(
   body: ReadableStream<Uint8Array>,
@@ -91,19 +105,38 @@ export async function consumeOpenAiToolStream(
 
       const choice = (parsed.choices as unknown[])?.[0];
       if (!choice || typeof choice !== "object") continue;
-      const delta = (choice as Record<string, unknown>).delta;
-      if (!delta || typeof delta !== "object") continue;
-      const d = delta as Record<string, unknown>;
-
-      if (typeof d.reasoning_content === "string" && d.reasoning_content) {
-        reasoning += d.reasoning_content;
-        callbacks.onReasoningDelta?.(d.reasoning_content);
+      const row = choice as Record<string, unknown>;
+      const delta = row.delta;
+      const message = row.message;
+      if (delta && typeof delta === "object") {
+        const d = delta as Record<string, unknown>;
+        const think = readReasoningDelta(d);
+        if (think) {
+          reasoning += think;
+          callbacks.onReasoningDelta?.(think);
+        }
+        const chunk = readContentText(d);
+        if (chunk) {
+          content += chunk;
+          callbacks.onContentDelta?.(chunk);
+        }
+        if (d.tool_calls) applyToolCallDelta(toolAcc, d.tool_calls);
       }
-      if (typeof d.content === "string" && d.content) {
-        content += d.content;
-        callbacks.onContentDelta?.(d.content);
+      // 部分中转最后一帧把全文放在 message 而非 delta
+      if (message && typeof message === "object" && !content) {
+        const msg = message as Record<string, unknown>;
+        const think = readReasoningDelta(msg);
+        if (think && !reasoning) {
+          reasoning = think;
+          callbacks.onReasoningDelta?.(think);
+        }
+        const full = readContentText(msg);
+        if (full) {
+          content = full;
+          callbacks.onContentDelta?.(full);
+        }
+        if (msg.tool_calls) applyToolCallDelta(toolAcc, msg.tool_calls);
       }
-      if (d.tool_calls) applyToolCallDelta(toolAcc, d.tool_calls);
     }
   }
 

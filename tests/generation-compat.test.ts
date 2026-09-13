@@ -3,6 +3,7 @@ import {
   applyOpenAiGeneration,
   applyRejectedGenerationField,
   classifyChatModel,
+  classifyGlmThinking,
   fetchWithGenerationCompat,
   forceReasoningEffortNoneWhenTools,
   isToolsReasoningEffortConflictError,
@@ -77,6 +78,19 @@ describe("classifyChatModel", () => {
   });
 });
 
+describe("classifyGlmThinking", () => {
+  it("classifies glm generations", () => {
+    expect(classifyGlmThinking("glm-5.3")).toBe("effort_lhm_always_on");
+    expect(classifyGlmThinking("ZHIPU/GLM-5.3-Flash")).toBe(
+      "effort_lhm_always_on",
+    );
+    expect(classifyGlmThinking("glm-5.2")).toBe("effort_full");
+    expect(classifyGlmThinking("glm-5.1")).toBe("thinking_only");
+    expect(classifyGlmThinking("glm-4.7")).toBe("thinking_only");
+    expect(classifyGlmThinking("gpt-5")).toBe("none");
+  });
+});
+
 describe("applyOpenAiGeneration", () => {
   it("does not send ST extras or auto sentinels on a chat model", () => {
     const body: Record<string, unknown> = { model: "deepseek-v4-pro" };
@@ -102,11 +116,30 @@ describe("applyOpenAiGeneration", () => {
     expect(body.max_tokens).toBeUndefined();
     expect(body.max_completion_tokens).toBe(60000);
   });
+
+  it("maps glm-5.3 none/medium to low/high and always enables thinking", () => {
+    const noneBody: Record<string, unknown> = { model: "glm-5.3" };
+    applyOpenAiGeneration(noneBody, { reasoningEffort: "none" }, "glm-5.3");
+    expect(noneBody.thinking).toEqual({ type: "enabled" });
+    expect(noneBody.reasoning_effort).toBe("low");
+
+    const midBody: Record<string, unknown> = { model: "glm-5.3" };
+    applyOpenAiGeneration(midBody, { reasoningEffort: "medium" }, "glm-5.3");
+    expect(midBody.reasoning_effort).toBe("high");
+  });
+
+  it("uses thinking only for older glm and omits reasoning_effort", () => {
+    const body: Record<string, unknown> = { model: "glm-5.1" };
+    applyOpenAiGeneration(body, { reasoningEffort: "high" }, "glm-5.1");
+    expect(body.thinking).toEqual({ type: "enabled" });
+    expect(body.reasoning_effort).toBeUndefined();
+  });
 });
 
 describe("forceReasoningEffortNoneWhenTools", () => {
-  it("forces none when tools are present", () => {
+  it("forces none when tools are present on non-glm", () => {
     const body: Record<string, unknown> = {
+      model: "gpt-5.6-luna",
       tools: [{ type: "function", function: { name: "x" } }],
       reasoning_effort: "high",
     };
@@ -114,12 +147,35 @@ describe("forceReasoningEffortNoneWhenTools", () => {
     expect(body.reasoning_effort).toBe("none");
   });
 
-  it("sets none even when effort was omitted", () => {
+  it("sets none even when effort was omitted on non-glm", () => {
     const body: Record<string, unknown> = {
+      model: "gpt-4o",
       tools: [{ type: "function", function: { name: "x" } }],
     };
     forceReasoningEffortNoneWhenTools(body);
     expect(body.reasoning_effort).toBe("none");
+  });
+
+  it("keeps a legal glm-5.3 effort instead of none", () => {
+    const body: Record<string, unknown> = {
+      model: "glm-5.3",
+      tools: [{ type: "function", function: { name: "x" } }],
+      reasoning_effort: "high",
+    };
+    forceReasoningEffortNoneWhenTools(body);
+    expect(body.reasoning_effort).toBe("high");
+    expect(body.thinking).toEqual({ type: "enabled" });
+  });
+
+  it("disables thinking for older glm tools calls", () => {
+    const body: Record<string, unknown> = {
+      model: "glm-5.1",
+      tools: [{ type: "function", function: { name: "x" } }],
+      reasoning_effort: "high",
+    };
+    forceReasoningEffortNoneWhenTools(body);
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.thinking).toEqual({ type: "disabled" });
   });
 
   it("leaves body alone without tools", () => {
@@ -162,7 +218,8 @@ describe("parseRejectedGenerationField", () => {
       parseRejectedGenerationField(
         JSON.stringify({
           error: {
-            message: "Unsupported parameter: 'temperature' is not supported with this model.",
+            message:
+              "Unsupported parameter: 'temperature' is not supported with this model.",
             param: "temperature",
           },
         }),
@@ -196,9 +253,9 @@ describe("applyRejectedGenerationField", () => {
   it("renames max_completion_tokens to max_tokens once", () => {
     const body: Record<string, unknown> = { max_completion_tokens: 100 };
     const tried = new Set<string>();
-    expect(applyRejectedGenerationField(body, "max_completion_tokens", tried)).toBe(
-      true,
-    );
+    expect(
+      applyRejectedGenerationField(body, "max_completion_tokens", tried),
+    ).toBe(true);
     expect(body.max_tokens).toBe(100);
     expect(body.max_completion_tokens).toBeUndefined();
     expect(applyRejectedGenerationField(body, "max_tokens", tried)).toBe(true);
@@ -206,13 +263,16 @@ describe("applyRejectedGenerationField", () => {
     expect(body.max_tokens).toBeUndefined();
   });
 
-  it("sets reasoning_effort to none when tools are present", () => {
+  it("sets reasoning_effort to none when tools are present on non-glm", () => {
     const body: Record<string, unknown> = {
+      model: "gpt-5.6-luna",
       tools: [{ type: "function" }],
       reasoning_effort: "high",
     };
     const tried = new Set<string>();
-    expect(applyRejectedGenerationField(body, "reasoning_effort", tried)).toBe(true);
+    expect(
+      applyRejectedGenerationField(body, "reasoning_effort", tried),
+    ).toBe(true);
     expect(body.reasoning_effort).toBe("none");
   });
 });
@@ -311,6 +371,7 @@ describe("buildRequestBody", () => {
       generation: { temperature: 1 },
     });
     expect(body.reasoning_effort).toBe("high");
+    expect(body.thinking).toEqual({ type: "enabled" });
   });
 
   it("lets generation reasoningEffort override the profile default", () => {
@@ -326,7 +387,7 @@ describe("buildRequestBody", () => {
     expect(body.reasoning_effort).toBe("low");
   });
 
-  it("forces reasoning_effort none when tools are attached", () => {
+  it("forces reasoning_effort none when tools are attached on non-glm", () => {
     const config: LlmConfig = {
       baseUrl: "https://example.test/v1",
       apiKey: "k",
@@ -343,6 +404,25 @@ describe("buildRequestBody", () => {
     });
     expect(body.reasoning_effort).toBe("none");
     expect(body.tools).toHaveLength(1);
+  });
+
+  it("keeps glm-5.3 effort when tools are attached", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      model: "glm-5.3",
+      reasoningEffort: "max",
+    };
+    const body = buildRequestBody(config, messages, {
+      tools: [
+        {
+          type: "function",
+          function: { name: "run_worker", parameters: { type: "object" } },
+        },
+      ],
+    });
+    expect(body.reasoning_effort).toBe("max");
+    expect(body.thinking).toEqual({ type: "enabled" });
   });
 
   it("does not forward top_k from an imported ST preset", () => {

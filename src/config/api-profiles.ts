@@ -18,10 +18,10 @@ export type ApiProfile = {
   apiKey: string;
   model: string;
   /**
-   * 该配置默认思考强度（写入请求的 reasoning_effort）。
-   * 省略 / auto = 不发送；none = 显式关闭；带 tools 的请求会强制 none。
-   * 探测永远用 low，不受此项影响。
-   */
+ * 该配置默认思考强度（按型号写入 reasoning_effort / thinking）。
+ * 省略 / auto = 不发送；none = 关闭或映射为最轻档；带 tools 时非 GLM 强制 none，GLM-5.3 保留合法档。
+ * 探测永远用 low，不受此项影响。
+ */
   reasoningEffort?: string;
   createdAt: string;
   updatedAt: string;

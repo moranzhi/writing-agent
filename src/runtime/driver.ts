@@ -126,7 +126,8 @@ export function createLocalLlmDriver(llm: LlmProvider): AgentDriver {
         emitThinkingDone(input, result.reasoning);
 
         if (result.toolCalls.length === 0) {
-          const content = result.content?.trim() ?? "";
+          const content =
+            result.content?.trim() || result.reasoning?.trim() || "";
           if (content) {
             return { iterations: iteration, stop: { kind: "text", content } };
           }

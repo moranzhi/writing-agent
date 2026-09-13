@@ -6,8 +6,9 @@ import type { GenerationParameters } from "../types/preset.js";
  * - top_k、min_p、repetition_penalty 不是官方 Chat Completions 字段，默认不发
  * - 推理模型去掉 temperature / top_p / penalty
  * - o 系列与 gpt-5 用 max_completion_tokens
- * - 带 tools 时强制 reasoning_effort=none（gpt-5.6-luna 等网关：省略字段仍会注入默认 effort）
- * - 仍 400 时按错误信息剥掉不支持字段再试；tools+reasoning 冲突则改 none 再试
+ * - GLM：按型号映射 thinking / reasoning_effort（5.3 拒收 none；旧版拒收 effort）
+ * - 带 tools 时：非 GLM 强制 reasoning_effort=none（gpt-5.6-luna 等）；GLM-5.3 保留合法档
+ * - 仍 400 时按错误信息剥掉不支持字段再试；tools+reasoning 冲突则按型号改写再试
  */
 
 const REASONING_EFFORT_VALUES = [
@@ -29,6 +30,17 @@ const REASONING_EFFORT_ALIASES: Record<string, ReasoningEffort> = {
 const VERBOSITY_VALUES = ["low", "medium", "high"] as const;
 type Verbosity = (typeof VERBOSITY_VALUES)[number];
 
+/** GLM 思考参数形态（智谱 / 中转常见型号） */
+export type GlmThinkingKind =
+  /** 非 GLM */
+  | "none"
+  /** 仅 thinking.type，不发 reasoning_effort（glm-4.5/4.6/4.7/5/5.1 等） */
+  | "thinking_only"
+  /** thinking + 完整 effort 枚举（glm-5.2） */
+  | "effort_full"
+  /** 强制思考；effort 仅 low/high/max（glm-5.3） */
+  | "effort_lhm_always_on";
+
 export const STRIPPABLE_GENERATION_FIELDS = new Set([
   "temperature",
   "top_p",
@@ -40,6 +52,7 @@ export const STRIPPABLE_GENERATION_FIELDS = new Set([
   "seed",
   "n",
   "reasoning_effort",
+  "thinking",
   "verbosity",
   "max_tokens",
   "max_completion_tokens",
@@ -80,6 +93,75 @@ export function classifyChatModel(model: string): ChatModelCompat {
     useMaxCompletionTokens: isOSeries || isGpt5,
     supportsVerbosity: isGpt5,
   };
+}
+
+/**
+ * 识别 GLM 思考 API 形态。
+ * 名称含 glm 即走 GLM 路径；未知子版默认 thinking_only（不发 effort，避免 400）。
+ */
+export function classifyGlmThinking(model: string): GlmThinkingKind {
+  const id = modelLeaf(model);
+  if (!id.includes("glm")) return "none";
+  // 5.3 / 5.3-flash：不可 disabled，effort ∈ {low,high,max}
+  if (/glm-?5\.3/.test(id)) return "effort_lhm_always_on";
+  // 5.2：可 disabled；effort 枚举较全
+  if (/glm-?5\.2/.test(id)) return "effort_full";
+  return "thinking_only";
+}
+
+function mapGlm53Effort(
+  effort: ReasoningEffort,
+): "low" | "high" | "max" {
+  switch (effort) {
+    case "none":
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+    case "high":
+      return "high";
+    case "xhigh":
+    case "max":
+      return "max";
+  }
+}
+
+/** 把配置的 effort 落到当前模型可接受的 body 字段。 */
+function applyReasoningToBody(
+  body: Record<string, unknown>,
+  model: string,
+  effort: ReasoningEffort | undefined,
+): void {
+  if (effort === undefined) return;
+
+  const glm = classifyGlmThinking(model);
+  if (glm === "none") {
+    body.reasoning_effort = effort;
+    return;
+  }
+
+  if (glm === "effort_lhm_always_on") {
+    body.thinking = { type: "enabled" };
+    body.reasoning_effort = mapGlm53Effort(effort);
+    return;
+  }
+
+  if (glm === "effort_full") {
+    if (effort === "none" || effort === "minimal") {
+      body.thinking = { type: "disabled" };
+      body.reasoning_effort = "none";
+      return;
+    }
+    body.thinking = { type: "enabled" };
+    body.reasoning_effort = effort;
+    return;
+  }
+
+  // thinking_only：旧 GLM 拒收 reasoning_effort
+  body.thinking = {
+    type: effort === "none" || effort === "minimal" ? "disabled" : "enabled",
+  };
+  delete body.reasoning_effort;
 }
 
 export function sanitizeReasoningEffort(
@@ -148,9 +230,7 @@ export function applyOpenAiGeneration(
   const reasoningEffort =
     sanitizeReasoningEffort(gen.reasoningEffort) ??
     sanitizeReasoningEffort(defaults?.reasoningEffort);
-  if (reasoningEffort !== undefined) {
-    body.reasoning_effort = reasoningEffort;
-  }
+  applyReasoningToBody(body, model, reasoningEffort);
 
   const verbosity = sanitizeVerbosity(gen.verbosity);
   if (verbosity !== undefined && supportsVerbosity) {
@@ -158,12 +238,36 @@ export function applyOpenAiGeneration(
   }
 }
 
-/** chat/completions + function tools 时须显式 none，否则网关可能注入默认 effort 并 400。 */
+/**
+ * 带 function tools 时改写思考参数。
+ * - 非 GLM（如 gpt-5.6-luna）：须显式 reasoning_effort=none
+ * - GLM-5.3：不能 none，保留/压到合法档（默认 low）
+ * - GLM-5.2 / 旧版：thinking disabled，去掉 effort
+ */
 export function forceReasoningEffortNoneWhenTools(
   body: Record<string, unknown>,
+  model?: string,
 ): void {
   const tools = body.tools;
   if (!Array.isArray(tools) || tools.length === 0) return;
+
+  const modelId =
+    (typeof model === "string" && model) ||
+    (typeof body.model === "string" ? body.model : "");
+  const glm = classifyGlmThinking(modelId);
+
+  if (glm === "effort_lhm_always_on") {
+    const current = sanitizeReasoningEffort(body.reasoning_effort) ?? "low";
+    body.thinking = { type: "enabled" };
+    body.reasoning_effort = mapGlm53Effort(current);
+    return;
+  }
+  if (glm === "effort_full" || glm === "thinking_only") {
+    body.thinking = { type: "disabled" };
+    delete body.reasoning_effort;
+    return;
+  }
+
   body.reasoning_effort = "none";
 }
 
@@ -279,23 +383,31 @@ export function applyRejectedGenerationField(
     return true;
   }
 
-  // tools + reasoning_effort 冲突：删字段不够，须显式 none
+  // tools + reasoning_effort 冲突：按型号改写（非 GLM → none；GLM 另处理）
   if (
     field === "reasoning_effort" &&
     Array.isArray(body.tools) &&
     body.tools.length > 0 &&
-    body.reasoning_effort !== "none" &&
     !tried.has("reasoning_effort_none")
   ) {
-    body.reasoning_effort = "none";
+    const before = snapshotThinkingFields(body);
+    forceReasoningEffortNoneWhenTools(body);
     tried.add("reasoning_effort_none");
-    return true;
+    if (snapshotThinkingFields(body) !== before) return true;
+    // 已是目标态仍报错 → 继续往下删字段
   }
 
   if (!(field in body)) return false;
   delete body[field];
   tried.add(field);
   return true;
+}
+
+function snapshotThinkingFields(body: Record<string, unknown>): string {
+  return JSON.stringify({
+    reasoning_effort: body.reasoning_effort ?? null,
+    thinking: body.thinking ?? null,
+  });
 }
 
 function applyToolsReasoningEffortNone(
@@ -305,12 +417,13 @@ function applyToolsReasoningEffortNone(
   if (
     !Array.isArray(body.tools) ||
     body.tools.length === 0 ||
-    body.reasoning_effort === "none" ||
     tried.has("reasoning_effort_none")
   ) {
     return false;
   }
-  body.reasoning_effort = "none";
+  const before = snapshotThinkingFields(body);
+  forceReasoningEffortNoneWhenTools(body);
+  if (snapshotThinkingFields(body) === before) return false;
   tried.add("reasoning_effort_none");
   return true;
 }

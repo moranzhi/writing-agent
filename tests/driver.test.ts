@@ -41,6 +41,37 @@ describe("local LLM driver", () => {
     expect(run.stop).toEqual({ kind: "text", content: "done" });
   });
 
+  it("uses reasoning as the story when tools return no content", async () => {
+    const llm = {
+      complete: async () => ({ content: "" }),
+      completeWithTools: async () => ({
+        content: null,
+        toolCalls: [],
+        reasoning: "门开了。她把耳机摘下，问：「你在干什么？」",
+      }),
+    };
+    const driver = createLocalLlmDriver(llm as never);
+    const run = await driver.run({
+      system: "sys",
+      messages: [{ role: "user", content: "go" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "chance",
+            description: "roll",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      handleStep: () => ({ kind: "continue", results: [] }),
+    });
+    expect(run.stop).toEqual({
+      kind: "text",
+      content: "门开了。她把耳机摘下，问：「你在干什么？」",
+    });
+  });
+
   it("stops when handleStep concludes, without another model call", async () => {
     const llm = new MockLlmProvider([
       createMockToolCall("run_worker", { workerId: "x" }, "t1"),

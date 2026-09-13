@@ -1,4 +1,5 @@
 import { loadAppSettings } from "../config/settings.js";
+import type { PersonaDirective } from "../persona/store.js";
 import { frameMessagesWithPreset } from "../preset/play-frame.js";
 import { resolveActivePreset } from "../preset/store.js";
 import type { PresetPackage } from "../types/preset.js";
@@ -30,11 +31,12 @@ export function wrapLlmForSession(
   inner: LlmProvider,
   trackingRef?: LlmTrackingRef,
   getPreset: () => PresetPackage | null = readActivePreset,
+  getPersona?: () => PersonaDirective | null,
 ): LlmProvider {
   const tracked = trackingRef
     ? new TokenTrackingProvider(inner, () => trackingRef.current)
     : inner;
-  return new PresetLlmProvider(tracked, getPreset);
+  return new PresetLlmProvider(tracked, getPreset, getPersona);
 }
 
 /** 所有 LLM 请求：preset 夹心 + 生成参数。无选用预设则原样转发。 */
@@ -42,6 +44,7 @@ export class PresetLlmProvider implements LlmProvider {
   constructor(
     private readonly inner: LlmProvider,
     private readonly getPreset: () => PresetPackage | null,
+    private readonly getPersona?: () => PersonaDirective | null,
   ) {}
 
   private prepare(
@@ -50,8 +53,9 @@ export class PresetLlmProvider implements LlmProvider {
   ): { messages: ChatMessage[]; options: CompleteOptions | undefined } {
     const preset = this.getPreset();
     if (!preset) return { messages, options };
+    const persona = this.getPersona ? this.getPersona() : undefined;
     return {
-      messages: frameMessagesWithPreset(preset, messages),
+      messages: frameMessagesWithPreset(preset, messages, persona),
       options: {
         ...options,
         generation: options?.generation ?? preset.generation,

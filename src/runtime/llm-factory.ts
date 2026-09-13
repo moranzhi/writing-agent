@@ -9,6 +9,7 @@ import {
   OpenAiCompatibleProvider,
   type LlmProvider,
 } from "../llm/client.js";
+import type { PersonaDirective } from "../persona/store.js";
 import type { PresetPackage } from "../types/preset.js";
 import {
   wrapLlmForSession,
@@ -43,8 +44,14 @@ function buildInnerLlm(): LlmProvider {
 /** Web/CLI 默认 LLM：本地 profile + 全局 preset + token 统计 */
 export function createDefaultMainAgentLlm(
   trackingRef?: LlmTrackingRef,
+  getPersona?: () => PersonaDirective | null,
 ): LlmProvider {
-  return wrapLlmForSession(buildInnerLlm(), trackingRef);
+  return wrapLlmForSession(
+    buildInnerLlm(),
+    trackingRef,
+    undefined,
+    getPersona,
+  );
 }
 
 export function hasRealLlmConfig(): boolean {
@@ -60,8 +67,9 @@ export function isMockLlm(_llm: LlmProvider): boolean {
 /** 设置页切换 profile / preset 后调用，返回新 LLM 实例 */
 export function reloadDefaultMainAgentLlm(
   trackingRef?: LlmTrackingRef,
+  getPersona?: () => PersonaDirective | null,
 ): LlmProvider {
-  return createDefaultMainAgentLlm(trackingRef);
+  return createDefaultMainAgentLlm(trackingRef, getPersona);
 }
 
 /** 试跑指定预设：生成参数跟这条预设走，不依赖当前选用。 */

@@ -136,4 +136,30 @@ describe("wrapLlmForSession", () => {
     );
     expect(ctx.pendingContextTrace?.messages).toEqual(received[0].messages);
   });
+
+  it("uses getPersona so @玩家 stays @玩家 during creation", async () => {
+    const preset: PresetPackage = {
+      ...samplePreset,
+      prompts: [
+        {
+          id: "sys",
+          name: "系统",
+          enabled: true,
+          role: "system",
+          content: "称呼 @玩家",
+          marker: false,
+          sourceIdentifier: "sys",
+        },
+      ],
+    };
+    const { provider, received } = recordingProvider();
+    const llm = wrapLlmForSession(
+      provider,
+      undefined,
+      () => preset,
+      () => ({ name: "@玩家", description: "占位" }),
+    );
+    await llm.complete([{ role: "user", content: "TASK" }]);
+    expect(received[0].messages[0].content).toBe("称呼 @玩家");
+  });
 });

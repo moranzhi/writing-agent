@@ -148,8 +148,8 @@ export function buildRequestBody(
   applyOpenAiGeneration(body, options?.generation ?? {}, config.model, {
     reasoningEffort: config.reasoningEffort,
   });
-  // 对齐 imyai：带 tools 时强制 none（省略字段网关仍可能注入默认 effort）
-  forceReasoningEffortNoneWhenTools(body);
+  // 对齐 imyai：带 tools 时按型号改写思考参数（非 GLM 强制 none）
+  forceReasoningEffortNoneWhenTools(body, config.model);
 
   if (options?.responseFormat === "json_object") {
     body.response_format = { type: "json_object" };
@@ -231,10 +231,13 @@ function extractMessageParts(message: Record<string, unknown> | undefined): {
       : rawContent == null
         ? null
         : "";
-  const reasoning =
-    typeof message.reasoning_content === "string"
-      ? message.reasoning_content.trim()
-      : undefined;
+  const reasoningRaw =
+    (typeof message.reasoning_content === "string" &&
+      message.reasoning_content.trim()) ||
+    (typeof message.reasoning === "string" && message.reasoning.trim()) ||
+    (typeof message.thinking === "string" && message.thinking.trim()) ||
+    "";
+  const reasoning = reasoningRaw || undefined;
 
   const toolCalls: ParsedToolCall[] = [];
   const rawCalls = message.tool_calls;
@@ -422,8 +425,11 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     if (!parts.content && parts.toolCalls.length === 0 && !parts.reasoning) {
       throw new Error("LLM stream returned empty content and no tool calls");
     }
+    const content =
+      parts.content ??
+      (parts.toolCalls.length === 0 ? parts.reasoning || null : null);
     return {
-      content: parts.content,
+      content,
       toolCalls: parts.toolCalls,
       reasoning: parts.reasoning || undefined,
       usage: parts.usage,
