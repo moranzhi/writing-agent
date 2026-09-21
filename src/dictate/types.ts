@@ -33,17 +33,22 @@ export function isAllowedProductTag(tag: string): boolean {
 /**
  * 未显式给 order 时的默认相对序。
  * 越稳定/重要越靠前（更负）；越常改越靠后（更正）。
+ * 可增殖拆分 tag（基名#槽）按基名归类。
  */
 export function defaultDictateOrder(tag: string): number {
   const t = tag.trim();
-  if (t === "用户.需求") return -40;
-  if (t === "设计.变量目录" || t === "设计.变量映射") return -25;
-  if (t === "设计.模仿范例" || t === "设计.模仿要点") return -28;
-  if (/美学|纲领|禁忌|示例|模仿/.test(t)) return -30;
-  if (/文风|叙事指南|篇幅|结构/.test(t)) return -20;
-  if (/短文集|短文\./.test(t)) return 10;
-  if (/正文组成|回复格式/.test(t)) return 0;
-  if (/开场白/.test(t)) return 20;
+  const family = t.includes("#") ? t.slice(0, t.indexOf("#")).trim() : t;
+  if (family === "用户.需求" || t === "用户.需求") return -40;
+  if (family === "设计.变量目录" || family === "设计.变量映射") return -25;
+  if (family === "设计.模仿范例" || family === "设计.模仿要点") return -28;
+  if (/美学|纲领|禁忌|示例|模仿/.test(family)) return -30;
+  if (/主角设定/.test(family)) return -26;
+  if (/文风|叙事指南|故事推进|篇幅|结构/.test(family)) return -20;
+  if (/生成规则/.test(family)) return -6;
+  if (/具体实例/.test(family)) return -4;
+  if (/短文集|短文\./.test(family)) return 10;
+  if (/正文组成|回复格式/.test(family)) return 0;
+  if (/开场白/.test(family)) return 20;
   return 0;
 }
 

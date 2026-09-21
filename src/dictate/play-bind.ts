@@ -1,5 +1,5 @@
 /**
- * Boss 直聘式 · 落档/开玩时自动把产物 tag 挂到游玩 worker。
+ * 对话落盘 · 落档/开玩时自动把产物 tag 挂到游玩 worker。
  * 只做「固定上下文绑定」；变量清单、可见性、分档映射仍靠对话产出，此处不发明。
  */
 import type { Blackboard } from "../blackboard/blackboard.js";
@@ -59,7 +59,7 @@ const SKIP_BIND_TAGS = new Set([
 
 /** 偏文风/呈现：有叙事转述时挂转述；否则仍挂主世界层 */
 const STYLE_TAG_RE =
-  /叙事指南|文风|美学|纲领|禁忌|示例|模仿|正文组成|回复格式|监控栏|篇幅|结构/;
+  /叙事指南|故事推进|文风|美学|纲领|禁忌|示例|模仿|正文组成|回复格式|监控栏|篇幅|结构/;
 
 /** 这些配方开玩时刚需叙事转述（主世界出内容、转述出文风） */
 const RECIPES_REQUIRE_NARRATOR = new Set(["文本生成器"]);
@@ -85,7 +85,7 @@ function shouldSkipBindTag(tag: string): boolean {
   return false;
 }
 
-/** 从黑板收集 Boss 直聘产物（有正文的 用户.* / 设计.*） */
+/** 从黑板收集对话落盘产物（有正文的 用户.* / 设计.*） */
 export function collectDictateBindProducts(board: Blackboard): DictateProduct[] {
   const products: DictateProduct[] = [];
   for (const e of board.listTagIndex()) {
@@ -162,7 +162,7 @@ function buildGmInserts(params: {
         o++,
         p.tag,
         "full",
-        `Boss直聘固定产物〔order=${effectiveDictateOrder(p)}〕`,
+        `对话落盘固定产物〔order=${effectiveDictateOrder(p)}〕`,
       ),
     );
   }
@@ -278,7 +278,7 @@ export function buildDictateContextOrder(params: {
 
   return renumberContextOrder({
     schema: CONTEXT_ORDER_SCHEMA,
-    brief: "Boss直聘落档自动挂载：固定产物 → 对话.历史 → 已有真值/投影 → 本轮输入",
+    brief: "对话落盘落档自动挂载：固定产物 → 对话.历史 → 已有真值/投影 → 本轮输入",
     play_slots: params.playSlots,
     slots,
   });
@@ -325,7 +325,7 @@ export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBin
     : JSON.stringify(
         {
           play_slots: playSlots,
-          brief: "Boss直聘落档自动生成",
+          brief: "对话落盘落档自动生成",
         },
         null,
         2,
@@ -339,14 +339,14 @@ export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBin
     }
     row = parsed as Record<string, unknown>;
   } catch {
-    row = { play_slots: playSlots, brief: "Boss直聘落档自动生成" };
+    row = { play_slots: playSlots, brief: "对话落盘落档自动生成" };
   }
   row.play_slots = playSlots;
   if (playSlots.narrator) {
     row.brief =
       typeof row.brief === "string" && String(row.brief).includes("转述")
         ? row.brief
-        : "Boss直聘：主世界出内容，叙事转述出文风";
+        : "对话落盘：主世界出内容，叙事转述出文风";
   }
   const withSlots = JSON.stringify(row, null, 2);
   const workerSetJson = mergeContextOrderIntoWorkerSetJson(withSlots, contextOrder);

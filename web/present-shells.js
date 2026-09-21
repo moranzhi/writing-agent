@@ -277,16 +277,7 @@ export function renderPresentShellHtml(packet, esc, opts = {}) {
     typeof tweaks.tone_chrome === "string" && tweaks.tone_chrome.trim()
       ? tweaks.tone_chrome.trim()
       : "default";
-  if (opts.applyUserChrome !== false) {
-    try {
-      const pref = document.documentElement.getAttribute("data-present-chrome");
-      if (pref === "messenger" || pref === "book" || pref === "terminal") {
-        tone = pref;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
+  // 用户「选壳」菜单已移除；气质跟呈现壳 / tweaks 本身，不再读全局 data-present-chrome
 
   const blocks = packet.blocks ?? {};
   const regions = shellDefaultRegions(shell);

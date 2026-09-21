@@ -16,7 +16,7 @@ import {
   buildContextTrace,
   type LlmContextTrace,
 } from "../types/context-trace.js";
-import { debugLog, labelCaller, labelLlmMode, labelTool } from "../log.js";
+import { loggedLlmRequest } from "./request-log.js";
 
 export type LlmTrackingContext = {
   sessionId?: string;
@@ -73,54 +73,6 @@ function recordUsage(
   ctx.pendingUsage = toMessageTokenUsage(record);
 }
 
-function summarizeComplete(result: CompleteResult): string {
-  const bits = [
-    result.model ? `模型=${result.model}` : "",
-    `思维链=${result.reasoning?.trim().length ?? 0}字`,
-    `正文=${result.content?.length ?? 0}字`,
-  ];
-  if (result.usage) {
-    bits.push(`用量=${result.usage.promptTokens}+${result.usage.completionTokens}`);
-  }
-  return bits.filter(Boolean).join(" ");
-}
-
-function summarizeTools(result: CompleteWithToolsResult): string {
-  const tools =
-    result.toolCalls.map((t) => labelTool(t.name)).join("、") || "无";
-  const bits = [
-    result.model ? `模型=${result.model}` : "",
-    `思维链=${result.reasoning?.trim().length ?? 0}字`,
-    `正文=${result.content?.length ?? 0}字`,
-    `工具=${tools}`,
-  ];
-  if (result.usage) {
-    bits.push(`用量=${result.usage.promptTokens}+${result.usage.completionTokens}`);
-  }
-  return bits.filter(Boolean).join(" ");
-}
-
-async function loggedLlm<T>(
-  kind: string,
-  caller: string | undefined,
-  run: () => Promise<T>,
-  summarize: (result: T) => string,
-): Promise<T> {
-  const who = labelCaller(caller);
-  const mode = labelLlmMode(kind);
-  const t0 = Date.now();
-  debugLog("llm", `开始 ${who} · ${mode}`);
-  try {
-    const result = await run();
-    debugLog("llm", `结束 ${who} · ${mode} ${Date.now() - t0}毫秒 ${summarize(result)}`);
-    return result;
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    debugLog("llm", `失败 ${who} · ${mode} ${Date.now() - t0}毫秒 ${detail.slice(0, 160)}`);
-    throw err;
-  }
-}
-
 export class TokenTrackingProvider implements LlmProvider {
   constructor(
     private readonly inner: LlmProvider,
@@ -131,9 +83,13 @@ export class TokenTrackingProvider implements LlmProvider {
     messages: Parameters<LlmProvider["complete"]>[0],
     options?: CompleteOptions,
   ): Promise<CompleteResult> {
-    return loggedLlm(
-      "complete",
-      options?.caller,
+    return loggedLlmRequest(
+      {
+        kind: "complete",
+        caller: options?.caller,
+        label: options?.label,
+        messages,
+      },
       async () => {
         const result = await this.inner.complete(messages, options);
         const ctx = this.getContext();
@@ -150,7 +106,6 @@ export class TokenTrackingProvider implements LlmProvider {
         }
         return result;
       },
-      summarizeComplete,
     );
   }
 
@@ -166,9 +121,13 @@ export class TokenTrackingProvider implements LlmProvider {
       if (result.content) callbacks.onContentDelta?.(result.content);
       return result;
     }
-    return loggedLlm(
-      "stream",
-      options?.caller,
+    return loggedLlmRequest(
+      {
+        kind: "stream",
+        caller: options?.caller,
+        label: options?.label,
+        messages,
+      },
       async () => {
         let reasoningBuf = "";
         const result = await inner.completeStream!(messages, options, {
@@ -194,7 +153,6 @@ export class TokenTrackingProvider implements LlmProvider {
         }
         return result;
       },
-      summarizeComplete,
     );
   }
 
@@ -202,9 +160,14 @@ export class TokenTrackingProvider implements LlmProvider {
     messages: Parameters<LlmProvider["completeWithTools"]>[0],
     options: CompleteWithToolsOptions,
   ): Promise<CompleteWithToolsResult> {
-    return loggedLlm(
-      "tools",
-      options.caller,
+    return loggedLlmRequest(
+      {
+        kind: "tools",
+        caller: options.caller,
+        label: options.label,
+        messages,
+        tools: options.tools,
+      },
       async () => {
         const result = await this.inner.completeWithTools(messages, options);
         const ctx = this.getContext();
@@ -221,7 +184,6 @@ export class TokenTrackingProvider implements LlmProvider {
         }
         return result;
       },
-      summarizeTools,
     );
   }
 
@@ -234,9 +196,14 @@ export class TokenTrackingProvider implements LlmProvider {
     if (!inner.completeWithToolsStream) {
       return this.completeWithTools(messages, options);
     }
-    return loggedLlm(
-      "tools-stream",
-      options.caller,
+    return loggedLlmRequest(
+      {
+        kind: "tools-stream",
+        caller: options.caller,
+        label: options.label,
+        messages,
+        tools: options.tools,
+      },
       async () => {
         let reasoningBuf = "";
         const result = await inner.completeWithToolsStream!(messages, options, {
@@ -262,7 +229,6 @@ export class TokenTrackingProvider implements LlmProvider {
         }
         return result;
       },
-      summarizeTools,
     );
   }
 }

@@ -381,7 +381,27 @@ export function isPresentLikeObject(doc: unknown): boolean {
   const row = doc as Record<string, unknown>;
   if (row.schema === PRESENT_SCHEMA) return true;
   if (isPresentShellId(row.shell) && row.blocks != null) return true;
+  if (isPresentShellId(row.shell_id) && row.blocks != null) return true;
   return false;
+}
+
+/** 开场/卡片预览：取出 present.v1 主读正文；散文原样返回。 */
+export function presentReadablePlain(raw: string | null | undefined): string {
+  const text = (raw ?? "").trim();
+  if (!text) return "";
+  const view = parsePresentPacket(text);
+  const body = view.packet.blocks.body;
+  if (typeof body === "string" && body.trim()) return body.trim();
+  if (body && typeof body === "object") {
+    try {
+      return JSON.stringify(body);
+    } catch {
+      return text;
+    }
+  }
+  const header = view.packet.blocks.header;
+  if (typeof header === "string" && header.trim()) return header.trim();
+  return text;
 }
 
 /**

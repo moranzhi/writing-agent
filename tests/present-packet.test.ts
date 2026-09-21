@@ -5,6 +5,7 @@ import {
   parseShellAdaptationFromReplyFormat,
   presentFromPlainText,
   presentOutputFromFallback,
+  presentReadablePlain,
   isPlayFinalVisibleWorker,
   isPlayGmBodyWorker,
   isPlayPresentWorker,
@@ -145,5 +146,18 @@ describe("play present worker", () => {
     const view = parsePresentPacket(raw, "prose");
     expect(view.packet.shell).toBe("chat_monitor");
     expect(view.packet.blocks.body).toBe("她点了点头。");
+  });
+
+  it("presentReadablePlain extracts body from present.v1", () => {
+    expect(
+      presentReadablePlain(
+        JSON.stringify({
+          schema: "present.v1",
+          shell: "spotlight",
+          blocks: { body: "清晨，@玩家推开门。" },
+        }),
+      ),
+    ).toBe("清晨，@玩家推开门。");
+    expect(presentReadablePlain("门外有人砸门。")).toBe("门外有人砸门。");
   });
 });

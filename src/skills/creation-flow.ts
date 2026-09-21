@@ -206,6 +206,11 @@ export type ModuleCatalogEntry = {
    * 〔先验产物〕：规划产物字段；可提前写入 params，空则步内钉，不拦确认开干。
    */
   params?: ModuleParamSpec[];
+  /**
+   * 可选：进料族。缺省（不写）= 工序编排与对话落盘都能见。
+   * recipe = 只进工序编排 DAG；dictate = 只进对话落盘何时落盘。
+   */
+  intake?: RecipeIntakeFamily;
   /** 来自 prompt.md ```meta：何时该选用（编排选型） */
   when?: string;
   /** 来自 prompt.md ```meta：何时不该选用 */
@@ -213,6 +218,27 @@ export type ModuleCatalogEntry = {
   /** 来自 prompt.md ```meta：与其它能力的边界 */
   boundary?: string;
 };
+
+export function parseModuleIntake(raw: unknown): RecipeIntakeFamily | undefined {
+  if (raw === "recipe" || raw === "dictate") return raw;
+  return undefined;
+}
+
+/** 缺省 intake = 两族都可见 */
+export function moduleVisibleForIntake(
+  module: Pick<ModuleCatalogEntry, "intake">,
+  family: RecipeIntakeFamily,
+): boolean {
+  if (!module.intake) return true;
+  return module.intake === family;
+}
+
+export function catalogModulesForIntake(
+  catalog: ModuleCatalog,
+  family: RecipeIntakeFamily,
+): ModuleCatalogEntry[] {
+  return catalog.modules.filter((m) => moduleVisibleForIntake(m, family));
+}
 
 /** 本步程序开场白正文（design-step 发出后写入，供 LLM 看见） */
 export const CREATION_MODULE_OPENING_TAG = "创作.能力开场白";
@@ -924,6 +950,7 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
     const auto = m.auto === true;
     const kind = parseModuleNodeKind(m.kind);
     const params = parseModuleParamSpecs(m.params);
+    const intake = parseModuleIntake(m.intake);
     modules.push({
       id,
       name,
@@ -935,6 +962,7 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
       ...(kind ? { kind } : {}),
       ...(opening ? { opening } : {}),
       ...(params ? { params } : {}),
+      ...(intake ? { intake } : {}),
     });
   }
   if (modules.length === 0) return null;
@@ -1240,8 +1268,9 @@ function slugFromName(name: string): string {
     美学纲领与交互范式: "aesthetics-interaction",
     交互范式: "interaction",
     美学纲领: "aesthetics",
-    叙事指南: "narrative",
+    叙事指南: "narrative-guide",
     叙事指南与故事推进: "narrative",
+    故事推进: "story-progression",
     实现机制: "mechanism",
     舞台骨架: "world-blueprint",
     世界蓝图与人文地理: "world-blueprint", // 旧称
@@ -1283,7 +1312,7 @@ export async function loadModuleCatalog(
 
 /** 注入 design-flow：能力名 + 选型字段（meta）+ 编排参数；非执行全文 */
 export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
-  const lines = catalog.modules.map((m) => {
+  const lines = catalogModulesForIntake(catalog, "recipe").map((m) => {
     const flags = [
       m.repeatable ? "〔可反复〕" : "",
       m.closer ? "〔收口〕" : "",
@@ -1332,7 +1361,7 @@ export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
   ].join("\n");
 }
 
-/** Boss 直聘不经 DAG：这些能力由落档/开玩程序处理，创作对话一般不 insert */
+/** 对话落盘不经 DAG：这些能力由落档/开玩程序处理，创作对话一般不 insert */
 const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
   "worker-spec",
   "context-order",
@@ -1340,11 +1369,11 @@ const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
 ]);
 
 /**
- * 注入 Boss 直聘：能力何时落盘（meta when/when_not）+ insert 目标 tag。
+ * 注入对话落盘：能力何时落盘（meta when/when_not）+ insert 目标 tag。
  * 不写 DAG / design-step 话术；不塞执行全文。
  */
 export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
-  const lines = catalog.modules.map((m) => {
+  const lines = catalogModulesForIntake(catalog, "dictate").map((m) => {
     const programSide = DICTATE_PROGRAM_SIDE_MODULE_IDS.has(m.id) || m.auto;
     const flags = [
       m.repeatable ? "〔可反复〕" : "",
@@ -1366,11 +1395,13 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
   });
   return [
     "【能力 · 何时落盘】",
-    "对照下方「何时用 / 何时不用 / 边界」与已有产物判定：条件成立才 insert（或 declare_*）；含糊或未到时机 → 本轮不落、只短确认或问挡住的 1 点。",
-    "每轮通常只推进条件已成立的一刀；勿因用户一次说了很多就批量抢跑下游。",
+    "对照下方「何时用 / 何时不用 / 边界」与已有产物判定：条件成立才 insert（或 declare_*）；含糊或未到时机 → 本轮不落该能力，改为短确认或问挡住的 1 点。",
+    "同轮可多次落盘：凡本轮材料已够且「何时用」成立的能力，都可 insert / declare_*（可并行）；每个 insert 各回 reply_module，可见回复分段附带。",
+    "不抢跑：条件未成立的下游本轮不落，放进「建议下一刀」。",
     "标〔落档程序〕的：创作对话一般不 insert，开玩/落档时由程序处理。",
-    "标〔收口〕的开场白：美学与必要上游齐后再写；未齐不硬塞。",
-    "不要把能力执行全文塞进聊天；规格只走 toolcall。",
+    "标〔收口〕的开场白：美学与必要上游齐后再写；未齐则先补上游。",
+    "标〔可反复〕的（生成规则/具体实例等）：每条增殖用「基名#唯一id」拆分落盘（如 设计.具体实例#lei-ying）；禁止反复 insert 基名覆盖旧条。改某一条则 insert 同一完整 tag。",
+    "能力执行全文不进聊天；规格只走 toolcall。insert 成功后按返回的 reply_module 写可见回复（见系统提示「对用户可见回复」）。",
     lines.join("\n"),
   ].join("\n");
 }
@@ -1383,7 +1414,17 @@ function dictateLandHint(m: ModuleCatalogEntry): string {
     return "declare_variable / declare_map；长文规则可另 insert 「设计.变量设计与更新规则」";
   }
   if (m.id === "opening-setup") {
-    return "insert 「设计.开场白」（Boss 直聘简化 tag；初值与开场同真相）";
+    return "insert 「设计.开场白」（对话落盘简化 tag；初值与开场同真相）";
+  }
+  if (m.artifact?.trim() && m.repeatable) {
+    const art = m.artifact.trim();
+    const slotHint =
+      m.id === "generation-rules"
+        ? "rule_id"
+        : m.id === "concrete-instances"
+          ? "batch_id或姓名"
+          : "唯一id";
+    return `insert 「${art}#${slotHint}」——可增殖：每条对象/批次各占一 tag；同完整 tag 才覆盖改写，禁止反复写基名「${art}」覆盖`;
   }
   if (m.artifact?.trim()) {
     return `insert 「${m.artifact.trim()}」`;
@@ -1618,7 +1659,7 @@ export function formatRecipeCatalogForAgent(catalog: RecipeCatalog): string {
 }
 
 /**
- * Boss 直聘 / 转述进料：把已选配方方法论收成短要点（进系统提示「本局配方」）。
+ * 对话落盘：把已选配方方法论收成短要点（进系统提示「本局配方」）。
  * 不含 DAG steps / design-flow 选型话术。
  */
 export function formatDictateRecipeBrief(detail: RecipeDetail): string {
@@ -1744,7 +1785,7 @@ export function formatFlowProgressForAgent(params: {
   const catalog = params.catalog ?? null;
   const filled = new Set(params.filledArtifactTags ?? []);
   const repeatableNames = new Set(
-    (catalog?.modules ?? [])
+    (catalog ? catalogModulesForIntake(catalog, "recipe") : [])
       .filter((m) => m.repeatable === true)
       .map((m) => m.name),
   );
@@ -1793,7 +1834,7 @@ export function formatFlowProgressForAgent(params: {
   }
 
   if (catalog) {
-    for (const mod of catalog.modules) {
+    for (const mod of catalogModulesForIntake(catalog, "recipe")) {
       if (mod.repeatable === true) continue;
       if (!mod.artifact || !filled.has(mod.artifact)) continue;
       if (doneNames.has(mod.name)) continue;
@@ -1812,7 +1853,10 @@ export function formatFlowProgressForAgent(params: {
     }
   }
 
-  const repeatableList = (catalog?.modules ?? [])
+  const repeatableList = (catalog
+    ? catalogModulesForIntake(catalog, "recipe")
+    : []
+  )
     .filter((m) => m.repeatable === true)
     .map((m) => m.name);
 
@@ -1940,7 +1984,9 @@ export function validateCreationFlow(
   const errors: string[] = [];
   const seenIds = new Set<string>();
   const allowed = catalog
-    ? new Set(catalog.modules.map((m) => m.name))
+    ? new Set(
+        catalogModulesForIntake(catalog, "recipe").map((m) => m.name),
+      )
     : null;
   const reportedFreshDup = new Set<string>();
 
@@ -2224,7 +2270,7 @@ export function listCallableCatalogModules(params: {
     (params.acceptedStepIds ?? []).map((id) => id.trim()).filter(Boolean),
   );
   const out: CreationFlowAvailableModule[] = [];
-  for (const mod of catalog.modules) {
+  for (const mod of catalogModulesForIntake(catalog, "recipe")) {
     if (scheduled.has(mod.name)) continue;
     if (!mod.repeatable) {
       if (mod.artifact && filled.has(mod.artifact)) continue;
@@ -2598,7 +2644,7 @@ export function listRepeatableSpawns(
   catalog: ModuleCatalog,
   acceptedStepIds: readonly string[],
 ): CreationFlowSpawnView[] {
-  return catalog.modules
+  return catalogModulesForIntake(catalog, "recipe")
     .filter((m) => m.repeatable === true && !m.closer)
     .filter(
       (m) => !flow.steps.some((s) => s.name === m.name && isPrototypeStep(s)),

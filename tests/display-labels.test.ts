@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  displayCreationModeLabel,
+  displaySkillPackLabel,
   displayStageLabel,
   displayWorkerLabel,
   formatWorkerDisplayTitle,
@@ -13,6 +15,13 @@ describe("display-labels", () => {
     expect(displayStageLabel("play")).toBe("游玩");
   });
 
+  it("maps creation intake modes and recipe display names", () => {
+    expect(displayCreationModeLabel("recipe")).toBe("工序编排");
+    expect(displayCreationModeLabel("dictate")).toBe("对话落盘");
+    expect(displaySkillPackLabel("world-simulator")).toBe("回合推演");
+    expect(displaySkillPackLabel("快穿短局")).toBe("快穿短局");
+  });
+
   it("maps design workers", () => {
     expect(displayWorkerLabel("design-flow")).toBe("创作 · 流程编排");
     expect(displayWorkerLabel("design-step")).toBe("创作 · 执行步骤");
@@ -24,9 +33,7 @@ describe("display-labels", () => {
   it("maps creation unit ids", () => {
     expect(displayWorkerLabel("phase:core")).toBe("单位 · 核心");
     expect(displayWorkerLabel("fixed:interaction")).toBe("技能 · 交互范式");
-    expect(displayWorkerLabel("fixed:aesthetics-interaction")).toBe(
-      "技能 · 美学纲领与交互范式",
-    );
+    expect(displayWorkerLabel("fixed:protagonist")).toBe("技能 · 主角设定");
     expect(displayWorkerLabel("worker:narrator")).toBe("执行单元 · 叙事转述");
   });
 

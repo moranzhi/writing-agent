@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260921-repeatable-split" />
     <script>
       (function () {
         try {
@@ -18,9 +18,14 @@
           if (!/^(paper|modern|dark|green)$/.test(t)) t = "modern";
           document.documentElement.setAttribute("data-color-theme", t);
           document.documentElement.setAttribute("data-theme", t);
-          var c = localStorage.getItem("wa-present-chrome") || "default";
-          if (!/^(default|messenger|book|terminal)$/.test(c)) c = "default";
-          document.documentElement.setAttribute("data-present-chrome", c);
+          var fs = localStorage.getItem("wa-ui-font-scale") || "100";
+          var legacy = { sm: 88, md: 100, lg: 112, xl: 125 };
+          var percent = legacy[fs] != null ? legacy[fs] : Number(fs);
+          if (!isFinite(percent)) percent = 100;
+          if (percent > 0 && percent <= 2.5) percent = Math.round(percent * 100);
+          percent = Math.min(150, Math.max(80, Math.round(percent / 5) * 5));
+          document.documentElement.setAttribute("data-ui-font-scale", String(percent));
+          document.documentElement.style.setProperty("--ui-font-scale", String(percent / 100));
         } catch (e) {}
       })();
     </script>
@@ -36,7 +41,7 @@
           aria-controls="rail-body"
           title="展开侧栏"
         >
-          <span class="rail-expand-label" id="rail-expand-label">书</span>
+          <span class="rail-expand-label" id="rail-expand-label">作品</span>
         </button>
         <div class="rail-body" id="rail-body">
           <header class="panel-head rail-head">
@@ -54,9 +59,9 @@
                 <button type="button" class="btn-sm rail-collapse" id="btn-rail-collapse" title="收起侧栏" aria-label="收起侧栏">‹</button>
               </div>
             </div>
-            <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="本书侧栏" hidden>
-              <button type="button" class="rail-tab active" data-rail-tab="books" role="tab" aria-selected="true" title="本书">
-                <span class="rail-tab-label">本书</span>
+            <nav class="rail-tabs" id="rail-tabs" role="tablist" aria-label="作品侧栏" hidden>
+              <button type="button" class="rail-tab active" data-rail-tab="books" role="tab" aria-selected="true" title="实例">
+                <span class="rail-tab-label">实例</span>
               </button>
               <button type="button" class="rail-tab" data-rail-tab="log" role="tab" aria-selected="false" title="调度">
                 <span class="rail-tab-label">调度</span>
@@ -122,19 +127,12 @@
                     <span class="more-theme-copy"><span class="more-theme-name">豆沙绿</span><span class="more-theme-desc">自然疗愈</span></span>
                   </button>
                   <div class="more-menu-sep" role="separator"></div>
-                  <div class="more-menu-label">选壳</div>
-                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="default" role="menuitem">
-                    <span class="more-theme-copy"><span class="more-theme-name">默认</span><span class="more-theme-desc">跟随壳本身</span></span>
-                  </button>
-                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="messenger" role="menuitem">
-                    <span class="more-theme-copy"><span class="more-theme-name">讯息</span><span class="more-theme-desc">气泡对话感</span></span>
-                  </button>
-                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="book" role="menuitem">
-                    <span class="more-theme-copy"><span class="more-theme-name">书页</span><span class="more-theme-desc">阅读排版感</span></span>
-                  </button>
-                  <button type="button" class="more-menu-item more-theme-item" data-present-chrome="terminal" role="menuitem">
-                    <span class="more-theme-copy"><span class="more-theme-name">终端</span><span class="more-theme-desc">等宽终端感</span></span>
-                  </button>
+                  <div class="more-menu-label">字号</div>
+                  <div class="more-font-scale" role="group" aria-label="字号">
+                    <button type="button" class="more-font-btn" data-font-scale-bump="-1" title="缩小" aria-label="缩小">−</button>
+                    <span class="more-font-value" id="theme-font-scale-value">100</span>
+                    <button type="button" class="more-font-btn" data-font-scale-bump="1" title="放大" aria-label="放大">+</button>
+                  </div>
                 </div>
               </details>
             </div>
@@ -198,8 +196,8 @@
           进料方式
           <select id="select-creation-mode" required>
             <option value="" selected disabled>请选择…</option>
-            <option value="recipe">Worker 式（工序图）</option>
-            <option value="dictate">Boss 直聘（对话直填）</option>
+            <option value="recipe">工序编排</option>
+            <option value="dictate">对话落盘</option>
           </select>
         </label>
         <p class="dialog-desc" id="creation-mode-desc" hidden></p>
@@ -221,6 +219,11 @@
       </form>
     </dialog>
 
+    <div id="book-enter-pop" class="book-enter-pop" hidden role="menu" aria-label="打开作品">
+      <button type="button" class="book-enter-item" data-enter="design" role="menuitem">创作</button>
+      <button type="button" class="book-enter-item" data-enter="play" role="menuitem">游玩</button>
+    </div>
+
     <menu id="book-action-menu" class="context-menu" hidden>
       <button type="button" class="context-menu-item" id="book-menu-open" data-action="open">打开创作</button>
       <button type="button" class="context-menu-item" id="book-menu-play" data-action="play">用产物开玩</button>
@@ -237,6 +240,11 @@
       <button type="button" class="context-menu-item" data-save-menu-action="edit-products">编辑产物</button>
     </menu>
 
+    <menu id="dictate-product-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" data-dictate-product-action="peek">查看完整内容</button>
+      <button type="button" class="context-menu-item" data-dictate-product-action="copy">复制全文</button>
+    </menu>
+
     <menu id="msg-action-menu" class="context-menu" hidden>
       <button type="button" class="context-menu-item" id="msg-menu-context" data-msg-menu-action="view-context" hidden>查看上下文</button>
       <button type="button" class="context-menu-item" id="msg-menu-compare" data-msg-menu-action="compare" hidden>对比</button>
@@ -245,6 +253,18 @@
       <button type="button" class="context-menu-item context-menu-separator-before" id="msg-menu-rollback" data-msg-menu-action="rollback" hidden>回退到这里</button>
       <button type="button" class="context-menu-item context-menu-danger" id="msg-menu-delete" data-msg-menu-action="restart">从这里重开</button>
     </menu>
+
+    <div id="msg-peek-panel" class="msg-peek-panel" hidden role="dialog" aria-modal="false" aria-labelledby="msg-peek-title">
+      <header class="msg-peek-head" data-peek-drag>
+        <div class="msg-peek-head-text">
+          <h2 class="msg-peek-title" id="msg-peek-title">完整内容</h2>
+          <p class="msg-peek-subtitle" id="msg-peek-subtitle" hidden></p>
+        </div>
+        <button type="button" class="msg-peek-close" id="msg-peek-close" aria-label="关闭">×</button>
+      </header>
+      <div class="msg-peek-body" id="msg-peek-body"></div>
+      <div class="msg-peek-resize" data-peek-resize="se" title="拖动调整大小" aria-hidden="true"></div>
+    </div>
 
     <menu id="flow-node-menu" class="context-menu" hidden>
       <button type="button" class="context-menu-item" id="flow-menu-view" data-flow-menu-action="view">查看产物</button>
@@ -308,6 +328,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=20260921-repeatable-split"></script>
   </body>
 </html>

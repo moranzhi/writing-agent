@@ -136,7 +136,10 @@ export async function handleSettingsApi(
 
   if (pathname === "/api/profiles" && req.method === "GET") {
     ensureActiveProfileDefault();
-    json(res, 200, { profiles: listApiProfiles() });
+    json(res, 200, {
+      profiles: listApiProfiles(),
+      activeProfileId: loadAppSettings().activeProfileId,
+    });
     return true;
   }
 

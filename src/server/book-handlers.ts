@@ -56,6 +56,7 @@ async function loadModulesPayload(skillId: string): Promise<{
     loadModuleCatalog,
     loadModulePrompt,
     parseModulePromptSections,
+    catalogModulesForIntake,
     MODULE_SECTION_IDS,
   } = await import("../skills/creation-flow.js");
   const skill = await loadSkill(skillId);
@@ -64,7 +65,7 @@ async function loadModulesPayload(skillId: string): Promise<{
   }
   const catalog = await loadModuleCatalog(skill.skillPackRoot);
   const modules = [];
-  for (const m of catalog?.modules ?? []) {
+  for (const m of catalogModulesForIntake(catalog ?? { modules: [] }, "recipe")) {
     const prompt = await loadModulePrompt(skill.skillPackRoot, m.id);
     const sections = prompt
       ? parseModulePromptSections(prompt)
@@ -423,16 +424,27 @@ export async function handleBooksApi(
     }
     try {
       let instanceId: string | undefined;
+      let useOpeningPersona: boolean | undefined;
       try {
         const raw = await readBody(req);
         if (raw.trim()) {
-          const body = JSON.parse(raw) as { instanceId?: string };
+          const body = JSON.parse(raw) as {
+            instanceId?: string;
+            useOpeningPersona?: boolean;
+          };
           instanceId = body.instanceId?.trim() || undefined;
+          useOpeningPersona =
+            typeof body.useOpeningPersona === "boolean"
+              ? body.useOpeningPersona
+              : undefined;
         }
       } catch {
         instanceId = undefined;
+        useOpeningPersona = undefined;
       }
-      const session = await sessionManager.startNewPlayRun(active.id, instanceId);
+      const session = await sessionManager.startNewPlayRun(active.id, instanceId, {
+        useOpeningPersona,
+      });
       json(res, 200, { session });
     } catch (err) {
       json(res, 400, {

@@ -9,7 +9,7 @@ import {
 } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
-import { displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
+import { displayCreationModeLabel, displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
 import {
   clearQuestionCardState,
   collectQuestionAnswers,
@@ -19,13 +19,14 @@ import {
 } from "./questions-ui.js";
 import {
   applyColorTheme,
-  applyPresentChrome,
+  bumpUiFontScale,
   getStoredColorTheme,
-  getStoredPresentChrome,
+  getStoredUiFontScale,
   initColorTheme,
-  initPresentChrome,
+  initUiFontScale,
   themeById,
-  chromeById,
+  UI_FONT_SCALE_MAX,
+  UI_FONT_SCALE_MIN,
 } from "./theme.js";
 import {
   applyMarkdownRender,
@@ -59,9 +60,29 @@ let activePlaySaveId = null;
 const playSavesByBook = new Map();
 const playWorkingInstanceByBook = new Map();
 const playSavesLoading = new Set();
+/** @type {Map<string, Set<string>>} */
+const expandedSpecsByBook = new Map();
 let bookMenuBookId = null;
+let enterPickerBookId = null;
 let livePollTimer = null;
+/** 本轮 live poll 是否已见过服务端 runActive=true（用于判断「跑完了」） */
+let livePollSawRun = false;
+/** 启动轮询时的结构指纹；用于漏掉 runActive 时的收尾兜底 */
+let livePollBaselineSig = "";
+/** 结构指纹：消息/产物变化时在 loading 下整页刷新，避免主区空白 */
+let livePollStructuralSig = "";
+/** 本轮轮询开始时间 */
+let livePollStartedAt = 0;
+/** 连续轮询失败次数（服务重启后 session 会 404） */
+let livePollFailCount = 0;
 let inflightSeq = 0;
+/** 底栏菜单：只切当前 API，不编辑 */
+let apiProfileList = [];
+let activeApiProfileId = null;
+/** idle | loading | ready | error */
+let apiProfileMenuStatus = "idle";
+let apiProfileMenuError = "";
+let apiProfileSwitchingId = null;
 
 const LIVE_POLL_MS = 280;
 
@@ -587,7 +608,10 @@ function shortPersonaDesc(text) {
 function personaPickerHtml() {
   const personas = globalPersonas;
   const active = activePersonaRecord();
-  const activeName = active?.name || "玩家";
+  const nested = lastView?.sessionProtagonist;
+  const usingOpening = lastView?.openingPersonaChoice === "opening";
+  const activeName =
+    usingOpening && nested?.name ? nested.name : active?.name || "玩家";
   const wasOpen = $("persona-menu")?.open === true;
 
   const cards = personas
@@ -603,9 +627,21 @@ function personaPickerHtml() {
           </div>
         </div>`;
       }
+      const bindBlock =
+        usingOpening && nested && p.id === active?.id
+          ? `<div class="persona-card-bind">
+            <div class="persona-card-bind-name">${esc(nested.name)}</div>
+            ${
+              nested.description || nested.summary
+                ? `<div class="persona-card-bind-sum">${esc(nested.description || nested.summary)}</div>`
+                : ""
+            }
+          </div>`
+          : "";
       return `<div class="persona-card${activeCls}" data-persona-id="${esc(p.id)}" role="button" tabindex="0">
         <div class="persona-card-name">${esc(p.name)}</div>
         <div class="persona-card-desc">${esc(shortPersonaDesc(p.description))}</div>
+        ${bindBlock}
         <div class="persona-card-actions">
           <button type="button" data-persona-act="edit" data-id="${esc(p.id)}">编辑</button>
           ${
@@ -846,13 +882,131 @@ function wireComposerDirectiveUi(input) {
   });
 }
 
+function summarizeApiProfile(profile) {
+  return {
+    id: profile.id,
+    name: profile.name || "未命名",
+    model: profile.model || "",
+    hasKey: Boolean(String(profile.apiKey ?? "").trim()),
+  };
+}
+
+function activeApiProfile() {
+  return apiProfileList.find((p) => p.id === activeApiProfileId) || null;
+}
+
+function composerMoreMenuTitle() {
+  const active = activeApiProfile();
+  return active ? `更多选项 · ${active.name}` : "更多选项";
+}
+
+function composerApiSubmenuMeta() {
+  if (apiProfileSwitchingId) {
+    const p = apiProfileList.find((x) => x.id === apiProfileSwitchingId);
+    return { desc: p ? `切换到 ${p.name}…` : "切换中…", title: "API" };
+  }
+  if (apiProfileMenuStatus === "loading" || apiProfileMenuStatus === "idle") {
+    return { desc: "加载中…", title: "API" };
+  }
+  if (apiProfileMenuStatus === "error") {
+    return { desc: "加载失败", title: "API" };
+  }
+  if (!apiProfileList.length) {
+    return { desc: "未配置", title: "API" };
+  }
+  const active = activeApiProfile();
+  return {
+    desc: active?.name || "选择配置",
+    title: active ? `API · ${active.name}` : "API",
+  };
+}
+
+function composerApiProfileItemsHtml() {
+  if (apiProfileMenuStatus === "loading" || apiProfileMenuStatus === "idle") {
+    return `<p class="more-menu-empty">加载 API 配置…</p>`;
+  }
+  if (apiProfileMenuStatus === "error") {
+    return `<p class="more-menu-empty">无法加载 API 配置。${esc(apiProfileMenuError || "请重试")} <button type="button" class="more-menu-retry" data-reload-profiles>重试</button></p>`;
+  }
+  if (!apiProfileList.length) {
+    return `<p class="more-menu-empty">还没有 API 配置。<a href="/settings.html">去设置添加</a></p>`;
+  }
+  const switching = Boolean(apiProfileSwitchingId);
+  return apiProfileList
+    .map((p) => {
+      const active = p.id === activeApiProfileId;
+      const disabled = !p.hasKey || switching;
+      const desc = !p.hasKey ? "未设置 Key" : p.model || "未指定模型";
+      return `<button
+        type="button"
+        class="more-menu-item more-theme-item more-profile-item${active ? " is-active" : ""}"
+        data-activate-profile="${esc(p.id)}"
+        role="menuitemradio"
+        aria-checked="${active ? "true" : "false"}"
+        ${disabled ? "disabled" : ""}
+        ${p.id === apiProfileSwitchingId ? "aria-busy=\"true\"" : ""}
+        title="${esc(p.name)}${p.model ? ` · ${esc(p.model)}` : ""}"
+      >
+        <span class="more-theme-copy">
+          <span class="more-theme-name">${esc(p.name)}</span>
+          <span class="more-theme-desc">${esc(desc)}</span>
+        </span>
+        <span class="more-toggle-mark" aria-hidden="true"></span>
+      </button>`;
+    })
+    .join("");
+}
+
+function composerApiSubmenuHtml() {
+  const meta = composerApiSubmenuMeta();
+  const wasSubOpen = $("composer-api-submenu")?.hasAttribute("open");
+  return `<details class="more-submenu" id="composer-api-submenu"${wasSubOpen ? " open" : ""}>
+    <summary
+      class="more-menu-item more-theme-item more-submenu-sum"
+      title="${esc(meta.title)}"
+      aria-label="${esc(meta.title)}"
+    >
+      <span class="more-theme-copy">
+        <span class="more-theme-name">API</span>
+        <span class="more-theme-desc" id="composer-api-submenu-desc">${esc(meta.desc)}</span>
+      </span>
+      <span class="more-submenu-chevron" aria-hidden="true"></span>
+    </summary>
+    <div class="more-submenu-panel" id="composer-api-menu" role="menu">
+      ${composerApiProfileItemsHtml()}
+    </div>
+  </details>`;
+}
+
 function composerMoreMenuHtml() {
   const on = isMarkdownRenderEnabled();
-  return `<details class="more-menu composer-more-menu" id="composer-more-menu">
-    <summary class="btn-sm more-menu-sum" title="更多选项" aria-label="更多选项">
+  const wasOpen = $("composer-more-menu")?.hasAttribute("open");
+  const title = composerMoreMenuTitle();
+  const showClearDictate =
+    lastView?.creationMode === "dictate" && !isPlayView(lastView);
+  const clearDictateItem = showClearDictate
+    ? `<div class="more-menu-sep" role="separator"></div>
+      <div class="more-menu-label">对话</div>
+      <button
+        type="button"
+        class="more-menu-item"
+        data-act="clear-dictate"
+        role="menuitem"
+        title="清空对话，保留产物"
+      >
+        <span class="more-theme-copy">
+          <span class="more-theme-name">清空对话</span>
+          <span class="more-theme-desc">保留已落盘产物与变量</span>
+        </span>
+      </button>`
+    : "";
+  return `<details class="more-menu composer-more-menu" id="composer-more-menu"${wasOpen ? " open" : ""}>
+    <summary class="btn-sm more-menu-sum" title="${esc(title)}" aria-label="${esc(title)}">
       <span class="hamburger-icon" aria-hidden="true"></span>
     </summary>
     <div class="more-menu-panel composer-more-panel" role="menu">
+      ${composerApiSubmenuHtml()}
+      <div class="more-menu-sep" role="separator"></div>
       <div class="more-menu-label">显示</div>
       <button
         type="button"
@@ -867,8 +1021,102 @@ function composerMoreMenuHtml() {
         </span>
         <span class="more-toggle-mark" aria-hidden="true"></span>
       </button>
+      ${clearDictateItem}
     </div>
   </details>`;
+}
+
+/** 作曲区图标按钮（tooltip = title / aria-label） */
+function composerIconBtn(opts) {
+  const {
+    act,
+    title,
+    primary = false,
+    kind = "button",
+    disabled = false,
+    icon,
+    extraClass = "",
+  } = opts;
+  const type = kind === "submit" ? "submit" : "button";
+  const cls = [
+    "btn",
+    "composer-btn-icon",
+    primary ? "btn-primary" : "",
+    extraClass,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `<button type="${type}" class="${cls}" data-act="${esc(act)}" title="${esc(
+    title,
+  )}" aria-label="${esc(title)}"${disabled ? " disabled" : ""}>${icon}</button>`;
+}
+
+const COMPOSER_ICON_SAVE = `<svg class="composer-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2.5 1.5h8.2L14 4.8V13.5a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1Zm1.2 1.2v3.6h6.4V2.7H3.7Zm0 10.6h8.6V8.2H3.7v5.1Zm7.4-11.3.9.9H11v-1h.1Z"/></svg>`;
+const COMPOSER_ICON_SEND = `<svg class="composer-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.4 2.1 14.6 8 1.4 13.9l.2-4.4L10 8 1.6 6.5l-.2-4.4Z"/></svg>`;
+
+function syncApiProfileMenuUi() {
+  const host = $("composer-api-menu");
+  if (host) host.innerHTML = composerApiProfileItemsHtml();
+  const meta = composerApiSubmenuMeta();
+  const desc = $("composer-api-submenu-desc");
+  if (desc) desc.textContent = meta.desc;
+  const subSum = document.querySelector("#composer-api-submenu > summary");
+  if (subSum) {
+    subSum.title = meta.title;
+    subSum.setAttribute("aria-label", meta.title);
+  }
+  const sum = document.querySelector("#composer-more-menu .more-menu-sum");
+  if (sum) {
+    const title = composerMoreMenuTitle();
+    sum.title = title;
+    sum.setAttribute("aria-label", title);
+  }
+}
+
+async function loadApiProfiles() {
+  apiProfileMenuStatus = "loading";
+  apiProfileMenuError = "";
+  syncApiProfileMenuUi();
+  try {
+    const data = await api("/api/profiles");
+    apiProfileList = (data.profiles || []).map(summarizeApiProfile);
+    activeApiProfileId = data.activeProfileId ?? apiProfileList[0]?.id ?? null;
+    apiProfileMenuStatus = "ready";
+    syncApiProfileMenuUi();
+  } catch (err) {
+    apiProfileMenuStatus = "error";
+    apiProfileMenuError = err.message || "请求失败";
+    syncApiProfileMenuUi();
+  }
+}
+
+function closeComposerMoreMenu(menu) {
+  menu?.removeAttribute("open");
+  menu?.querySelector("#composer-api-submenu")?.removeAttribute("open");
+}
+
+async function activateApiProfileFromMenu(id, menu) {
+  if (!id || id === activeApiProfileId) {
+    closeComposerMoreMenu(menu);
+    return;
+  }
+  const profile = apiProfileList.find((p) => p.id === id);
+  if (!profile?.hasKey) return;
+  apiProfileSwitchingId = id;
+  syncApiProfileMenuUi();
+  try {
+    const result = await api(`/api/profiles/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
+    });
+    activeApiProfileId = result.activeProfileId || id;
+    apiProfileSwitchingId = null;
+    syncApiProfileMenuUi();
+    closeComposerMoreMenu(menu);
+  } catch (err) {
+    apiProfileSwitchingId = null;
+    syncApiProfileMenuUi();
+    alert(err.message || "切换失败");
+  }
 }
 
 function composerFormHtml(shell) {
@@ -885,13 +1133,11 @@ function syncMarkdownMenuUi() {
 
 function syncThemeMenuUi() {
   const colorId = document.documentElement.getAttribute("data-color-theme") || getStoredColorTheme();
-  const chromeId =
-    document.documentElement.getAttribute("data-present-chrome") || getStoredPresentChrome();
+  const percent = getStoredUiFontScale();
   const colorMeta = themeById(colorId);
-  const chromeMeta = chromeById(chromeId);
   const sum = $("theme-menu-sum");
   if (sum) {
-    sum.title = `${colorMeta.name} · ${chromeMeta.name}`;
+    sum.title = `${colorMeta.name} · 字号 ${percent}`;
     if (!sum.querySelector(".hamburger-icon")) {
       sum.innerHTML = `<span class="hamburger-icon" aria-hidden="true"></span>`;
     }
@@ -899,9 +1145,12 @@ function syncThemeMenuUi() {
   document.querySelectorAll("[data-color-theme].more-theme-item").forEach((btn) => {
     btn.classList.toggle("is-active", btn.getAttribute("data-color-theme") === colorMeta.id);
   });
-  document.querySelectorAll("[data-present-chrome].more-theme-item").forEach((btn) => {
-    btn.classList.toggle("is-active", btn.getAttribute("data-present-chrome") === chromeMeta.id);
-  });
+  const valueEl = $("theme-font-scale-value");
+  if (valueEl) valueEl.textContent = String(percent);
+  const minus = document.querySelector("[data-font-scale-bump='-1']");
+  const plus = document.querySelector("[data-font-scale-bump='1']");
+  if (minus) minus.disabled = percent <= UI_FONT_SCALE_MIN;
+  if (plus) plus.disabled = percent >= UI_FONT_SCALE_MAX;
   syncMarkdownMenuUi();
 }
 
@@ -1000,7 +1249,13 @@ function renderComposer(view, loading) {
         : "";
     const shell = composerInputShell(spec, {
       textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
-      trailing: `<button type="submit" class="btn btn-primary composer-btn">发送</button>`,
+      trailing: composerIconBtn({
+        act: "send",
+        title: "发送",
+        primary: true,
+        kind: "submit",
+        icon: COMPOSER_ICON_SEND,
+      }),
     });
     root.innerHTML = `
       ${intakePanel}
@@ -1151,28 +1406,29 @@ function renderComposer(view, loading) {
 
   if (spec.mode === "pick_step") {
     const saveProduct = canOfferSaveProduct(view)
-      ? `<button type="button" class="btn btn-primary" data-act="save-product">保存定稿</button>`
+      ? composerIconBtn({
+          act: "save-product",
+          title: "保存定稿",
+          primary: true,
+          icon: COMPOSER_ICON_SAVE,
+        })
       : "";
-    const enterPlay = canOfferEnterPlay(view)
-      ? `<button type="button" class="btn" data-act="enter-play">${
-          view.hasProduct ? "用产物开玩" : "开玩"
-        }</button>`
-      : "";
-    const sendCls =
-      canOfferSaveProduct(view) || canOfferEnterPlay(view)
-        ? "btn composer-btn"
-        : "btn btn-primary composer-btn";
+    const sendClsPrimary = !canOfferSaveProduct(view);
     const shell = composerInputShell(spec, {
       textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(spec.placeholder)}"></textarea>`,
-      trailing: `${saveProduct}${enterPlay}<button type="submit" class="${sendCls}" data-act="pick-replan" disabled title="写下意见后再发；点图上节点即确认并进入">${esc(spec.submitLabel || "发送")}</button>`,
+      trailing: `${saveProduct}${composerIconBtn({
+        act: "pick-replan",
+        title: spec.submitLabel || "发送",
+        primary: sendClsPrimary,
+        kind: "submit",
+        disabled: true,
+        icon: COMPOSER_ICON_SEND,
+      })}`,
     });
     root.innerHTML = composerFormHtml(shell);
     wireComposerForm({ requiresText: true });
     root.querySelector("[data-act=save-product]")?.addEventListener("click", () => {
       void saveCurrentInstance();
-    });
-    root.querySelector("[data-act=enter-play]")?.addEventListener("click", () => {
-      enterPlayNow();
     });
     applyPendingComposerDraft();
     return;
@@ -1189,46 +1445,36 @@ function renderComposer(view, loading) {
           : spec.acceptAction.title || spec.acceptAction.label
       )}" ${spec.acceptAction.disabled ? "disabled" : ""}>${esc(spec.acceptAction.label)}</button>`
     : "";
-  const clearDictate =
-    view?.creationMode === "dictate" && !isPlayView(view)
-      ? `<button type="button" class="btn" data-act="clear-dictate" title="清空对话，保留产物">清空对话</button>`
-      : "";
   const saveProduct = canOfferSaveProduct(view)
-    ? `<button type="button" class="btn btn-primary" data-act="save-product">保存定稿</button>`
-    : "";
-  const enterPlay = canOfferEnterPlay(view)
-    ? `<button type="button" class="btn${
-        canOfferSaveProduct(view) ? "" : " btn-primary"
-      }" data-act="enter-play">${
-        view.hasProduct ? "用产物开玩" : "开玩"
-      }</button>`
+    ? composerIconBtn({
+        act: "save-product",
+        title: "保存定稿",
+        primary: true,
+        icon: COMPOSER_ICON_SAVE,
+      })
     : "";
   const submitLabel = spec.submitLabel || "发送";
-  const sendIsPrimary = !acceptOnEmpty && !saveProduct && !enterPlay;
+  const sendIsPrimary = !acceptOnEmpty && !saveProduct;
   const placeholder = acceptOnEmpty
     ? `${spec.placeholder || "修改意见…"}（${spec.emptyEnterHint || "空 Enter＝确认"}）`
     : spec.placeholder;
+  const sendTitle = acceptOnEmpty
+    ? `有字或已选追问时 Enter＝${submitLabel}`
+    : `${submitLabel}（Enter）`;
   const shell = composerInputShell(spec, {
     textareaHtml: `<textarea id="composer-input" rows="1" placeholder="${esc(placeholder)}"></textarea>`,
-    trailing: `${clearDictate}${saveProduct}${enterPlay}<button type="button" class="btn composer-btn${
-      sendIsPrimary ? " btn-primary" : ""
-    }" data-act="revise" title="${esc(
-      acceptOnEmpty
-        ? `有字或已选追问时 Enter＝${submitLabel}`
-        : "Enter 发送"
-    )}">${esc(submitLabel)}</button>${acceptBtn}`,
+    trailing: `${saveProduct}${composerIconBtn({
+      act: "revise",
+      title: sendTitle,
+      primary: sendIsPrimary,
+      icon: COMPOSER_ICON_SEND,
+    })}${acceptBtn}`,
   });
   root.innerHTML = composerFormHtml(shell);
   wireComposerForm({ acceptOnEmpty });
   root.querySelector("[data-act=accept]")?.addEventListener("click", () => runAction("accept"));
-  root.querySelector("[data-act=clear-dictate]")?.addEventListener("click", () => {
-    void clearDictateDialogue();
-  });
   root.querySelector("[data-act=save-product]")?.addEventListener("click", () => {
     void saveCurrentInstance();
-  });
-  root.querySelector("[data-act=enter-play]")?.addEventListener("click", () => {
-    enterPlayNow();
   });
   applyPendingComposerDraft();
 }
@@ -1325,9 +1571,11 @@ function syncPickReplanButton(input) {
   if (!btn) return;
   const hasText = Boolean(String(input?.value ?? "").trim());
   btn.disabled = !hasText;
-  btn.title = hasText
+  const tip = hasText
     ? "发送改编排意见"
     : "写下意见后再发；点图上节点即确认并进入";
+  btn.title = tip;
+  btn.setAttribute("aria-label", tip);
 }
 
 function wireComposerForm(opts = {}) {
@@ -1453,6 +1701,7 @@ async function fetchPlaySavesForBook(bookId, force = false) {
 
 function setBookSelectMode(on, { keepSelection = false } = {}) {
   if (on && sidebarNav.level !== "root") return;
+  if (on) hideEnterPicker();
   bookSelectMode = on;
   if (!on) selectedBookIds = new Set();
   else if (!keepSelection) selectedBookIds = new Set();
@@ -1472,6 +1721,47 @@ function hideBookMenu() {
   bookMenuBookId = null;
 }
 
+function hideEnterPicker() {
+  document.querySelectorAll(".explorer-folder.is-picking").forEach((el) => {
+    el.classList.remove("is-picking");
+  });
+  const pop = $("book-enter-pop");
+  if (pop) pop.hidden = true;
+  enterPickerBookId = null;
+}
+
+function showEnterPicker(bookId, anchorEl) {
+  const pop = $("book-enter-pop");
+  if (!pop || !anchorEl) return;
+  hideBookMenu();
+  hideSaveMenu();
+  enterPickerBookId = bookId;
+  document.querySelectorAll(".explorer-folder.is-picking").forEach((el) => {
+    el.classList.remove("is-picking");
+  });
+  anchorEl.classList.add("is-picking");
+  const playBtn = pop.querySelector("[data-enter=play]");
+  const ready = bookPlayReady(bookId);
+  if (playBtn) {
+    playBtn.disabled = !ready;
+    playBtn.title = ready ? "进入游玩" : "验收后可游玩";
+  }
+  pop.hidden = false;
+  const rect = anchorEl.getBoundingClientRect();
+  const left = rect.right + 8;
+  let top = rect.top;
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+  const box = pop.getBoundingClientRect();
+  if (box.bottom > window.innerHeight - 8) {
+    top = Math.max(8, window.innerHeight - box.height - 8);
+    pop.style.top = `${top}px`;
+  }
+  if (box.right > window.innerWidth - 8) {
+    pop.style.left = `${Math.max(8, rect.left - box.width - 8)}px`;
+  }
+}
+
 let saveMenuState = { bookId: null, saveId: null, label: "" };
 
 function hideSaveMenu() {
@@ -1483,6 +1773,7 @@ function hideSaveMenu() {
 function showSaveMenu(bookId, saveId, label, x, y) {
   const menu = $("save-action-menu");
   if (!menu) return;
+  hideEnterPicker();
   hideBookMenu();
   saveMenuState = { bookId, saveId, label: label || "" };
   menu.hidden = false;
@@ -1578,8 +1869,8 @@ function refreshBookMenuLabels() {
   const bookId = bookMenuBookId;
   const ready = bookId ? bookPlayReady(bookId) : false;
   const thisBook = bookId && bookId === activeBookId;
-  $("book-menu-open")?.toggleAttribute("hidden", multi);
-  $("book-menu-play")?.toggleAttribute("hidden", multi || !ready);
+  $("book-menu-open")?.toggleAttribute("hidden", true);
+  $("book-menu-play")?.toggleAttribute("hidden", true);
   $("book-menu-save-instance")?.toggleAttribute("hidden", multi || !thisBook || !ready);
   $("book-menu-save-play")?.toggleAttribute(
     "hidden",
@@ -1601,6 +1892,7 @@ function refreshBookMenuLabels() {
 function showBookMenu(bookId, x, y) {
   const menu = $("book-action-menu");
   if (!menu) return;
+  hideEnterPicker();
   hideSaveMenu();
   bookMenuBookId = bookId;
   refreshBookMenuLabels();
@@ -1621,7 +1913,7 @@ function isCatalogNav() {
 }
 
 function isWorkspaceNav() {
-  return sidebarNav.level === "book" || sidebarNav.level === "product";
+  return sidebarNav.level === "book";
 }
 
 function getNavBook() {
@@ -1629,9 +1921,55 @@ function getNavBook() {
   return books.find((b) => b.id === sidebarNav.bookId) ?? null;
 }
 
-function getNavProduct() {
-  if (sidebarNav.level !== "product" || !sidebarNav.productId || !sidebarNav.bookId) return null;
-  return productInstancesForBook(sidebarNav.bookId).find((p) => p.id === sidebarNav.productId) ?? null;
+function catalogBookMeta(book) {
+  const saves = playSavesByBook.get(book.id);
+  if (saves === undefined) {
+    void fetchPlaySavesForBook(book.id);
+    return "";
+  }
+  if (playWorkingInstanceByBook.get(book.id)) return "游玩中";
+  if (saves.some((s) => s.kind === "instance" || s.kind === "run")) return "可游玩";
+  return "创作中";
+}
+
+function specOwnsWorkingPlay(book, specId) {
+  const playingId = playingInstanceIdForBook(book);
+  if (!playingId) return false;
+  const products = productInstancesForBook(book.id);
+  if (products.some((p) => p.id === playingId)) return playingId === specId;
+  return products[0]?.id === specId;
+}
+
+function defaultExpandedSpecIds(bookId) {
+  const products = productInstancesForBook(bookId);
+  const playing = playingInstanceIdForBook({ id: bookId });
+  const target =
+    playing && products.some((p) => p.id === playing) ? playing : products[0]?.id;
+  return target ? new Set([target]) : new Set();
+}
+
+function specIsExpanded(bookId, specId) {
+  const set = expandedSpecsByBook.get(bookId);
+  if (set) return set.has(specId);
+  return defaultExpandedSpecIds(bookId).has(specId);
+}
+
+function toggleSpecExpanded(bookId, specId) {
+  const next = new Set(expandedSpecsByBook.get(bookId) ?? defaultExpandedSpecIds(bookId));
+  if (next.has(specId)) next.delete(specId);
+  else next.add(specId);
+  expandedSpecsByBook.set(bookId, next);
+  renderBookList();
+}
+
+function ensureSpecExpanded(bookId, specId) {
+  if (!bookId) return;
+  if (specId) {
+    const next = new Set(expandedSpecsByBook.get(bookId) ?? defaultExpandedSpecIds(bookId));
+    next.add(specId);
+    expandedSpecsByBook.set(bookId, next);
+  }
+  navigateToBook(bookId);
 }
 
 function pathSep() {
@@ -1664,11 +2002,9 @@ function renderPathBar() {
   if (!bar) return;
   bar.innerHTML = "";
   const book = getNavBook();
-  const product = getNavProduct();
-  const atProduct = sidebarNav.level === "product" && Boolean(book);
-  const inBook = Boolean(book) && (sidebarNav.level === "book" || atProduct);
+  const inBook = Boolean(book);
 
-  $("rail-tabs")?.toggleAttribute("hidden", !isWorkspaceNav());
+  $("rail-tabs")?.toggleAttribute("hidden", !(isWorkspaceNav() || Boolean(activeBookId)));
 
   const list = document.createElement("ol");
   list.className = "path-bar-list";
@@ -1677,28 +2013,16 @@ function renderPathBar() {
       label: "目录",
       title: "作品目录",
       current: !inBook,
-      onClick: () => showCatalog(),
+      onClick: () => showCatalog({ closeSession: false }),
     }),
   );
   if (inBook) {
-    const bookLabel = book.title?.trim() || "书本";
+    const bookLabel = book.title?.trim() || "作品";
     list.appendChild(pathSep());
     list.appendChild(
       pathItem({
         label: bookLabel,
         title: bookLabel,
-        current: !atProduct,
-        onClick: () => navigateToBook(book.id),
-      }),
-    );
-  }
-  if (atProduct) {
-    const productLabel = product?.label?.trim() || "定稿";
-    list.appendChild(pathSep());
-    list.appendChild(
-      pathItem({
-        label: productLabel,
-        title: productLabel,
         current: true,
       }),
     );
@@ -1708,6 +2032,7 @@ function renderPathBar() {
 
 function navigateToBook(bookId) {
   if (!bookId) return;
+  hideEnterPicker();
   sidebarNav = { level: "book", bookId };
   document.body.dataset.navLevel = "book";
   bookSelectMode = false;
@@ -1718,26 +2043,17 @@ function navigateToBook(bookId) {
   void fetchPlaySavesForBook(bookId);
 }
 
-function navigateToProduct(bookId, productId) {
-  if (!bookId || !productId) return;
-  sidebarNav = { level: "product", bookId, productId };
-  document.body.dataset.navLevel = "product";
-  bookSelectMode = false;
-  selectedBookIds = new Set();
-  setRailTab("books", { expand: true });
-  renderPathBar();
-  renderBookList();
-  void fetchPlaySavesForBook(bookId);
-}
-
-function showCatalog() {
-  beginUiRequest();
-  stopLivePoll();
+function showCatalog({ closeSession = true } = {}) {
+  hideEnterPicker();
+  if (closeSession) {
+    beginUiRequest();
+    stopLivePoll();
+    closeWorkspace();
+  }
   sidebarNav = { level: "root" };
   document.body.dataset.navLevel = "root";
   bookSelectMode = false;
   selectedBookIds = new Set();
-  closeWorkspace();
   renderPathBar();
   renderBookList();
 }
@@ -1758,6 +2074,7 @@ function renderExplorerRow({
   expanded,
   onTwistie,
   title,
+  ariaExpanded,
 }) {
   const row = document.createElement("button");
   row.type = "button";
@@ -1773,6 +2090,9 @@ function renderExplorerRow({
     .join(" ");
   if (bookId) row.dataset.bookId = bookId;
   if (title) row.title = title;
+  if (typeof ariaExpanded === "boolean") {
+    row.setAttribute("aria-expanded", ariaExpanded ? "true" : "false");
+  }
   row.innerHTML = `
     ${twistie ? `<span class="explorer-twist" data-twist>${expanded ? "▾" : "▸"}</span>` : ""}
     <span class="explorer-main">
@@ -1791,10 +2111,10 @@ function renderExplorerRow({
       onRename();
     });
   }
-    row.querySelector("[data-twist]")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      (onTwistie || onClick)?.();
-    });
+  row.querySelector("[data-twist]")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    (onTwistie || onClick)?.();
+  });
   row.querySelector(".explorer-del")?.addEventListener("click", (e) => {
     e.stopPropagation();
     onDelete?.();
@@ -1824,41 +2144,24 @@ function playingInstanceIdForBook(book) {
   return playWorkingInstanceByBook.get(book.id) ?? null;
 }
 
-function renderProductContents(book, product, list) {
-  const loading = playSavesLoading.has(book.id);
-  const saves = playSavesByBook.get(book.id);
-  if (loading && saves === undefined) {
-    const hint = document.createElement("p");
-    hint.className = "explorer-hint";
-    hint.textContent = "加载存档…";
-    list.appendChild(hint);
-    return;
-  }
-
+function renderSpecChildren(book, product, list) {
   const playHere = book.id === activeBookId && isPlayNow();
-  const playingInstanceId = playingInstanceIdForBook(book);
-  const hasWorking = playingInstanceId === product.id;
-  const runs = runsForProduct(book.id, product.id, productInstancesForBook(book.id));
-
-  if (hasWorking) {
+  if (specOwnsWorkingPlay(book, product.id)) {
+    const live = playHere && !activePlaySaveId;
     list.appendChild(
       renderExplorerRow({
         name: "当前游玩",
-        meta: playHere && !activePlaySaveId ? "进行中" : "工作副本",
-        active: playHere && !activePlaySaveId,
-        onClick: () => void openCurrentPlay(book.id),
+        meta: live ? "游玩中" : "",
+        active: live,
+        actionClass: "explorer-run",
+        child: true,
+        onClick: () => void loadPlaySave(book.id, "play-working"),
         onContextMenu: (e) =>
           showSaveMenu(book.id, "play-working", "当前游玩", e.clientX, e.clientY),
       }),
     );
   }
-
-  if (!runs.length && !hasWorking) {
-    const hint = document.createElement("p");
-    hint.className = "explorer-hint";
-    hint.textContent = "还没有游玩存档";
-    list.appendChild(hint);
-  }
+  const runs = runsForProduct(book.id, product.id, productInstancesForBook(book.id));
 
   for (const run of runs) {
     const runWhen = formatSaveWhen(run.createdAt);
@@ -1867,7 +2170,8 @@ function renderProductContents(book, product, list) {
         name: run.label,
         meta: runWhen || "游玩进度",
         active: playHere && activePlaySaveId === run.id,
-        actionClass: "explorer-file",
+        actionClass: "explorer-run",
+        child: true,
         onClick: () => void loadPlaySave(book.id, run.id),
         onRename: () => void renamePlaySave(book.id, run.id, run.label),
         onDelete: () => void deletePlaySave(book.id, run.id, run.label, "游玩存档"),
@@ -1876,26 +2180,39 @@ function renderProductContents(book, product, list) {
       }),
     );
   }
+}
 
+function appendNewPlayRow(book, list, instanceId, { child = false } = {}) {
   list.appendChild(
     renderExplorerRow({
       name: "+ 新开一局",
       actionClass: "explorer-action",
-      onClick: () => void startNewPlayForBook(book.id, product.id),
+      child,
+      onClick: () => void startNewPlayForBook(book.id, instanceId),
+    }),
+  );
+}
+
+function appendCurrentDesignRow(book, list) {
+  const live =
+    book.id === activeBookId && Boolean(sessionId) && !isPlayNow();
+  list.appendChild(
+    renderExplorerRow({
+      name: "当前创作",
+      meta: live ? "进行中" : "继续",
+      active: live,
+      actionClass: "explorer-design",
+      title: "打开创作会话；定稿会出现在下方",
+      onClick: () => void resumeDesignSession(book.id),
     }),
   );
 }
 
 function renderBookContents(book, list) {
-  const designing = book.id === activeBookId && !isPlayNow();
-  list.appendChild(
-    renderExplorerRow({
-      name: "继续创作",
-      meta: designing ? "进行中" : "",
-      active: designing,
-      onClick: () => void openBookDesign(book.id),
-    }),
-  );
+  const playingInstanceId = playingInstanceIdForBook(book);
+  const products = productInstancesForBook(book.id);
+
+  appendCurrentDesignRow(book, list);
 
   const loading = playSavesLoading.has(book.id);
   const saves = playSavesByBook.get(book.id);
@@ -1907,40 +2224,45 @@ function renderBookContents(book, list) {
     return;
   }
 
-  const products = productInstancesForBook(book.id);
   if (!products.length) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
-    hint.textContent = bookPlayReady(book.id)
-      ? "还没有定稿。可在更多菜单里保存定稿。"
-      : "验收后可保存定稿。";
+    hint.textContent = bookPlayReady(book.id) ? "还没有规格" : "定稿后会出现在这里";
     list.appendChild(hint);
+    if (bookPlayReady(book.id)) appendNewPlayRow(book, list);
     return;
   }
 
-  const latestId = products[0]?.id;
-  const playingInstanceId = playingInstanceIdForBook(book);
-  const section = document.createElement("p");
-  section.className = "explorer-section-label";
-  section.textContent = "定稿";
-  list.appendChild(section);
-
+  let anyExpanded = false;
   for (const product of products) {
+    const expanded = specIsExpanded(book.id, product.id);
     const bits = [];
-    if (product.id === latestId) bits.push("最新");
-    if (playingInstanceId === product.id) bits.push("游玩中");
+    if (!expanded && product.id === playingInstanceId) bits.push("游玩中");
     list.appendChild(
       renderExplorerRow({
         name: product.label,
         meta: bits.join(" · "),
-        title: "打开定稿，双击改名；右键编辑产物",
-        onClick: () => navigateToProduct(book.id, product.id),
+        title: "展开或收起；双击改名；右键编辑产物",
+        actionClass: "explorer-spec",
+        twistie: true,
+        expanded,
+        ariaExpanded: expanded,
+        onClick: () => toggleSpecExpanded(book.id, product.id),
+        onTwistie: () => toggleSpecExpanded(book.id, product.id),
         onRename: () => void renamePlaySave(book.id, product.id, product.label),
-        onDelete: () => void deletePlaySave(book.id, product.id, product.label, "定稿"),
+        onDelete: () => void deletePlaySave(book.id, product.id, product.label, "规格"),
         onContextMenu: (e) =>
           showSaveMenu(book.id, product.id, product.label, e.clientX, e.clientY),
       }),
     );
+    if (expanded) {
+      anyExpanded = true;
+      renderSpecChildren(book, product, list);
+      appendNewPlayRow(book, list, product.id, { child: true });
+    }
+  }
+  if (!anyExpanded) {
+    appendNewPlayRow(book, list, playingInstanceId || products[0]?.id);
   }
 }
 
@@ -1955,34 +2277,6 @@ function renderBookList() {
   }
   list.innerHTML = "";
 
-  if (sidebarNav.level === "product") {
-    const book = getNavBook();
-    if (!book) {
-      sidebarNav = { level: "root" };
-      document.body.dataset.navLevel = "root";
-      renderPathBar();
-    } else {
-      const product = getNavProduct();
-      const loading = playSavesLoading.has(book.id) && !playSavesByBook.has(book.id);
-      if (product) {
-        renderProductContents(book, product, list);
-        return;
-      }
-      if (loading) {
-        const hint = document.createElement("p");
-        hint.className = "explorer-hint";
-        hint.textContent = "加载存档…";
-        list.appendChild(hint);
-        return;
-      }
-      sidebarNav = { level: "book", bookId: book.id };
-      document.body.dataset.navLevel = "book";
-      renderPathBar();
-      renderBookContents(book, list);
-      return;
-    }
-  }
-
   if (sidebarNav.level === "book") {
     const book = getNavBook();
     if (book) {
@@ -1995,24 +2289,34 @@ function renderBookList() {
   }
 
   for (const book of books) {
-    const skill = book.activeSkillName ?? book.activeSkillId ?? book.orchestratorName ?? "实例设计";
     const selected = selectedBookIds.has(book.id);
     list.appendChild(
       renderExplorerRow({
         name: book.title,
-        meta: skill,
+        meta: catalogBookMeta(book),
+        active: book.id === activeBookId,
         selected,
         bookId: book.id,
         actionClass: "explorer-folder",
-        onClick: () => {
+        onClick: (e) => {
           if (bookSelectMode) {
             toggleBookSelection(book.id);
             return;
           }
-          navigateToBook(book.id);
+          e.stopPropagation();
+          if (enterPickerBookId === book.id) {
+            hideEnterPicker();
+            return;
+          }
+          showEnterPicker(book.id, e.currentTarget);
         },
       }),
     );
+  }
+  if (enterPickerBookId && sidebarNav.level === "root") {
+    const row = list.querySelector(`[data-book-id="${enterPickerBookId}"]`);
+    if (row) showEnterPicker(enterPickerBookId, row);
+    else hideEnterPicker();
   }
 }
 
@@ -2176,8 +2480,8 @@ async function loadPlaySave(bookId, saveId) {
   try {
     const products = productInstancesForBook(bookId);
     const run = playRunsForBook(bookId).find((r) => r.id === saveId);
-    const instanceId = run ? resolveRunInstanceId(run, products) : sidebarNav.productId;
-    if (instanceId) navigateToProduct(bookId, instanceId);
+    const instanceId = run ? resolveRunInstanceId(run, products) : null;
+    if (instanceId) ensureSpecExpanded(bookId, instanceId);
     else navigateToBook(bookId);
     if (lastView?.bookId === bookId) renderSession(lastView, true);
     const data = await api(
@@ -2217,10 +2521,8 @@ async function deletePlaySave(bookId, saveId, label, kindLabel = "游玩存档")
       { method: "DELETE" },
     );
     if (activePlaySaveId === saveId) activePlaySaveId = null;
-    if (sidebarNav.level === "product" && sidebarNav.productId === saveId) {
-      sidebarNav = { level: "book", bookId };
-      document.body.dataset.navLevel = "book";
-    }
+    const expanded = expandedSpecsByBook.get(bookId);
+    expanded?.delete(saveId);
     await fetchPlaySavesForBook(bookId, true);
   } catch (err) {
     alert(err.message);
@@ -2234,9 +2536,13 @@ async function startNewPlayForBook(bookId, instanceId) {
     return;
   }
   try {
-    if (instanceId) navigateToProduct(bookId, instanceId);
+    if (instanceId) ensureSpecExpanded(bookId, instanceId);
     else navigateToBook(bookId);
-    if (lastView?.bookId === bookId) renderSession(lastView, true);
+    if (activeBookId !== bookId || !sessionId) {
+      await openBook(bookId);
+    } else if (lastView?.bookId === bookId) {
+      renderSession(lastView, true);
+    }
     const data = await api(`/api/books/${encodeURIComponent(bookId)}/play/new`, {
       method: "POST",
       body: JSON.stringify(instanceId ? { instanceId } : {}),
@@ -2250,22 +2556,36 @@ async function startNewPlayForBook(bookId, instanceId) {
   }
 }
 
-async function openBookDesign(bookId) {
-  navigateToBook(bookId);
+async function resumeDesignSession(bookId) {
   activePlaySaveId = null;
-  if (activeBookId !== bookId || !sessionId) {
-    await openBook(bookId);
+  try {
+    if (activeBookId !== bookId || !sessionId) {
+      await openBook(bookId);
+    }
+    if (isPlayNow()) {
+      await setLifecycle("design");
+      return;
+    }
+    renderPathBar();
+    renderBookList();
+  } catch (err) {
+    alert(err.message || "打开创作失败");
   }
-  if (isPlayNow()) {
-    await setLifecycle("design");
-    return;
-  }
-  renderBookList();
+}
+
+/** 点「创作」：进入该作品快照列表，并打开/恢复创作会话 */
+async function openBookDesign(bookId) {
+  hideEnterPicker();
+  bookSelectMode = false;
+  selectedBookIds = new Set();
+  navigateToBook(bookId);
+  await resumeDesignSession(bookId);
 }
 
 async function openCurrentPlay(bookId) {
+  hideEnterPicker();
   const instanceId = playingInstanceIdForBook({ id: bookId });
-  if (instanceId) navigateToProduct(bookId, instanceId);
+  if (instanceId) ensureSpecExpanded(bookId, instanceId);
   else navigateToBook(bookId);
   const alreadyHere =
     activeBookId === bookId &&
@@ -2327,6 +2647,7 @@ function renderHeader(view, loading) {
 }
 
 function closeWorkspace({ emptyCopy = "" } = {}) {
+  hideEnterPicker();
   stopLivePoll();
   sessionId = null;
   lastView = null;
@@ -2393,6 +2714,11 @@ function stopLivePoll() {
     clearInterval(livePollTimer);
     livePollTimer = null;
   }
+  livePollSawRun = false;
+  livePollBaselineSig = "";
+  livePollStructuralSig = "";
+  livePollStartedAt = 0;
+  livePollFailCount = 0;
 }
 
 function beginUiRequest() {
@@ -2401,6 +2727,51 @@ function beginUiRequest() {
 
 function isStaleUiRequest(seq) {
   return seq !== inflightSeq;
+}
+
+function sessionStructuralSig(view) {
+  const messages = view?.messages ?? [];
+  const last = messages[messages.length - 1];
+  const products = view?.dictateProducts ?? [];
+  return [
+    messages.length,
+    last?.id ?? "",
+    products.length,
+    products.map((p) => p.tag).join(","),
+    view?.phase ?? "",
+    view?.waitingReason?.kind ?? "",
+    view?.runActive ? "1" : "0",
+  ].join("|");
+}
+
+/** 用服务端最新 view 结束本地「生成中」，并作废悬挂的 POST */
+function finishUiLoading(view) {
+  beginUiRequest();
+  renderSession(view, false);
+}
+
+async function recoverBusySession() {
+  if (!sessionId) return false;
+  try {
+    const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    finishUiLoading(view);
+    return true;
+  } catch {
+    const bookId = lastView?.bookId || activeBookId;
+    if (!bookId) return false;
+    try {
+      const data = await api(`/api/books/${encodeURIComponent(bookId)}/open`, {
+        method: "POST",
+      });
+      if (data?.session) {
+        finishUiLoading(data.session);
+        return true;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return false;
 }
 
 async function retryRun() {
@@ -2416,7 +2787,10 @@ async function retryRun() {
     renderSession(view, false);
   } catch (err) {
     if (isStaleUiRequest(seq)) return;
-    if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+    const recovered = await recoverBusySession();
+    if (!recovered && lastView) {
+      renderSession({ ...lastView, hints: [err.message] }, false);
+    }
   }
 }
 
@@ -2433,7 +2807,14 @@ async function abortRun() {
     renderSession(view, false);
   } catch (err) {
     if (isStaleUiRequest(seq)) return;
-    if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+    // 请求已在服务端结束、或会话因重启丢失：停止也要能退出「生成中」
+    const recovered = await recoverBusySession();
+    if (!recovered && lastView) {
+      renderSession(
+        { ...lastView, hints: [err.message || "已停止"] },
+        false,
+      );
+    }
   }
 }
 
@@ -2455,22 +2836,67 @@ async function clearDictateDialogue() {
 }
 
 function startLivePoll() {
-  stopLivePoll();
+  // 已在轮询时不要重置：loading 下因消息落盘而 renderSession(..., true) 会再次调用
+  if (livePollTimer != null) return;
   if (!sessionId) return;
+  livePollSawRun = false;
+  livePollFailCount = 0;
+  livePollBaselineSig = sessionStructuralSig(lastView);
+  livePollStructuralSig = livePollBaselineSig;
+  livePollStartedAt = Date.now();
   livePollTimer = setInterval(async () => {
-    if (!sessionId) return;
+    if (!sessionId || livePollTimer == null) return;
     try {
       const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      lastView = { ...lastView, liveStream: view.liveStream, agentThinking: view.agentThinking };
+      if (!sessionId || livePollTimer == null) return;
+      livePollFailCount = 0;
+
+      if (view.runActive) livePollSawRun = true;
+
+      const sig = sessionStructuralSig(view);
+      const progressed = sig !== livePollBaselineSig;
+      const elapsed = Date.now() - livePollStartedAt;
+      // 服务端已空闲且：见过 run / 或内容相对启动时已推进
+      const serverDone =
+        !view.runActive &&
+        (livePollSawRun || (progressed && elapsed > 600));
+      if (serverDone) {
+        finishUiLoading(view);
+        return;
+      }
+
+      if (sig !== livePollStructuralSig) {
+        livePollStructuralSig = sig;
+        // 保持 loading 底栏，但把已写入的用户句/产物/回复刷进主区
+        renderSession(view, true);
+        return;
+      }
+
+      lastView = {
+        ...lastView,
+        liveStream: view.liveStream,
+        agentThinking: view.agentThinking,
+        runActive: view.runActive,
+        dictateProducts: view.dictateProducts ?? lastView.dictateProducts,
+      };
       updateLiveStreamPanel(view);
     } catch {
-      /* ignore transient poll errors */
+      livePollFailCount += 1;
+      // 服务重启后内存会话丢失：重开作品收尾，避免永远转圈
+      if (livePollFailCount >= 3) {
+        const ok = await recoverBusySession();
+        if (!ok && lastView) {
+          finishUiLoading({
+            ...lastView,
+            hints: ["连接中断，请点左侧作品重新打开"],
+          });
+        }
+      }
     }
   }, LIVE_POLL_MS);
 }
 
 function renderSession(view, loading = false) {
-  if (isCatalogNav()) return;
   lastView = view;
   sessionId = view.id;
   activeBookId = view.bookId ?? activeBookId;
@@ -2521,6 +2947,12 @@ function renderSession(view, loading = false) {
     onLeaveCreationStep: () => runAction("leave_step"),
     onEnterPlay: () => enterPlayNow(),
     onSaveProduct: () => void saveCurrentInstance(),
+    onPatchTable: (tag, cells) => void patchPlayTable(tag, cells),
+    onSelectOpening: (index, usePersona) => void selectPlayOpening(index, usePersona),
+    onRefuseOpeningPersona: () => {
+      const idx = lastView?.playAux?.selectedOpeningIndex ?? 0;
+      void selectPlayOpening(idx, false);
+    },
   });
   renderComposer(view, loading);
   if (loading) startLivePoll();
@@ -2731,7 +3163,23 @@ async function sendText(text) {
   }
   try {
     beginComposerSubmit();
-    renderSession(lastView, true);
+    const optimistic = lastView
+      ? {
+          ...lastView,
+          messages: [
+            ...(lastView.messages ?? []),
+            {
+              id: `local-${Date.now()}`,
+              role: "user",
+              kind: "user_input",
+              text: trimmed,
+              body: trimmed,
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }
+      : lastView;
+    renderSession(optimistic || lastView, true);
     const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ text: trimmed }),
@@ -2743,7 +3191,10 @@ async function sendText(text) {
     if (isStaleUiRequest(seq)) return;
     keepComposerDraft(trimmed);
     if (cardOpen && qHost) qHost._qDismissed = null;
-    if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+    const recovered = await recoverBusySession();
+    if (!recovered && lastView) {
+      renderSession({ ...lastView, hints: [err.message] }, false);
+    }
   } finally {
     endComposerSubmit();
   }
@@ -2793,10 +3244,53 @@ function enterPlayNow() {
     void openCurrentPlay(activeBookId);
     return;
   }
-  void setLifecycle("play");
+  void (async () => {
+    await setLifecycle("play");
+  })();
 }
 
-async function setLifecycle(stage) {
+async function patchPlayTable(tag, cells) {
+  if (!sessionId) return;
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/table`, {
+      method: "POST",
+      body: JSON.stringify({ tag, cells }),
+    });
+    const skipped = data.tablePatch?.skipped ?? [];
+    const conflicts = skipped.filter((s) => String(s.reason || "").includes("rev"));
+    if (conflicts.length) {
+      alert(
+        `有字段已被更新，未写入：${conflicts.map((c) => c.key).join("、")}。请再改一次。`,
+      );
+    }
+    renderSession(data, false);
+  } catch (err) {
+    alert(err.message || "无法改表");
+    if (lastView) renderSession(lastView, false);
+  }
+}
+
+async function selectPlayOpening(index, usePersona) {
+  if (!sessionId) return;
+  try {
+    const view = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/play/opening`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          index,
+          ...(typeof usePersona === "boolean" ? { usePersona } : {}),
+        }),
+      },
+    );
+    renderSession(view, false);
+  } catch (err) {
+    alert(err.message || "无法选用开场");
+    if (lastView) renderSession(lastView, false);
+  }
+}
+
+async function setLifecycle(stage, opts) {
   if (!sessionId) return;
   if (stage === lastView?.lifecycleStage) {
     if (stage === "design") return;
@@ -2815,9 +3309,19 @@ async function setLifecycle(stage) {
   try {
     const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/lifecycle`, {
       method: "POST",
-      body: JSON.stringify({ stage }),
+      body: JSON.stringify({
+        stage,
+        ...(typeof opts?.useOpeningPersona === "boolean"
+          ? { useOpeningPersona: opts.useOpeningPersona }
+          : {}),
+      }),
     });
-    if (stage === "design") activePlaySaveId = null;
+    if (stage === "design") {
+      activePlaySaveId = null;
+      if (activeBookId) navigateToBook(activeBookId);
+    } else if (stage === "play" && activeBookId) {
+      navigateToBook(activeBookId);
+    }
     renderSession(view, false);
     if (activeBookId) void fetchPlaySavesForBook(activeBookId, true);
   } catch (err) {
@@ -2900,8 +3404,8 @@ async function populateDirectorSelect() {
     if (modeDesc) {
       modeDesc.hidden = false;
       modeDesc.textContent = dictate
-        ? "Boss 直聘：对话写入产物；变量/映射用工具钉死；下方为直聘专用配方。"
-        : "Worker 式：按工序图逐步验收；下方为编排专用配方。";
+        ? `${displayCreationModeLabel("dictate")}：对话写入产物；变量/映射用工具钉死；下方为对应配方。`
+        : `${displayCreationModeLabel("recipe")}：按工作流计划逐步验收技能；下方为对应配方。`;
     }
     syncDesc();
   };
@@ -2963,7 +3467,8 @@ async function createBook() {
     $("dialog-new-book").close();
     if (data.book) books.unshift(data.book);
     activeBookId = data.book?.id;
-    navigateToBook(data.book.id);
+    sidebarNav = { level: "root" };
+    document.body.dataset.navLevel = "root";
     renderSession(data.session, false);
   } catch (err) {
     alert(err.message);
@@ -2975,7 +3480,6 @@ async function createBook() {
 async function openBook(bookId) {
   const seq = beginUiRequest();
   activeBookId = bookId;
-  navigateToBook(bookId);
   if (lastView?.bookId === bookId) renderSession(lastView, true);
   try {
     const data = await api(`/api/books/${encodeURIComponent(bookId)}/open`, { method: "POST" });
@@ -3062,7 +3566,8 @@ async function saveCurrentInstance() {
     }
     await fetchPlaySavesForBook(activeBookId, true);
     const newest = productInstancesForBook(activeBookId)[0];
-    if (newest) navigateToProduct(activeBookId, newest.id);
+    if (newest) ensureSpecExpanded(activeBookId, newest.id);
+    else navigateToBook(activeBookId);
   } catch (err) {
     alert(err.message);
   }
@@ -3367,6 +3872,18 @@ $("lifecycle-toggle")?.addEventListener("click", (e) => {
 });
 $("btn-new-book")?.addEventListener("click", openNewBookDialog);
 $("btn-cancel-new")?.addEventListener("click", () => $("dialog-new-book").close());
+$("book-enter-pop")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const btn = e.target.closest("[data-enter]");
+  if (!btn || btn.disabled) return;
+  const enter = btn.getAttribute("data-enter");
+  const bookId = enterPickerBookId;
+  hideEnterPicker();
+  if (!bookId) return;
+  if (enter === "design") void openBookDesign(bookId);
+  else if (enter === "play") void openCurrentPlay(bookId);
+});
+
 $("book-action-menu")?.addEventListener("click", (e) => {
   const action = e.target.closest("[data-action]")?.getAttribute("data-action");
   const bookId = bookMenuBookId;
@@ -3406,17 +3923,25 @@ $("book-action-menu")?.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#book-action-menu")) hideBookMenu();
   if (!e.target.closest("#save-action-menu")) hideSaveMenu();
+  if (
+    !e.target.closest("#book-enter-pop") &&
+    !e.target.closest(".explorer-folder")
+  ) {
+    hideEnterPicker();
+  }
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     hideBookMenu();
     hideSaveMenu();
+    hideEnterPicker();
     if (bookSelectMode || selectedBookIds.size) setBookSelectMode(false);
   }
 });
 document.addEventListener("scroll", () => {
   hideBookMenu();
   hideSaveMenu();
+  hideEnterPicker();
 }, true);
 
 $("save-action-menu")?.addEventListener("click", (e) => {
@@ -3527,28 +4052,49 @@ $("theme-menu")?.addEventListener("click", (e) => {
     menu.removeAttribute("open");
     return;
   }
-  const chromeBtn = e.target.closest("[data-present-chrome]");
-  if (chromeBtn && menu.contains(chromeBtn)) {
+  const bumpBtn = e.target.closest("[data-font-scale-bump]");
+  if (bumpBtn && menu.contains(bumpBtn)) {
     e.preventDefault();
-    applyPresentChrome(chromeBtn.getAttribute("data-present-chrome"));
+    e.stopPropagation();
+    bumpUiFontScale(bumpBtn.getAttribute("data-font-scale-bump"));
     syncThemeMenuUi();
-    menu.removeAttribute("open");
   }
 });
 
 $("composer")?.addEventListener("click", (e) => {
   const menu = e.target.closest("#composer-more-menu");
+  if (!menu) return;
+  const clearDictateBtn = e.target.closest("[data-act=clear-dictate]");
+  if (clearDictateBtn && menu.contains(clearDictateBtn)) {
+    e.preventDefault();
+    closeComposerMoreMenu(menu);
+    void clearDictateDialogue();
+    return;
+  }
   const mdBtn = e.target.closest("[data-toggle-markdown]");
-  if (!mdBtn || !menu?.contains(mdBtn)) return;
-  e.preventDefault();
-  applyMarkdownRender(!isMarkdownRenderEnabled());
-  syncMarkdownMenuUi();
-  if (lastView && sessionId) renderSession(lastView, false);
+  if (mdBtn && menu.contains(mdBtn)) {
+    e.preventDefault();
+    applyMarkdownRender(!isMarkdownRenderEnabled());
+    syncMarkdownMenuUi();
+    if (lastView && sessionId) renderSession(lastView, false);
+    return;
+  }
+  const reloadBtn = e.target.closest("[data-reload-profiles]");
+  if (reloadBtn && menu.contains(reloadBtn)) {
+    e.preventDefault();
+    void loadApiProfiles();
+    return;
+  }
+  const profileBtn = e.target.closest("[data-activate-profile]");
+  if (profileBtn && menu.contains(profileBtn)) {
+    e.preventDefault();
+    void activateApiProfileFromMenu(profileBtn.getAttribute("data-activate-profile"), menu);
+  }
 });
 
 window.addEventListener("wa:session-updated", (e) => {
   const view = e.detail;
-  if (!view?.id || isCatalogNav() || !sessionId) return;
+  if (!view?.id || !sessionId) return;
   if (view.id !== sessionId) return;
   renderSession(view, false);
 });
@@ -3559,18 +4105,23 @@ window.addEventListener("wa:nav-root", () => {
 
 document.addEventListener("click", (e) => {
   document.querySelectorAll("details.more-menu[open]").forEach((d) => {
-    if (!d.contains(e.target)) d.removeAttribute("open");
+    if (!d.contains(e.target)) {
+      d.removeAttribute("open");
+      d.querySelectorAll("details.more-submenu[open]").forEach((sub) => {
+        sub.removeAttribute("open");
+      });
+    }
   });
 });
 
 async function init() {
   initColorTheme();
-  initPresentChrome();
+  initUiFontScale();
   initMarkdownRender();
   syncThemeMenuUi();
   try {
     void populateDirectorSelect();
-    await Promise.all([loadBooks(), loadPersonas()]);
+    await Promise.all([loadBooks(), loadPersonas(), loadApiProfiles()]);
     if (books.length) {
       showCatalog();
     } else {

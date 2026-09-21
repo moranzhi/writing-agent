@@ -16,6 +16,8 @@ describe("dictate play-bind", () => {
     expect(isDictateStyleBindTag("设计.正文组成")).toBe(true);
     expect(isDictateStyleBindTag("设计.模仿范例")).toBe(true);
     expect(isDictateStyleBindTag("设计.模仿要点")).toBe(true);
+    expect(isDictateStyleBindTag("设计.叙事指南")).toBe(true);
+    expect(isDictateStyleBindTag("设计.故事推进")).toBe(true);
     expect(isDictateStyleBindTag("用户.需求")).toBe(false);
   });
 
@@ -107,7 +109,13 @@ describe("dictate play-bind", () => {
       metadata: { [DICTATE_ORDER_META_KEY]: -28 },
     });
     board.write({
-      tag: "设计.叙事指南与故事推进",
+      tag: "设计.叙事指南",
+      content: "冷硬短句，笔墨落在权力交换。",
+      source: "dictate",
+      metadata: { [DICTATE_ORDER_META_KEY]: -20 },
+    });
+    board.write({
+      tag: "设计.故事推进",
       content: "用户输入用法：大纲扩写。禁止扮演停笔。",
       source: "dictate",
       metadata: { [DICTATE_ORDER_META_KEY]: -22 },
@@ -132,11 +140,11 @@ describe("dictate play-bind", () => {
     const narrRefs = narr!.inserts.map((i) => i.ref);
     expect(narrRefs).toContain("设计.模仿范例");
     expect(narrRefs).toContain("设计.模仿要点");
-    expect(narrRefs).toContain("设计.叙事指南与故事推进");
+    expect(narrRefs).toContain("设计.叙事指南");
+    expect(narrRefs).toContain("设计.故事推进");
     expect(narrRefs).not.toContain("用户.需求");
     expect(JSON.parse(result.workerSetJson).play_slots.narrator).toBe(true);
-    // 落档不改写创作期叙事指南
-    expect(board.getContentByTag("设计.叙事指南与故事推进")).toBe(
+    expect(board.getContentByTag("设计.故事推进")).toBe(
       "用户输入用法：大纲扩写。禁止扮演停笔。",
     );
   });

@@ -97,6 +97,17 @@ const TOOL_LABEL: Record<string, string> = {
   ask_user: "问用户",
   review_blackboard: "审黑板",
   finish: "结束",
+  insert: "写入产物",
+  write_product: "写入产物",
+  delete: "删除产物",
+  declare_variable: "声明变量",
+  undeclare_variable: "移除变量",
+  declare_map: "声明映射",
+  remove_map: "移除映射",
+  clear_dialogue: "清空对话",
+  chance: "机遇裁定",
+  submit_present_packet: "提交呈现",
+  submit_worker_result: "提交结果",
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -202,6 +213,11 @@ export function labelCaller(caller: string | undefined): string {
   const who = caller?.trim() || "未知";
   if (who === "main_agent" || who.startsWith("main_agent:")) return "总管";
   if (who === "intake_extract") return "需求抽取";
+  if (who === "dictate_agent") return "对话落盘";
+  if (who === "preset-probe") return "预设探测";
+  if (who.startsWith("model-compare:")) {
+    return `模型对比 ${who.slice("model-compare:".length)}`;
+  }
   if (who.startsWith("worker:")) return `执行单元 ${who.slice("worker:".length)}`;
   if (who === "unknown") return "未知";
   return who;

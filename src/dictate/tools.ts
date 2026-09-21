@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "../llm/client.js";
 
 /**
- * Boss 直聘创作期工具：产物 / 变量 / 映射均须 toolcall；聊天只做确认与建议。
+ * 对话落盘创作期工具：产物 / 变量 / 映射均须 toolcall；聊天只做确认与建议。
  */
 export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -9,19 +9,19 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "insert",
       description:
-        "写入不变型固定产物（设定/格式/开场等）。确认与建议只写在普通回复。用 order 标相对先后。",
+        "写入或覆盖固定产物。同 position 再调用即整份改写。可增殖（生成规则/具体实例）须用 基名#唯一id 拆分，禁止反复写基名覆盖。成功时可能返回 reply_module：末尾可见回复须附带该模块；同轮多个则每个模块各写一块 ## 模块 · 名称。确认与追问写在普通回复，不写进本工具。order 标相对先后。",
       parameters: {
         type: "object",
         properties: {
           position: {
             type: "string",
             description:
-              "产物 tag，须以「用户.」或「设计.」开头。例：用户.需求、设计.正文组成、设计.开场白。勿用本工具写变量目录/映射。",
+              "产物 tag，须以「用户.」或「设计.」开头。例：用户.需求、设计.正文组成、设计.开场白；可增殖例：设计.生成规则#rule-id、设计.具体实例#batch-id。勿用本工具写变量目录/映射。",
           },
           content: {
             type: "string",
             description:
-              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白=可读开场 Markdown，必须含字面 @玩家（用户角色名位，禁止写死姓名）",
+              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白=meta + 正文（有正文组成时正文为 present.v1 JSON；否则 Markdown），必须含字面 @玩家（用户角色名位，禁止写死姓名）",
           },
           order: {
             type: "number",
@@ -108,6 +108,68 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
           note: { type: "string" },
         },
         required: ["id", "field", "target_tag", "bands"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete",
+      description:
+        "删除一个已落盘的固定产物 tag（整份移除）。改内容请用 insert 覆盖；删变量字段用 undeclare_variable；删映射条目用 remove_map。勿用本工具写空 content 假装删除。",
+      parameters: {
+        type: "object",
+        properties: {
+          position: {
+            type: "string",
+            description:
+              "要删的产物 tag，须以「用户.」或「设计.」开头。例：设计.开场白。删整份变量目录/映射也可（设计.变量目录 / 设计.变量映射）。",
+          },
+          reason: {
+            type: "string",
+            description: "为何删除（一句话，可选）",
+          },
+        },
+        required: ["position"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "undeclare_variable",
+      description:
+        "从设计.变量目录移除一个真值字段，并同步从变量.当前去掉该格。改初值/可见性请用 declare_variable。",
+      parameters: {
+        type: "object",
+        properties: {
+          key: {
+            type: "string",
+            description: "要移除的字段名",
+          },
+        },
+        required: ["key"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_map",
+      description:
+        "从设计.变量映射按 id 移除一条映射；若无其它映射共用其投影 tag，则一并删除该投影 tag。",
+      parameters: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "映射 id（与 declare_map 时一致）",
+          },
+        },
+        required: ["id"],
         additionalProperties: false,
       },
     },

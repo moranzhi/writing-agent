@@ -48,4 +48,32 @@ describe("table-cells", () => {
     expect(skipped[0]?.reason).toContain("rev-conflict");
     expect(doc.rows.find((r) => r.key === "好感")?.value).toBe(10);
   });
+
+  it("user patches require matching rev and skip hidden cells", async () => {
+    const { patchUserTableCells } = await import("../src/blackboard/table-cells.js");
+    const current = createTableFromValues(
+      { 口粮: 1, 暗线: "未揭" },
+      "worker:a",
+      { 口粮: { visibility: "visible" }, 暗线: { visibility: "hidden" } },
+    );
+    current.rows.find((r) => r.key === "口粮")!.rev = 2;
+    const { applied, skipped, doc } = patchUserTableCells(current, [
+      { key: "口粮", value: 3, expectedRev: 1 },
+      { key: "暗线", value: "揭了", expectedRev: 1 },
+    ]);
+    expect(applied).toEqual([]);
+    expect(skipped.some((s) => s.key === "口粮" && s.reason.includes("rev"))).toBe(
+      true,
+    );
+    expect(skipped.some((s) => s.key === "暗线" && s.reason === "not-editable")).toBe(
+      true,
+    );
+    const ok = patchUserTableCells(current, [
+      { key: "口粮", value: 3, expectedRev: 2 },
+    ]);
+    expect(ok.applied).toEqual(["口粮"]);
+    expect(ok.doc.rows.find((r) => r.key === "口粮")?.value).toBe(3);
+    expect(ok.doc.rows.find((r) => r.key === "口粮")?.rev).toBe(3);
+    expect(doc.rows.find((r) => r.key === "口粮")?.value).toBe(1);
+  });
 });

@@ -1,7 +1,7 @@
-# 世界模拟器 · 编排器与能力撰写清单
+# 默认技能包 · 编排器与能力撰写清单
 
-> 给作者用。用户侧术语：**`docs/ui-glossary.md` §0**。  
-> 运行：选配方 → 编排**增量**工作流计划 DAG → `design-step` 执行技能；可再扩步反复调用。  
+> 包内部 id 仍为 `world-simulator`。用户可见：进料方式「工序编排 / 对话落盘」，配方「回合推演 / 快穿短局 …」——见 **`docs/ui-glossary.md` §0 / §0.1**。  
+> 运行：选进料方式与配方 →（工序编排）编排**增量**工作流计划 DAG → `design-step` 执行技能；可再扩步反复调用。  
 > **标准范例**：`modules/aesthetics-interaction/prompt.md`。  
 > **真值 / Data / Progressive（变量与门控）**：**`docs/progressive-data-design.md`**。  
 > **上下文片段 / 槽位 / 投影排序**：**`docs/context-fragment-design.md`**。  
@@ -94,6 +94,7 @@ boundary: …
 | `closer` | 可选；`true` = 创作终节点（选定后落库、关 DAG、保存定稿） |
 | `auto` | 可选；`true` = 程序步（提案后直接执行） |
 | `kind` | 可选；节点特性。缺省=普通执行步。`prior-artifact` = **先验产物**（须先定写什么；params 是规划产物，执行注入【规划产物】，不拦确认开干） |
+| `intake` | 可选；`recipe` = 仅工序编排；`dictate` = 仅对话落盘。缺省=两族都可见 |
 | `params` | 可选；普通节点=编排期 `steps[].params` 声明（必填项须在进执行前钉齐）。〔先验产物〕=规划产物字段（可提前填，空则步内钉） |
 | `opening` | 可选覆盖；一般只写在 prompt 的 `opening` 块 |
 
@@ -171,18 +172,21 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 能力 | id | 状态 |
 |------|-----|------|
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写**；前端 mosaic 视图 |
+| 主角设定 | `protagonist` | **已写**：有产物则挂在当前选用的用户角色卡下（不进全局列表）；关掉这局就不加载 |
 | 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm`；**专用卡已接** |
 | 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况；**专用卡已接** |
 | 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；方向池优先、元素池仅封闭集合；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
 | 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；**〔先验产物〕**；规划字段 `rule_id` |
-| 叙事指南与故事推进 | `narrative` | **已写**：一份全文双挂；**不**为省 token 拆投影；结构化卡 |
+| 叙事指南与故事推进 | `narrative` | **工序编排**：一份全文双挂；结构化卡。对话落盘不排本步 |
+| 叙事指南 | `narrative-guide` | **对话落盘**：遣词/笔墨/禁忌/写法档；`intake: dictate` |
+| 故事推进 | `story-progression` | **对话落盘**：推进方式 + 用户输入用法；`intake: dictate` |
 | 拓扑图谱 | `topology` | 必须生成且不适合走生成规则→实例时，用拓扑结构写出（升级路径、地图、人物关系等） |
 | 回复呈现 | `status-bar` | **已写**：每轮终稿看什么（正文/字数/日期/变量）；旧称设计监控栏 |
 | 随机范围整理 | `random-range` | **已写**：汇总检定/对抗等随机项与范围；正文组成之前；替代机遇裁定槽 |
 | 正文组成 | `reply-format` | **已写**：把回复呈现清单展示出来；选壳+美化，可写 CSS/HTML/JS；可接隐藏备用随机区 |
 | 变量设计与更新规则 | `variable-design` | **已写**；专用/结构化卡 |
 | 变量控制上下文 | `variable-context` | **已写**：旁观汇总；mount 含 auditor；通用 fragment 卡 |
-| 开场白与开场变量 | `opening-setup` | **已写**：开场守版式+同真相初值；**〔收口〕**选定后落库并保存定稿 |
+| 开场白与开场变量 | `opening-setup` | **已写**：每条 = meta（初值/用户角色）+ present.v1 正文（壳跟正文组成）；**〔收口〕**选定后落库并保存定稿 |
 
 共用收成（池内保留，按需）：
 

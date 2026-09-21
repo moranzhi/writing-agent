@@ -102,6 +102,20 @@ export class Blackboard {
     return item;
   }
 
+  /** 删除某 tag 的全部条目；返回是否曾存在 */
+  deleteByTag(tag: string): boolean {
+    const t = tag.trim();
+    if (!t) return false;
+    let removed = false;
+    for (const [id, item] of this.items) {
+      if (item.tag === t) {
+        this.items.delete(id);
+        removed = true;
+      }
+    }
+    return removed;
+  }
+
   seed(items: BlackboardItem[]): void {
     for (const item of items) {
       this.items.set(item.id, item);

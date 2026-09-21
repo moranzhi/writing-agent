@@ -95,6 +95,7 @@
 设计.正文组成 → 壳 + 美化（怎么展示）
 输出.用户展示（主世界正文）→ 转述提取/改写后的 body；suggested_actions → 行动区
 输出.用户展示（终稿）→ present.v1 或纯 Markdown（→ body）
+输出.开场白 → 与终稿同形的 present.v1（shell 跟正文组成）；旧稿散文仍可回退为 body
 ```
 
 ## 5. 游玩灌数契约

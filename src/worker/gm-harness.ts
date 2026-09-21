@@ -27,6 +27,8 @@ export type GmHarnessParams = {
   stream?: GmHarnessStreamCallbacks;
   maxIterations?: number;
   caller?: string;
+  /** 日志短名；缺则「主世界层 harness」 */
+  label?: string;
 };
 
 export type GmHarnessResult = {
@@ -38,7 +40,9 @@ export async function runGmHarness(
   params: GmHarnessParams,
 ): Promise<GmHarnessResult> {
   const driver = createLocalLlmDriver(params.llm);
-  const label = "主世界层 harness";
+  const label = params.label?.trim()
+    ? `${params.label.trim()} · 主世界层`
+    : "主世界层 harness";
 
   const result = await driver.run({
     system: params.system,

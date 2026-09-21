@@ -1,4 +1,4 @@
-# 节点流程 · 配方目录（与转述进料配方不共享）
+# 工序编排 · 配方目录（与对话落盘配方不共享）
 # id = recipes/{id}/ 文件夹
 # name = 固定中文名（下拉展示）
 # declaration = 给人看的短说明
@@ -8,8 +8,8 @@
 
 recipes:
   - id: world-simulator
-    name: 世界模拟器
-    declaration: 回合互动、世界推进、角色扮演类体验的设计方法
+    name: 回合推演
+    declaration: 回合互动、可扩展的世界推进与角色扮演；适合要长期经营、能往外长设定的体验
 
   - id: expand-assistant
     name: 扩写助手

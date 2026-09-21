@@ -1,5 +1,6 @@
 import { renderIntakePanel } from "./intake-ui.js";
 import { tryParseJsonDoc } from "./json-doc.js";
+import { formatBodyHtml } from "./markdown.js";
 import {
   getActiveQuestions,
   getModuleOpeningPrompt,
@@ -7,8 +8,8 @@ import {
   isQuestionCardDismissed,
   renderQuestionsCard,
 } from "./questions-ui.js";
-import { displayWorkerLabel, formatWorkerDisplayTitle, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
-import { formatBodyHtml } from "./markdown.js";
+import { displayCreationModeLabel, displayWorkerLabel, formatWorkerDisplayTitle, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
+import { fillPlayAux, hidePlayAuxTabs } from "./play-aux.js";
 import {
   PRESENT_SHELL_IDS,
   parsePresentDoc,
@@ -47,7 +48,7 @@ const MSG_LABEL = {
   orchestrator_thinking: "编排器 · 思考",
   orchestrator_prompt: "编排器",
   orchestrator_assessment: "编排器 · 内容评价",
-  dictate_reply: "Boss直聘",
+  dictate_reply: "对话落盘",
   worker_running: "执行单元",
   worker_output: "执行单元",
   worker_questions: "提问",
@@ -60,6 +61,16 @@ function esc(s) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/** 正文 HTML；缺导入或渲染失败时退回纯文本，避免整页对话空白 */
+function safeBodyHtml(text) {
+  try {
+    if (typeof formatBodyHtml === "function") return formatBodyHtml(text);
+  } catch {
+    /* fall through */
+  }
+  return esc(text).replace(/\n/g, "<br>");
 }
 
 function escAttr(s) {
@@ -314,6 +325,367 @@ const msgMenuState = {
   handlers: null,
 };
 
+const MSG_PEEK_SIZE_KEY = "wa.msg-peek.size";
+/** 拖出后仍须留在视口内的侧/底条带（px） */
+const MSG_PEEK_KEEP_VISIBLE = 48;
+/** 标题栏必须可见的顶边距（px）——保证可拖 */
+const MSG_PEEK_TOP_MARGIN = 8;
+const MSG_PEEK_MIN_W = 280;
+const MSG_PEEK_MIN_H = 180;
+
+const msgPeekState = {
+  wired: false,
+  dragging: false,
+  resizing: false,
+  offsetX: 0,
+  offsetY: 0,
+  resizeStartX: 0,
+  resizeStartY: 0,
+  resizeStartW: 0,
+  resizeStartH: 0,
+  lastLeft: null,
+  lastTop: null,
+};
+
+function hideMsgPeek() {
+  const panel = document.getElementById("msg-peek-panel");
+  if (!panel || panel.hidden) return;
+  panel.hidden = true;
+  panel.classList.remove("is-dragging", "is-resizing");
+  msgPeekState.dragging = false;
+  msgPeekState.resizing = false;
+  const body = document.getElementById("msg-peek-body");
+  if (body) body.innerHTML = "";
+}
+
+function loadMsgPeekSize() {
+  try {
+    const raw = localStorage.getItem(MSG_PEEK_SIZE_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    const width = Number(o?.width);
+    const height = Number(o?.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return { width, height };
+  } catch {
+    return null;
+  }
+}
+
+function saveMsgPeekSize(width, height) {
+  try {
+    localStorage.setItem(
+      MSG_PEEK_SIZE_KEY,
+      JSON.stringify({
+        width: Math.round(width),
+        height: Math.round(height),
+      }),
+    );
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function defaultMsgPeekSize() {
+  return {
+    width: Math.min(680, Math.max(MSG_PEEK_MIN_W, window.innerWidth * 0.92)),
+    height: Math.min(760, Math.max(MSG_PEEK_MIN_H, window.innerHeight * 0.82)),
+  };
+}
+
+function clampMsgPeekSize(width, height) {
+  const maxW = Math.max(MSG_PEEK_MIN_W, window.innerWidth - 16);
+  const maxH = Math.max(MSG_PEEK_MIN_H, window.innerHeight - MSG_PEEK_TOP_MARGIN * 2);
+  return {
+    width: Math.min(Math.max(MSG_PEEK_MIN_W, width), maxW),
+    height: Math.min(Math.max(MSG_PEEK_MIN_H, height), maxH),
+  };
+}
+
+function applyMsgPeekSize(panel) {
+  const saved = loadMsgPeekSize();
+  const base = saved ?? defaultMsgPeekSize();
+  const size = clampMsgPeekSize(base.width, base.height);
+  panel.style.width = `${size.width}px`;
+  panel.style.height = `${size.height}px`;
+  panel.style.maxHeight = "none";
+  return size;
+}
+
+/**
+ * 顶边：标题栏始终留在视口内（可拖）。
+ * 左右/底：允许部分拖出，但至少 KEEP 像素相交。
+ */
+function clampMsgPeekPosition(panel, left, top) {
+  const rect = panel.getBoundingClientRect();
+  const w = rect.width || panel.offsetWidth;
+  const h = rect.height || panel.offsetHeight;
+  const keep = MSG_PEEK_KEEP_VISIBLE;
+  const minLeft = keep - w;
+  const maxLeft = window.innerWidth - keep;
+  const minTop = MSG_PEEK_TOP_MARGIN;
+  const maxTop = Math.max(minTop, window.innerHeight - keep);
+  return {
+    left: Math.min(Math.max(minLeft, left), maxLeft),
+    top: Math.min(Math.max(minTop, top), maxTop),
+  };
+}
+
+function isMsgPeekFullyOffscreen(panel) {
+  const r = panel.getBoundingClientRect();
+  return (
+    r.right <= 0 ||
+    r.left >= window.innerWidth ||
+    r.bottom <= 0 ||
+    r.top >= window.innerHeight
+  );
+}
+
+/** 每次打开：记忆尺寸 + 屏幕居中（标题栏保证可见） */
+function placeMsgPeek(panel) {
+  const size = applyMsgPeekSize(panel);
+  panel.style.visibility = "hidden";
+  panel.hidden = false;
+  const centerLeft = (window.innerWidth - size.width) / 2;
+  const centerTop = (window.innerHeight - size.height) / 2;
+  const pos = clampMsgPeekPosition(panel, centerLeft, centerTop);
+  panel.style.left = `${pos.left}px`;
+  panel.style.top = `${pos.top}px`;
+  msgPeekState.lastLeft = pos.left;
+  msgPeekState.lastTop = pos.top;
+  panel.style.visibility = "";
+}
+
+function wireMsgPeekPanel() {
+  if (msgPeekState.wired) return;
+  const panel = document.getElementById("msg-peek-panel");
+  if (!panel) return;
+  msgPeekState.wired = true;
+
+  document.getElementById("msg-peek-close")?.addEventListener("click", () => {
+    hideMsgPeek();
+  });
+
+  const head = panel.querySelector("[data-peek-drag]");
+  head?.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest(".msg-peek-close")) return;
+    if (msgPeekState.resizing) return;
+    const rect = panel.getBoundingClientRect();
+    msgPeekState.dragging = true;
+    msgPeekState.offsetX = e.clientX - rect.left;
+    msgPeekState.offsetY = e.clientY - rect.top;
+    panel.classList.add("is-dragging");
+    head.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  });
+
+  const resizeHandle = panel.querySelector("[data-peek-resize]");
+  resizeHandle?.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (msgPeekState.dragging) return;
+    const rect = panel.getBoundingClientRect();
+    msgPeekState.resizing = true;
+    msgPeekState.resizeStartX = e.clientX;
+    msgPeekState.resizeStartY = e.clientY;
+    msgPeekState.resizeStartW = rect.width;
+    msgPeekState.resizeStartH = rect.height;
+    panel.classList.add("is-resizing");
+    resizeHandle.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  const onMove = (e) => {
+    if (msgPeekState.dragging) {
+      const next = clampMsgPeekPosition(
+        panel,
+        e.clientX - msgPeekState.offsetX,
+        e.clientY - msgPeekState.offsetY,
+      );
+      panel.style.left = `${next.left}px`;
+      panel.style.top = `${next.top}px`;
+      msgPeekState.lastLeft = next.left;
+      msgPeekState.lastTop = next.top;
+      return;
+    }
+    if (msgPeekState.resizing) {
+      const dw = e.clientX - msgPeekState.resizeStartX;
+      const dh = e.clientY - msgPeekState.resizeStartY;
+      const size = clampMsgPeekSize(
+        msgPeekState.resizeStartW + dw,
+        msgPeekState.resizeStartH + dh,
+      );
+      panel.style.width = `${size.width}px`;
+      panel.style.height = `${size.height}px`;
+    }
+  };
+  const onUp = (e) => {
+    if (msgPeekState.dragging) {
+      msgPeekState.dragging = false;
+      panel.classList.remove("is-dragging");
+      head?.releasePointerCapture?.(e.pointerId);
+      if (!panel.hidden && isMsgPeekFullyOffscreen(panel)) {
+        hideMsgPeek();
+        return;
+      }
+    }
+    if (msgPeekState.resizing) {
+      msgPeekState.resizing = false;
+      panel.classList.remove("is-resizing");
+      resizeHandle?.releasePointerCapture?.(e.pointerId);
+      if (!panel.hidden) {
+        const rect = panel.getBoundingClientRect();
+        const size = clampMsgPeekSize(rect.width, rect.height);
+        panel.style.width = `${size.width}px`;
+        panel.style.height = `${size.height}px`;
+        saveMsgPeekSize(size.width, size.height);
+        const pos = clampMsgPeekPosition(
+          panel,
+          Number.parseFloat(panel.style.left) || rect.left,
+          Number.parseFloat(panel.style.top) || rect.top,
+        );
+        panel.style.left = `${pos.left}px`;
+        panel.style.top = `${pos.top}px`;
+        msgPeekState.lastLeft = pos.left;
+        msgPeekState.lastTop = pos.top;
+      }
+    }
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
+}
+
+function openContentPeek(payload) {
+  wireMsgPeekPanel();
+  const panel = document.getElementById("msg-peek-panel");
+  const titleEl = document.getElementById("msg-peek-title");
+  const subEl = document.getElementById("msg-peek-subtitle");
+  const bodyEl = document.getElementById("msg-peek-body");
+  if (!panel || !titleEl || !bodyEl) return;
+
+  titleEl.textContent = payload?.title || "完整内容";
+  if (subEl) {
+    const subtitle = String(payload?.subtitle || "").trim();
+    if (subtitle) {
+      subEl.hidden = false;
+      subEl.textContent = subtitle;
+    } else {
+      subEl.hidden = true;
+      subEl.textContent = "";
+    }
+  }
+  bodyEl.innerHTML = payload?.html || `<p class="empty-sm">（无正文）</p>`;
+
+  placeMsgPeek(panel);
+  bodyEl.scrollTop = 0;
+  document.getElementById("msg-peek-close")?.focus?.();
+}
+
+function formatDictatePeekHtml(content) {
+  const trimmed = String(content ?? "").trim();
+  if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
+  // 与侧栏同一路径：勿走 formatArtifactBodyHtml（## 分段会丢掉前置 JSON/正文）
+  return `<div class="dictate-product-body">${safeBodyHtml(trimmed)}</div>`;
+}
+
+const dictateProductContentByEl = new WeakMap();
+
+function rememberDictateProductContent(el, content) {
+  if (!el) return;
+  const text = String(content ?? "");
+  dictateProductContentByEl.set(el, text);
+  // 短文仍写 dataset，便于调试；长文只放 WeakMap，避免属性截断
+  if (text.length <= 4000) el.dataset.originalText = text;
+  else delete el.dataset.originalText;
+}
+
+function readDictateProductContent(card) {
+  if (!card) return "";
+  if (dictateProductContentByEl.has(card)) {
+    return dictateProductContentByEl.get(card) ?? "";
+  }
+  return card.dataset.originalText || "";
+}
+
+const dictateProductMenuState = {
+  card: null,
+  wired: false,
+};
+
+function hideDictateProductMenu() {
+  const menu = document.getElementById("dictate-product-menu");
+  if (menu) menu.hidden = true;
+  dictateProductMenuState.card = null;
+}
+
+function showDictateProductMenu(card, x, y) {
+  const menu = document.getElementById("dictate-product-menu");
+  if (!menu || !card) return;
+  hideMsgMenu();
+  hideDictateProductMenu();
+  dictateProductMenuState.card = card;
+  menu.hidden = false;
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
+  }
+}
+
+function wireDictateProductMenu() {
+  if (dictateProductMenuState.wired) return;
+  const menu = document.getElementById("dictate-product-menu");
+  if (!menu) return;
+  dictateProductMenuState.wired = true;
+  menu.addEventListener("click", async (e) => {
+    const action = e.target
+      .closest("[data-dictate-product-action]")
+      ?.getAttribute("data-dictate-product-action");
+    const card = dictateProductMenuState.card;
+    hideDictateProductMenu();
+    if (!action || !card) return;
+    const content = readDictateProductContent(card);
+    const tagEl = card.querySelector(".dictate-product-tag");
+    const title =
+      tagEl?.getAttribute("title")?.trim() ||
+      tagEl?.textContent?.trim() ||
+      "产物";
+    if (action === "peek") {
+      openContentPeek({
+        title,
+        html: formatDictatePeekHtml(content),
+      });
+      return;
+    }
+    if (action === "copy") {
+      try {
+        await navigator.clipboard.writeText(content);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+}
+
+function wireDictateProductContextMenu(root) {
+  if (!root || root.dataset.dictateProductMenuWired) return;
+  root.dataset.dictateProductMenuWired = "1";
+  wireDictateProductMenu();
+  root.addEventListener("contextmenu", (e) => {
+    const card = e.target.closest(".dictate-product");
+    if (!card || !root.contains(card)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    showDictateProductMenu(card, e.clientX, e.clientY);
+  });
+}
+
 function showMsgMenu(card, x, y) {
   const menu = document.getElementById("msg-action-menu");
   if (!menu || !card) return;
@@ -510,7 +882,7 @@ function cancelInlineEdit(card) {
   card.querySelector(".msg-foot")?.removeAttribute("hidden");
   const editing = card.querySelector(".msg-body-editing");
   if (editing) {
-    editing.outerHTML = `<div class="msg-body">${formatBodyHtml(original)}</div>`;
+    editing.outerHTML = `<div class="msg-body">${safeBodyHtml(original)}</div>`;
   }
 }
 
@@ -777,7 +1149,7 @@ function isWorkspaceNav() {
 
 function syncExpandLabel() {
   const label = document.getElementById("rail-expand-label");
-  if (label) label.textContent = activeRailTab === "log" ? "志" : "书";
+  if (label) label.textContent = activeRailTab === "log" ? "调度" : "作品";
 }
 
 export function setRailTab(tab, { expand = false } = {}) {
@@ -862,7 +1234,11 @@ export function resetRailChrome() {
   railUserExpanded = true;
   coordRailCollapsed = true;
   document.body.dataset.railCanCollapse = "0";
-  document.body.classList.remove("rail-collapsed", "coord-rail-collapsed");
+  document.body.classList.remove(
+    "rail-collapsed",
+    "coord-rail-collapsed",
+    "play-workspace",
+  );
   const rail = document.getElementById("coord-rail");
   if (rail) {
     rail.hidden = true;
@@ -1418,10 +1794,21 @@ function splitTaggedArtifactSections(text) {
     hits.push({ title: m[1].trim(), index: m.index, headerEnd: m.index + m[0].length });
   }
   if (!hits.length) return [{ title: "", content: trimmed }];
-  return hits.map((h, i) => {
+  const sections = [];
+  // 保留首个 ## 之前的前置正文（常见：JSON / 散文 + ## 小节）
+  if (hits[0].index > 0) {
+    const preamble = trimmed.slice(0, hits[0].index).trim();
+    if (preamble) sections.push({ title: "", content: preamble });
+  }
+  for (let i = 0; i < hits.length; i++) {
+    const h = hits[i];
     const end = i + 1 < hits.length ? hits[i + 1].index : trimmed.length;
-    return { title: h.title, content: trimmed.slice(h.headerEnd, end).trim() };
-  });
+    sections.push({
+      title: h.title,
+      content: trimmed.slice(h.headerEnd, end).trim(),
+    });
+  }
+  return sections;
 }
 
 const FRAGMENT_HEADER_KEYS = new Set([
@@ -1638,24 +2025,25 @@ function renderPlainCompactCard(title, content, opts = {}) {
     return "";
   }
   const preview = clampPreviewText(content, 160);
+  const looksJson = /^\s*[{\[]/.test(String(content || ""));
   if (opts.flat) {
+    const body = looksJson
+      ? `<p class="ws-muted artifact-parse-hint">未能解析为可展示产物。</p>
+        <pre class="review-feed-plain">${esc(content)}</pre>`
+      : `<div class="dictate-product-body">${safeBodyHtml(content)}</div>`;
     return `<article class="artifact-flat-review">
       <header class="artifact-flat-meta">
         <nav class="artifact-crumb-path artifact-flat-path" aria-label="产物">
           <span class="artifact-crumb-root">${esc(title || "产物")}</span>
         </nav>
       </header>
-      <div class="artifact-flat-body">
-        <p class="ws-muted artifact-parse-hint">未能解析为可展示产物。</p>
-        <pre class="review-feed-plain">${esc(content)}</pre>
-      </div>
+      <div class="artifact-flat-body">${body}</div>
     </article>`;
   }
   const openAttr = opts.open ? " open" : "";
-  const looksJson = /^\s*[{\[]/.test(String(content || ""));
   const body = looksJson
     ? `<p class="ws-muted artifact-parse-hint">未能解析为 JSON，以下为原文（可展开原始块排查）。</p><pre class="review-feed-plain">${esc(content)}</pre>`
-    : `<pre class="review-feed-plain">${esc(content)}</pre>`;
+    : `<div class="dictate-product-body">${safeBodyHtml(content)}</div>`;
   return `<details class="artifact-compact"${openAttr}>
     <summary class="artifact-compact-sum">
       <div class="artifact-compact-row">
@@ -1987,37 +2375,126 @@ function renderContextFragmentHtml(doc, opts = {}) {
 }
 
 /** 开场白终节点：1～多条候选用呈现壳展示，选定后由程序落库 */
-function collectOpeningCandidateTexts(body) {
-  const texts = [];
-  const push = (value) => {
-    const text = String(value ?? "").trim();
-    if (text && !texts.includes(text)) texts.push(text);
+function openingPersonaFrom(row, fallback) {
+  const p = row?.用户角色 || row?.meta?.用户角色 || fallback || null;
+  if (!p || typeof p !== "object") return null;
+  const name = String(p.名字 || p.name || "").trim();
+  if (!name) return null;
+  return {
+    名字: name,
+    简介: String(p.简介 || p.description || "").trim(),
   };
-  push(body.开场白全文);
+}
+
+function openingTextFrom(raw) {
+  if (typeof raw === "string") return raw.trim();
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    if (
+      raw.schema === "present.v1" ||
+      raw.blocks != null ||
+      raw.shell ||
+      raw.shell_id
+    ) {
+      try {
+        return JSON.stringify(raw);
+      } catch {
+        return "";
+      }
+    }
+    return String(raw.正文 || raw.全文 || raw.text || raw.开场白 || raw.内容 || "").trim();
+  }
+  return "";
+}
+
+function openingVariablesFrom(row) {
+  const list = Array.isArray(row?.开场变量)
+    ? row.开场变量
+    : Array.isArray(row?.meta?.开场变量)
+      ? row.meta.开场变量
+      : [];
+  return list.filter((item) => item && typeof item === "object");
+}
+
+function collectOpeningCandidates(body) {
+  const fallback = openingPersonaFrom(body, null);
+  const sharedVars = openingVariablesFrom(body);
+  const rows = [];
+  const seen = new Set();
+  const push = (text, persona, variables) => {
+    const value = openingTextFrom(text);
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    rows.push({
+      text: value,
+      persona: persona || fallback,
+      variables: variables?.length ? variables : sharedVars,
+    });
+  };
+  push(body.开场白全文, fallback, sharedVars);
   if (Array.isArray(body.开场白候选)) {
     for (const item of body.开场白候选) {
-      if (typeof item === "string") push(item);
+      if (typeof item === "string") push(item, fallback, sharedVars);
       else if (item && typeof item === "object") {
-        push(item.全文 || item.text || item.开场白 || item.内容);
+        push(
+          item.正文 || item.全文 || item.text || item.开场白 || item.内容,
+          openingPersonaFrom(item, fallback),
+          openingVariablesFrom(item),
+        );
       }
     }
   }
-  return texts;
+  return rows;
+}
+
+function renderOpeningPersonaHtml(persona) {
+  if (!persona?.名字) return "";
+  return `<section class="artifact-block"><h4>用户角色</h4><p><strong>${esc(
+    String(persona.名字),
+  )}</strong>${
+    persona.简介 ? ` · ${esc(String(persona.简介))}` : ""
+  }</p></section>`;
+}
+
+function renderOpeningVarsHtml(vars) {
+  if (!Array.isArray(vars) || !vars.length) return "";
+  return `<section class="artifact-block"><h4>开场变量</h4><ul class="artifact-list">${vars
+    .map((row) => {
+      const name = row?.名 || row?.name || row?.key || "";
+      const val = row?.值 !== undefined ? row.值 : row?.value;
+      const note = row?.依据 || row?.note || "";
+      const noteHtml = note
+        ? ` <span class="muted">（${esc(String(note))}）</span>`
+        : "";
+      return `<li><strong>${esc(String(name))}</strong>：${esc(String(val ?? ""))}${noteHtml}</li>`;
+    })
+    .join("")}</ul></section>`;
+}
+
+function openingPresentPacket(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return presentFromPlain("", "prose");
+  if (trimmed.startsWith("{")) {
+    const parsed = tryParseJsonDoc(trimmed);
+    const view = parsed ? parsePresentDoc(parsed) : null;
+    if (view) return view.packet;
+  }
+  return presentFromPlain(trimmed, "prose");
 }
 
 function renderOpeningSetupBodyHtml(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
-  const candidates = collectOpeningCandidateTexts(body);
+  const candidates = collectOpeningCandidates(body);
   if (!candidates.length) return "";
   const total = candidates.length;
+  const anyCandidateVars = candidates.some((row) => row.variables?.length);
   const slides = candidates
-    .map((text, i) => {
+    .map((row, i) => {
       const hidden = i === 0 ? "" : " hidden";
       const selected = i === 0 ? " is-selected" : "";
       return `<article class="opening-candidate${selected}" data-opening-index="${i}"${hidden}>${renderPresentShellHtml(
-        presentFromPlain(text, "prose"),
+        openingPresentPacket(row.text),
         esc,
-      )}</article>`;
+      )}${renderOpeningPersonaHtml(row.persona)}${renderOpeningVarsHtml(row.variables)}</article>`;
     })
     .join("");
   const nav =
@@ -2028,20 +2505,10 @@ function renderOpeningSetupBodyHtml(body) {
            <button type="button" class="opening-picker-btn" data-opening-delta="1">下一版</button>
          </div>`
       : "";
-  const vars = Array.isArray(body.开场变量) ? body.开场变量 : [];
-  const varsHtml = vars.length
-    ? `<section class="artifact-block"><h4>开场变量</h4><ul class="artifact-list">${vars
-        .map((row) => {
-          const name = row?.名 || row?.name || row?.key || "";
-          const val = row?.值 !== undefined ? row.值 : row?.value;
-          const note = row?.依据 || row?.note || "";
-          const noteHtml = note
-            ? ` <span class="muted">（${esc(String(note))}）</span>`
-            : "";
-          return `<li><strong>${esc(String(name))}</strong>：${esc(String(val ?? ""))}${noteHtml}</li>`;
-        })
-        .join("")}</ul></section>`
-    : "";
+  const varsHtml =
+    !anyCandidateVars && Array.isArray(body.开场变量) && body.开场变量.length
+      ? renderOpeningVarsHtml(body.开场变量)
+      : "";
   const space = body.用户可行动空间
     ? `<section class="artifact-block"><h4>可行动空间</h4>${renderProseHtml(
         body.用户可行动空间,
@@ -2117,7 +2584,8 @@ function renderSpecialtyBodyHtml(body, skill) {
   if (
     body.风格与写法 != null ||
     body.推进与决策 != null ||
-    skillName.includes("叙事指南")
+    skillName.includes("叙事指南") ||
+    skillName.includes("故事推进")
   ) {
     const html = renderNarrativeBodyHtml(body);
     if (html) return html;
@@ -4925,7 +5393,7 @@ function renderSpeakWorkspace(view) {
         wr.message ||
         "描述本轮行动、对话或想说的话；由游玩管线推进。";
     } else if (view.creationMode === "dictate") {
-      title = "Boss 直聘";
+      title = displayCreationModeLabel("dictate");
       hint =
         view.hints?.[0] ||
         wr.message ||
@@ -4976,7 +5444,7 @@ function renderSpeakWorkspace(view) {
           ? workspaceViewSwitchHtml("flow")
           : `<span class="workspace-surface-kicker">${
               view.creationMode === "dictate"
-                ? "Boss直聘"
+                ? displayCreationModeLabel("dictate")
                 : canOfferSaveProduct(view)
                   ? "落档"
                   : "说话"
@@ -4993,32 +5461,77 @@ function renderSpeakWorkspace(view) {
   </section>`;
 }
 
-/** 转述式：产物列表（右侧栏） */
+/** 转述式：产物列表（右侧栏）— 默认折叠，点开再渲染正文 */
 function renderDictateProductsList(view) {
   const items = Array.isArray(view.dictateProducts) ? view.dictateProducts : [];
   if (!items.length) {
-    return `<p class="coord-empty">尚无写入。Agent 落盘产物后会出现在这里。</p>`;
+    return `<div class="dictate-products-empty-block">
+      <p class="dictate-products-empty-title">尚无产物</p>
+      <p class="dictate-products-empty-desc">Agent 落盘后会出现在这里。点击行展开，右键可查看全文或复制。</p>
+    </div>`;
   }
-  return `<div class="dictate-products-list">${items
+  return `<div class="dictate-products-list" role="list">${items
     .map((p) => {
       const tag = String(p.tag ?? "").trim();
       const content = String(p.content ?? "");
       const preview = content.replace(/\s+/g, " ").trim().slice(0, 72);
-      return `<details class="dictate-product dictate-product--rail" open>
-        <summary>
-          <span class="dictate-product-tag">${esc(tag)}${
-            p.order != null && Number.isFinite(Number(p.order))
-              ? ` · ${Number(p.order)}`
-              : ""
-          }</span>
-          <span class="dictate-product-preview">${esc(preview)}${
-            content.length > 72 ? "…" : ""
-          }</span>
+      const order =
+        p.order != null && Number.isFinite(Number(p.order))
+          ? Number(p.order)
+          : null;
+      const shortTag = tag
+        .replace(/^设计\./, "")
+        .replace(/^用户\./, "")
+        .replace(/#/g, " · ");
+      return `<details class="dictate-product dictate-product--rail" role="listitem">
+        <summary class="dictate-product-sum">
+          <span class="dictate-product-sum-top">
+            <span class="dictate-product-tag" title="${esc(tag)}">${esc(shortTag || tag || "未命名")}</span>
+            ${
+              order != null
+                ? `<span class="dictate-product-order" title="相对序">${order}</span>`
+                : ""
+            }
+            <span class="dictate-product-chevron" aria-hidden="true"></span>
+          </span>
+          ${
+            preview
+              ? `<span class="dictate-product-preview">${esc(preview)}${
+                  content.length > 72 ? "…" : ""
+                }</span>`
+              : `<span class="dictate-product-preview is-empty">（空）</span>`
+          }
         </summary>
-        <div class="dictate-product-body">${formatBodyHtml(content)}</div>
+        <div class="dictate-product-body" data-pending="1"></div>
       </details>`;
     })
     .join("")}</div>`;
+}
+
+function hydrateDictateProductBody(card) {
+  if (!card) return;
+  const body = card.querySelector(".dictate-product-body");
+  if (!body || body.dataset.pending !== "1") return;
+  const content = readDictateProductContent(card);
+  body.innerHTML = content.trim()
+    ? safeBodyHtml(content)
+    : `<p class="empty-sm">（无正文）</p>`;
+  delete body.dataset.pending;
+}
+
+function wireDictateProductAccordion(root) {
+  if (!root || root.dataset.dictateProductAccordionWired) return;
+  root.dataset.dictateProductAccordionWired = "1";
+  root.addEventListener("toggle", (e) => {
+    const card = e.target;
+    if (!(card instanceof HTMLDetailsElement)) return;
+    if (!card.classList.contains("dictate-product--rail")) return;
+    if (!card.open) return;
+    hydrateDictateProductBody(card);
+    root.querySelectorAll("details.dictate-product--rail[open]").forEach((other) => {
+      if (other !== card) other.open = false;
+    });
+  }, true);
 }
 
 function fillCoordRailProducts(view) {
@@ -5032,7 +5545,15 @@ function fillCoordRailProducts(view) {
     coordRailCollapsed = false;
   }
   coordRail.hidden = false;
-  if (drawerBody) drawerBody.innerHTML = renderDictateProductsList(view);
+  if (drawerBody) {
+    drawerBody.innerHTML = renderDictateProductsList(view);
+    const cards = drawerBody.querySelectorAll(".dictate-product");
+    cards.forEach((el, i) => {
+      rememberDictateProductContent(el, items[i]?.content ?? "");
+    });
+    wireDictateProductContextMenu(drawerBody);
+    wireDictateProductAccordion(drawerBody);
+  }
   if (drawerCount) {
     drawerCount.textContent = String(items.length);
     drawerCount.title = items.length
@@ -5108,6 +5629,10 @@ function mountReviewWorkspace(stage, view, handlers, opts = {}) {
       sourceMessage: resolveReviewSourceMessage(view),
       leaveStepHtml: leaveStepControlHtml(view),
     }) + askSlot;
+  const reviewEl = stage.querySelector(".workspace-review");
+  if (reviewEl && view.reviewArtifact?.body) {
+    reviewEl.dataset.originalText = String(view.reviewArtifact.body);
+  }
   wireMessageFeedActions(stage, handlers);
   wireMessageContextMenu(stage, handlers);
   wireCreationFlowGraph(stage, handlers);
@@ -5176,6 +5701,8 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     if (drawerBody) drawerBody.innerHTML = "";
     if (drawerCount) drawerCount.textContent = "";
   }
+  document.body.classList.toggle("play-workspace", false);
+  hidePlayAuxTabs();
   // 默认把询问卡停回主列底部槽位
   if (panelFeed) ensureQuestionsHostIn(panelFeed);
 
@@ -5195,36 +5722,41 @@ export function renderMessageFeed(view, loading, handlers = {}) {
 
     if (!stage) return;
 
-    // 转述：主柱对话流；右侧已持久化；stage 仅一行条
+    // 转述：对话画在 stage 内（design-workspace 会藏掉 #message-feed）
     if (surface === "dictate") {
       stage.hidden = false;
       const recipeName = view.selectedRecipe?.name
         ? esc(view.selectedRecipe.name)
         : "";
-      stage.innerHTML = recipeName
-        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">Boss直聘</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
-        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">Boss直聘</span></header>`;
+      const dictateKicker = displayCreationModeLabel("dictate");
+      const head = recipeName
+        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${dictateKicker}</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
+        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${dictateKicker}</span></header>`;
+      stage.innerHTML = `${head}<div class="dictate-feed" id="dictate-feed"></div>`;
+      const dictateFeed = stage.querySelector("#dictate-feed");
       if (panelFeed) ensureQuestionsHostIn(panelFeed);
-      appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, {
-        emptyText:
-          "直接说你想要的体验与设定。我会整理进右侧产物，并在回复里跟你确认、建议补充。",
-        loading,
-      });
-      if (loading) {
-        const pending = document.createElement("article");
-        pending.className = "msg agent msg-assistant-row msg-pending";
-        pending.id = "msg-live-pending";
-        const live = view.liveStream;
-        const label = live?.label ?? view.focus?.action ?? "整理中";
-        pending.innerHTML = `
-          <div class="msg-bubble">
-            <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
-            <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
-          </div>`;
-        feed.appendChild(pending);
-        wireRetryRun(pending, handlers);
+      if (dictateFeed) {
+        appendMessagesToFeed(dictateFeed, visible, view, handlers, activeQuestions, {
+          emptyText:
+            "直接说你想要的体验与设定。我会整理进右侧产物，并在回复里跟你确认、建议补充。",
+          loading,
+        });
+        if (loading) {
+          const pending = document.createElement("article");
+          pending.className = "msg agent msg-assistant-row msg-pending";
+          pending.id = "msg-live-pending";
+          const live = view.liveStream;
+          const label = live?.label ?? view.focus?.action ?? "整理中";
+          pending.innerHTML = `
+            <div class="msg-bubble">
+              <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
+              <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
+            </div>`;
+          dictateFeed.appendChild(pending);
+          wireRetryRun(pending, handlers);
+        }
+        dictateFeed.scrollTop = dictateFeed.scrollHeight;
       }
-      feed.scrollTop = feed.scrollHeight;
       return;
     }
 
@@ -5282,6 +5814,14 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   }
 
   // —— 游玩 / 转述对话流 ——
+  if (isPlayView(view) && coordRail) {
+    document.body.classList.add("play-workspace");
+    coordRailCollapsed = false;
+    document.body.classList.remove("coord-rail-collapsed");
+    fillPlayAux(view, handlers, { busy: loading });
+    syncCoordRailChrome();
+  }
+
   appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, {
     emptyText: isPlayView(view)
       ? "开场已就绪。在下方说你要做什么。"
@@ -5342,6 +5882,7 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
   }
 
   for (const msg of visible) {
+    try {
     const isUser = msg.role === "user";
     const kind = msg.kind ?? (isUser ? "user_input" : "system_info");
     const body = msgBody(msg, view);
@@ -5383,7 +5924,7 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
           ? formatPlayPresentHtml(body, view)
           : kind === "worker_output"
             ? formatArtifactBodyHtml(body)
-            : formatBodyHtml(body);
+            : safeBodyHtml(body);
 
     const process = !isUser && isPlayProcessMessage(msg, view);
     const playFinal = !isUser && isPlayFinalReply(msg, view);
@@ -5410,6 +5951,15 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
         </div>`;
     }
     feed.appendChild(card);
+    } catch (err) {
+      console.error("render message failed", msg?.id, err);
+      const fallback = document.createElement("article");
+      fallback.className = "msg system msg-assistant-row";
+      fallback.innerHTML = `<div class="msg-bubble"><div class="msg-body">${esc(
+        msgBody(msg, view) || "(这条消息渲染失败)",
+      ).replace(/\n/g, "<br>")}</div></div>`;
+      feed.appendChild(fallback);
+    }
   }
   wireMessageFeedActions(feed, handlers);
   wireMessageContextMenu(feed, handlers);
@@ -5534,17 +6084,25 @@ export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
 
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#msg-action-menu")) hideMsgMenu();
+  if (!e.target.closest("#dictate-product-menu")) hideDictateProductMenu();
   if (!e.target.closest("#flow-node-menu") && !e.target.closest("[data-flow-done]")) {
     hideFlowNodeMenu();
   }
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    const peek = document.getElementById("msg-peek-panel");
+    if (peek && !peek.hidden) {
+      hideMsgPeek();
+      return;
+    }
     hideMsgMenu();
+    hideDictateProductMenu();
     hideFlowNodeMenu();
   }
 });
 document.addEventListener("scroll", () => {
   hideMsgMenu();
+  hideDictateProductMenu();
   hideFlowNodeMenu();
 }, true);

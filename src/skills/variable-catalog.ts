@@ -22,6 +22,8 @@ export type VariableCatalogField = {
   initial: unknown;
   /** 对用户可见（监控栏等）；默认 true */
   user_visible: boolean;
+  /** 游玩表上手改；默认跟可见性走 */
+  user_editable?: boolean;
   note?: string;
 };
 
@@ -84,11 +86,19 @@ export function parseVariableCatalog(raw: string | undefined | null): VariableCa
         f.userVisible === false
           ? false
           : true;
+      const editableRaw = f.user_editable ?? f.可手改 ?? f.userEditable;
+      const userEditable =
+        editableRaw === false
+          ? false
+          : editableRaw === true
+            ? true
+            : userVisible;
       fields.push({
         key,
         type,
         initial: coerceInitial(type, f.initial ?? f.初值 ?? f.value),
         user_visible: userVisible,
+        user_editable: userEditable,
         note: asString(f.note) ?? asString(f.备注),
       });
     }
@@ -108,6 +118,7 @@ export function serializeVariableCatalog(doc: VariableCatalogDoc): string {
         type: f.type,
         initial: f.initial,
         user_visible: f.user_visible,
+        user_editable: f.user_editable ?? f.user_visible,
         ...(f.note ? { note: f.note } : {}),
       })),
     },
@@ -121,6 +132,7 @@ export type UpsertVariableInput = {
   type?: string;
   initial?: unknown;
   user_visible?: boolean;
+  user_editable?: boolean;
   note?: string;
 };
 
@@ -136,6 +148,10 @@ export function upsertVariableField(
     type,
     initial: coerceInitial(type, input.initial),
     user_visible: input.user_visible !== false,
+    user_editable:
+      input.user_editable !== undefined
+        ? input.user_editable
+        : input.user_visible !== false,
     note: input.note?.trim() || undefined,
   };
   const fields = [...(current?.fields ?? [])];
@@ -145,17 +161,44 @@ export function upsertVariableField(
   return { doc: { schema: VARIABLE_CATALOG_SCHEMA, fields } };
 }
 
+/** 从目录移除一个真值字段；不存在则 error */
+export function removeVariableField(
+  current: VariableCatalogDoc | null,
+  keyRaw: string,
+): { doc: VariableCatalogDoc; error?: string; removed?: boolean } {
+  const empty: VariableCatalogDoc = {
+    schema: VARIABLE_CATALOG_SCHEMA,
+    fields: [],
+  };
+  const key = keyRaw.trim();
+  if (!key) return { doc: current ?? empty, error: "key 不能为空" };
+  const fields = current?.fields ?? [];
+  const next = fields.filter((f) => f.key !== key);
+  if (next.length === fields.length) {
+    return { doc: current ?? empty, error: `目录无字段 ${key}` };
+  }
+  return {
+    doc: { schema: VARIABLE_CATALOG_SCHEMA, fields: next },
+    removed: true,
+  };
+}
+
 /** 目录 → 表文档（初值）；用于种 运行.初始变量 / 变量.当前 */
 export function catalogToTableDoc(
   catalog: VariableCatalogDoc,
   actor: string,
 ): TableDoc {
   const values: Record<string, unknown> = {};
-  const meta: Record<string, { visibility?: "visible" | "hidden"; note?: string }> = {};
+  const meta: Record<
+    string,
+    { visibility?: "visible" | "hidden"; note?: string; editable?: boolean }
+  > = {};
   for (const f of catalog.fields) {
     values[f.key] = f.initial;
+    const editable = f.user_editable ?? f.user_visible;
     meta[f.key] = {
       visibility: f.user_visible ? "visible" : "hidden",
+      editable,
       note: f.note,
     };
   }
@@ -192,12 +235,16 @@ export function seedVariablesFromCatalog(params: {
     // 补缺键，不覆盖已有
     const have = new Set(existingCurrent.rows.map((r) => r.key));
     const patchValues: Record<string, unknown> = {};
-    const meta: Record<string, { visibility?: "visible" | "hidden"; note?: string }> = {};
+    const meta: Record<
+      string,
+      { visibility?: "visible" | "hidden"; note?: string; editable?: boolean }
+    > = {};
     for (const f of catalog.fields) {
       if (have.has(f.key)) continue;
       patchValues[f.key] = f.initial;
       meta[f.key] = {
         visibility: f.user_visible ? "visible" : "hidden",
+        editable: f.user_editable ?? f.user_visible,
         note: f.note,
       };
     }

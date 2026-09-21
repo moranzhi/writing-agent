@@ -11,6 +11,8 @@ import {
   formatFlowProgressForAgent,
   listCallableCatalogModules,
   formatModuleCatalogForAgent,
+  formatModuleCatalogForDictate,
+  catalogModulesForIntake,
   formatRecipeCatalogForAgent,
   formatDictateRecipeBrief,
   formatSelectedRecipeForAgent,
@@ -442,6 +444,7 @@ describe("creation-flow", () => {
     expect(catalog?.modules.some((m) => m.name === "美学纲领与交互范式")).toBe(
       true,
     );
+    expect(catalog?.modules.some((m) => m.name === "主角设定")).toBe(true);
     expect(catalog?.modules.some((m) => m.name === "交互范式")).toBe(false);
     expect(catalog?.modules.some((m) => m.name === "美学纲领")).toBe(false);
     expect(
@@ -480,16 +483,52 @@ describe("creation-flow", () => {
     expect(block).toContain("role=prototype");
     expect(block).toContain("编排参数");
     expect(block).not.toContain("设计.美学纲领与交互范式");
+    expect(block).toContain("- 叙事指南与故事推进：");
+    expect(block).not.toMatch(/^- 叙事指南：/m);
+    expect(block).not.toMatch(/^- 故事推进：/m);
+    const dictateBlock = formatModuleCatalogForDictate(catalog!);
+    expect(dictateBlock).toMatch(/^- 叙事指南：/m);
+    expect(dictateBlock).toMatch(/^- 故事推进：/m);
+    expect(dictateBlock).not.toMatch(/^- 叙事指南与故事推进/m);
+    expect(
+      catalog?.modules.find((m) => m.name === "叙事指南与故事推进")?.intake,
+    ).toBe("recipe");
+    expect(catalog?.modules.find((m) => m.name === "叙事指南")?.intake).toBe(
+      "dictate",
+    );
+    expect(catalog?.modules.find((m) => m.name === "故事推进")?.intake).toBe(
+      "dictate",
+    );
+    expect(
+      catalogModulesForIntake(catalog!, "recipe").some(
+        (m) => m.name === "叙事指南",
+      ),
+    ).toBe(false);
+    expect(
+      catalogModulesForIntake(catalog!, "dictate").some(
+        (m) => m.name === "叙事指南与故事推进",
+      ),
+    ).toBe(false);
+
+    const leftover = listCallableCatalogModules({ catalog: catalog! });
+    expect(leftover.some((m) => m.name === "叙事指南与故事推进")).toBe(true);
+    expect(leftover.some((m) => m.name === "叙事指南")).toBe(false);
+    expect(leftover.some((m) => m.name === "故事推进")).toBe(false);
+
+    const splitFlow = parseCreationFlow(`{
+      "steps": [{ "name": "叙事指南", "depends_on": [] }]
+    }`)!;
+    expect(validateCreationFlow(splitFlow, catalog).ok).toBe(false);
   });
 
   it("loads recipe catalog for user director selection UI", async () => {
     const recipes = await loadRecipeCatalog("dialogue/world-simulator");
-    expect(recipes?.recipes.some((r) => r.name === "世界模拟器")).toBe(true);
+    expect(recipes?.recipes.some((r) => r.name === "回合推演")).toBe(true);
     expect(recipes?.recipes.some((r) => r.name === "扩写助手")).toBe(true);
     expect(recipes?.recipes.some((r) => r.name === "文本生成器")).toBe(false);
     const block = formatRecipeCatalogForAgent(recipes!);
     expect(block).toContain("须由用户手动选择");
-    expect(block).toContain("世界模拟器");
+    expect(block).toContain("回合推演");
 
     const details = await loadAllRecipeDetails("dialogue/world-simulator");
     expect(details.length).toBeGreaterThanOrEqual(2);
@@ -519,7 +558,9 @@ describe("creation-flow", () => {
     expect(dictate?.recipes.some((r) => r.name === "文本生成器")).toBe(true);
     expect(dictate?.recipes.some((r) => r.name === "交互式长文生成器")).toBe(true);
     expect(dictate?.recipes.some((r) => r.name === "数据化跑团体验")).toBe(true);
-    expect(dictate?.recipes[0]?.id).toBe("数据化跑团体验");
+    expect(dictate?.recipes.some((r) => r.id === "快穿短局")).toBe(true);
+    expect(dictate?.recipes.some((r) => r.name === "快穿短局")).toBe(true);
+    expect(dictate?.recipes[0]?.id).toBe("快穿短局");
     const entry = dictate!.recipes.find((r) => r.id === "文本生成器")!;
     expect(entry.family).toBe("dictate");
     const detail = await loadRecipeDetail("dialogue/world-simulator", entry);
@@ -540,6 +581,15 @@ describe("creation-flow", () => {
     expect(formatDictateRecipeBrief(rpgDetail)).toContain("declare_variable");
     expect(formatDictateRecipeBrief(rpgDetail)).toContain("何时落盘");
     expect(formatDictateRecipeBrief(rpgDetail)).toMatch(/美学纲领|体验核心/);
+
+    const skip = dictate!.recipes.find((r) => r.id === "快穿短局")!;
+    const skipDetail = await loadRecipeDetail("dialogue/world-simulator", skip);
+    expect(skipDetail.seed).toBeNull();
+    expect(skipDetail.brief).toMatch(/一核|短局|主角/);
+    expect(skipDetail.core).toMatch(/一核|开场白|黑板/);
+    expect(skipDetail.when).toMatch(/快穿|一次性|短任务/);
+    expect(formatDictateRecipeBrief(skipDetail)).toMatch(/舞台骨架|生成规则|拓扑/);
+    expect(formatDictateRecipeBrief(skipDetail)).toMatch(/回合推演|数据化跑团体验/);
   });
 
   it("parses selected recipe ref", () => {
@@ -649,8 +699,8 @@ recipes:
       { selectedRecipeRef: "world-simulator" },
     );
     expect(selected.worker.outputTags).toContain("设计.创作流程");
-    expect(selected.promptBody).toContain("【用户已选配方 · 世界模拟器】");
-    expect(selected.promptBody).toContain("世界模拟器");
+    expect(selected.promptBody).toContain("【用户已选配方 · 回合推演】");
+    expect(selected.promptBody).toContain("回合推演");
     expect(selected.promptBody).toContain("【能力");
     expect(selected.promptBody).toContain("美学纲领与交互范式");
     expect(selected.promptBody).toContain("核心思路");

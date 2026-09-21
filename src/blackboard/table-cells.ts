@@ -6,10 +6,13 @@ export type TableCellSource = `user` | `system` | `worker:${string}`;
 export type TableCell = {
   key: string;
   value: unknown;
+  /** 该格版本号：手改须带读到的 rev，对不上则拒绝，避免盖过后端更新 */
   rev: number;
   updatedAt: string;
   source: TableCellSource | string;
   visibility?: "visible" | "hidden";
+  /** 未声明时：可见格可改，隐藏格只读 */
+  editable?: boolean;
   note?: string;
 };
 
@@ -47,6 +50,12 @@ export function parseTableDoc(raw: string | undefined | null): TableDoc | null {
           row.visibility === "hidden" || row.visibility === "visible"
             ? row.visibility
             : "visible",
+        editable:
+          row.editable === true
+            ? true
+            : row.editable === false
+              ? false
+              : undefined,
         note: typeof row.note === "string" ? row.note : undefined,
       });
     }
@@ -109,6 +118,7 @@ export function mergeTableCells(params: {
       updatedAt: now,
       source: params.actor,
       visibility: patch.visibility ?? existing?.visibility ?? "visible",
+      editable: patch.editable ?? existing?.editable,
       note: patch.note ?? existing?.note,
     });
     applied.push(key);
@@ -121,11 +131,108 @@ export function mergeTableCells(params: {
   };
 }
 
+export function isTableCellEditable(row: TableCell): boolean {
+  if (row.editable === false) return false;
+  if (row.editable === true) return true;
+  return (row.visibility ?? "visible") === "visible";
+}
+
+export type TableCellPatch = {
+  key: string;
+  value: unknown;
+  expectedRev: number;
+};
+
+export type UserTableSkip = {
+  key: string;
+  reason: string;
+  have?: number;
+  expected?: number;
+  value?: unknown;
+};
+
+/** 用户按格手改：必须带读到的 rev；不可改或版本冲突则跳过该格。 */
+export function patchUserTableCells(
+  current: TableDoc | null,
+  patches: readonly TableCellPatch[],
+): {
+  doc: TableDoc;
+  applied: string[];
+  skipped: UserTableSkip[];
+} {
+  const empty: TableDoc = { rows: [] };
+  const base = current ?? empty;
+  const skipped: UserTableSkip[] = [];
+  const allowed: TableCellPatch[] = [];
+  for (const patch of patches) {
+    const key = patch.key.trim();
+    if (!key) continue;
+    const existing = base.rows.find((r) => r.key === key);
+    if (!existing) {
+      skipped.push({ key, reason: "missing" });
+      continue;
+    }
+    if (!isTableCellEditable(existing)) {
+      skipped.push({
+        key,
+        reason: "not-editable",
+        have: existing.rev,
+        value: existing.value,
+      });
+      continue;
+    }
+    if (!Number.isFinite(patch.expectedRev)) {
+      skipped.push({ key, reason: "rev-required", have: existing.rev });
+      continue;
+    }
+    allowed.push({ ...patch, key });
+  }
+  if (!allowed.length) {
+    return { doc: base, applied: [], skipped };
+  }
+  const expectedRev = Object.fromEntries(
+    allowed.map((p) => [p.key, p.expectedRev]),
+  );
+  const merged = mergeTableCells({
+    current: base,
+    patch: {
+      rows: allowed.map((p) => ({
+        key: p.key,
+        value: p.value,
+        rev: 1,
+        updatedAt: new Date().toISOString(),
+        source: "user",
+      })),
+    },
+    actor: "user",
+    expectedRev,
+  });
+  const byKey = new Map(base.rows.map((r) => [r.key, r]));
+  const skippedOut: UserTableSkip[] = [
+    ...skipped,
+    ...merged.skipped.map((s) => {
+      const haveRow = byKey.get(s.key);
+      const expected = expectedRev[s.key];
+      return {
+        key: s.key,
+        reason: s.reason,
+        have: haveRow?.rev,
+        expected,
+        value: haveRow?.value,
+      };
+    }),
+  ];
+  return { doc: merged.doc, applied: merged.applied, skipped: skippedOut };
+}
+
 /** 从零创建：全部 source=actor，rev=1 */
 export function createTableFromValues(
   values: Record<string, unknown>,
   actor: TableCellSource | string,
-  meta?: Record<string, { visibility?: "visible" | "hidden"; note?: string }>,
+  meta?: Record<
+    string,
+    { visibility?: "visible" | "hidden"; note?: string; editable?: boolean }
+  >,
 ): TableDoc {
   const now = new Date().toISOString();
   const rows: TableCell[] = Object.entries(values).map(([key, value]) => ({
@@ -135,6 +242,9 @@ export function createTableFromValues(
     updatedAt: now,
     source: actor,
     visibility: meta?.[key]?.visibility ?? "visible",
+    ...(meta?.[key]?.editable !== undefined
+      ? { editable: meta[key]?.editable }
+      : {}),
     note: meta?.[key]?.note,
   }));
   return { rows: rows.sort((a, b) => a.key.localeCompare(b.key)) };

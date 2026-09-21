@@ -37,7 +37,14 @@ async function serveStatic(res: ServerResponse, filePath: string): Promise<void>
     ".js": "application/javascript; charset=utf-8",
   };
   const content = await readFile(filePath);
-  res.writeHead(200, { "Content-Type": types[ext] ?? "application/octet-stream" });
+  const headers: Record<string, string> = {
+    "Content-Type": types[ext] ?? "application/octet-stream",
+  };
+  // 开发期：避免 ES module（agent-ui.js 等）被强缓存，改完 import 仍吃旧脚本导致主区空白
+  if (ext === ".html" || ext === ".js" || ext === ".css") {
+    headers["Cache-Control"] = "no-cache, must-revalidate";
+  }
+  res.writeHead(200, headers);
   res.end(content);
 }
 
@@ -339,13 +346,21 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === "POST" && sub === "/lifecycle") {
-        const body = JSON.parse(await readBody(req)) as { stage?: string };
+        const body = JSON.parse(await readBody(req)) as {
+          stage?: string;
+          useOpeningPersona?: boolean;
+        };
         if (body.stage !== "design" && body.stage !== "play") {
           json(res, 400, { error: "stage 须为 design 或 play" });
           return;
         }
         try {
-          const view = sessionManager.setLifecycleStage(sessionId, body.stage);
+          const view = sessionManager.setLifecycleStage(sessionId, body.stage, {
+            useOpeningPersona:
+              typeof body.useOpeningPersona === "boolean"
+                ? body.useOpeningPersona
+                : undefined,
+          });
           json(res, 200, view);
         } catch (err) {
           json(res, 400, {
@@ -394,6 +409,68 @@ const server = createServer(async (req, res) => {
         } catch (err) {
           json(res, 400, {
             error: err instanceof Error ? err.message : "写入失败",
+          });
+        }
+        return;
+      }
+
+      if (req.method === "POST" && sub === "/table") {
+        const body = JSON.parse(await readBody(req)) as {
+          tag?: string;
+          cells?: Array<{ key?: string; value?: unknown; expectedRev?: number }>;
+        };
+        const cells = Array.isArray(body.cells)
+          ? body.cells
+              .filter(
+                (c) =>
+                  typeof c?.key === "string" &&
+                  c.key.trim() &&
+                  typeof c.expectedRev === "number",
+              )
+              .map((c) => ({
+                key: String(c.key).trim(),
+                value: c.value,
+                expectedRev: c.expectedRev as number,
+              }))
+          : [];
+        if (!cells.length) {
+          json(res, 400, { error: "缺少 cells（每格需要 key 与 expectedRev）" });
+          return;
+        }
+        try {
+          const view = sessionManager.patchPlayTable(
+            sessionId,
+            body.tag?.trim() || "变量.当前",
+            cells,
+          );
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "表写入失败",
+          });
+        }
+        return;
+      }
+
+      if (req.method === "POST" && sub === "/play/opening") {
+        const body = JSON.parse(await readBody(req)) as {
+          index?: number;
+          usePersona?: boolean;
+        };
+        if (typeof body.index !== "number" || !Number.isFinite(body.index)) {
+          json(res, 400, { error: "缺少 index" });
+          return;
+        }
+        try {
+          const view = sessionManager.selectPlayOpening(
+            sessionId,
+            body.index,
+            typeof body.usePersona === "boolean" ? body.usePersona : undefined,
+          );
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "无法选用开场",
           });
         }
         return;

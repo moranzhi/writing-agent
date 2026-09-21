@@ -14,7 +14,6 @@ import type {
   ToolDefinition,
 } from "../llm/client.js";
 import { supportsToolStream } from "../llm/stream-complete.js";
-import { debugLog } from "../log.js";
 
 export type DriverToolCall = {
   id: string;
@@ -87,9 +86,10 @@ async function completeToolsPreferStream(
   messages: ChatMessage[],
   tools: ToolDefinition[],
   caller: string | undefined,
+  label: string | undefined,
   callbacks: StreamCallbacks,
 ): Promise<CompleteWithToolsResult> {
-  const options = { tools, caller };
+  const options = { tools, caller, label };
   if (supportsToolStream(llm)) {
     return llm.completeWithToolsStream!(messages, options, callbacks);
   }
@@ -115,12 +115,12 @@ export function createLocalLlmDriver(llm: LlmProvider): AgentDriver {
       const label = input.label ?? "driver";
 
       for (let iteration = 1; iteration <= maxIterations; iteration++) {
-        debugLog("llm", `${label} 第${iteration}轮`);
         const result = await completeToolsPreferStream(
           llm,
           messages,
           input.tools,
           input.caller,
+          `${label} 第${iteration}轮`,
           streamCallbacks,
         );
         emitThinkingDone(input, result.reasoning);

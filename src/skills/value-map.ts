@@ -234,6 +234,29 @@ export function upsertValueMapEntry(
   return { doc: { schema: VALUE_MAP_SCHEMA, maps } };
 }
 
+/** 按 id 移除一条映射；不存在则 error。返回被删条目供调用方清投影 tag */
+export function removeValueMapEntry(
+  current: ValueMapDoc | null,
+  idRaw: string,
+): {
+  doc: ValueMapDoc;
+  error?: string;
+  removed?: ValueMapEntry;
+} {
+  const empty: ValueMapDoc = { schema: VALUE_MAP_SCHEMA, maps: [] };
+  const id = idRaw.trim();
+  if (!id) return { doc: current ?? empty, error: "id 不能为空" };
+  const maps = current?.maps ?? [];
+  const idx = maps.findIndex((m) => m.id === id);
+  if (idx < 0) return { doc: current ?? empty, error: `映射无 id ${id}` };
+  const removed = maps[idx]!;
+  const next = maps.filter((_, i) => i !== idx);
+  return {
+    doc: { schema: VALUE_MAP_SCHEMA, maps: next },
+    removed,
+  };
+}
+
 /** 按真值查一档正文；无命中返回 null */
 export function lookupValueMapContent(
   entry: ValueMapEntry,

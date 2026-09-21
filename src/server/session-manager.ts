@@ -18,6 +18,13 @@ import {
 import {
   INSTANCE_OPENING_SNAPSHOT_LABEL,
   OPENING_OUTPUT_TAG,
+  OPENING_PERSONA_CHOICE_TAG,
+  OPENING_PERSONA_TAG,
+  SLOT_OPENING_SELECTED_INDEX,
+  parseOpeningSealPayload,
+  readSealedOpeningPersona,
+  serializeOpeningPersona,
+  splitOpeningDocument,
 } from "../skills/opening-seal.js";
 import {
   PLAY_WORKING_SNAPSHOT_ID,
@@ -150,9 +157,11 @@ import {
   CREATION_INTAKE_MODE_TAG,
   DICTATE_MODE_VALUE,
   DICTATE_ORDER_META_KEY,
+  buildDictateInsertFeedbackIndex,
   defaultDictateOrder,
   extractDictateDialogue,
   isDictateModeValue,
+  lookupDictateInsertFeedback,
   runDictateTurn,
   sortDictateProducts,
   type DictateProduct,
@@ -173,6 +182,12 @@ import {
   listPersonas,
   personaForLifecycle,
 } from "../persona/store.js";
+import {
+  overlayPlayPersona,
+  readSessionProtagonist,
+} from "../persona/protagonist-bind.js";
+import { buildPlayAuxView } from "../skills/play-aux.js";
+import type { TableCellPatch } from "../blackboard/table-cells.js";
 import {
   appendBranchVariant,
   cloneCheckpoint,
@@ -290,6 +305,11 @@ export type SessionView = {
   agentThinking?: string;
   /** Agent / Worker 流式输出（轮询用） */
   liveStream?: LiveStreamView;
+  /**
+   * 会话是否有进行中的排他运行（send/action 的 runExclusive）。
+   * 前端 loading 应对齐此标志，避免 POST 挂住时底栏永远「生成中」。
+   */
+  runActive?: boolean;
   resumed?: boolean;
   /** 创作进料：recipe=配方节点流；dictate=转述整理直填 */
   creationMode?: "recipe" | "dictate";
@@ -310,6 +330,12 @@ export type SessionView = {
   personas?: Array<{ id: string; name: string }>;
   /** 当前选中的用户角色 */
   activePersona?: { id: string; name: string; description: string } | null;
+  /** 本局开场自带的用户角色预设（名字+简介）；关掉这局就不加载 */
+  sessionProtagonist?: { name: string; description: string; summary: string } | null;
+  /** 用户是否选用开场预设：opening / global */
+  openingPersonaChoice?: "opening" | "global" | null;
+  /** 游玩辅助 Tab：表格 / 开场与角色 */
+  playAux?: import("../skills/play-aux.js").PlayAuxView;
 };
 
 export type SessionAction =
@@ -419,14 +445,21 @@ export class SessionManager {
     return this.createForBook();
   }
 
-  setLifecycleStage(sessionId: string, stage: LifecycleStage): SessionView {
+  setLifecycleStage(
+    sessionId: string,
+    stage: LifecycleStage,
+    opts?: { useOpeningPersona?: boolean },
+  ): SessionView {
     const s = this.require(sessionId);
     if (stage === "play") {
       s.runtime.prepareEnterPlay();
       if (!canEnterPlay(s.runtime.getSession())) {
         throw new Error("实例尚未就绪，无法进入游玩");
       }
-      this.enterPlayLayer(s, { resume: true });
+      this.enterPlayLayer(s, {
+        resume: true,
+        useOpeningPersona: opts?.useOpeningPersona,
+      });
     } else {
       this.enterDesignLayer(s);
     }
@@ -448,6 +481,65 @@ export class SessionManager {
       content: content ?? "",
       source: "user",
     });
+    if (s.bookId) this.persist(s);
+    return this.toView(sessionId);
+  }
+
+  /** 游玩表按格手改。冲突格在 tablePatch.skipped，整表不会被旧内容盖掉。 */
+  patchPlayTable(
+    sessionId: string,
+    tag: string,
+    cells: TableCellPatch[],
+  ): SessionView & {
+    tablePatch: ReturnType<PhaseRuntime["patchUserTable"]>;
+  } {
+    const s = this.require(sessionId);
+    const tablePatch = s.runtime.patchUserTable(tag.trim() || "变量.当前", cells);
+    if (s.bookId) this.persist(s);
+    return { ...this.toView(sessionId), tablePatch };
+  }
+
+  /**
+   * 游玩辅助面点选开场。usePersona=true 用该开场自带角色；false 保持当前用户角色卡。
+   */
+  selectPlayOpening(
+    sessionId: string,
+    index: number,
+    usePersona?: boolean,
+  ): SessionView {
+    const s = this.require(sessionId);
+    const board = s.runtime.getBlackboard();
+    const aux = buildPlayAuxView(board, s.runtime.getSession().slots);
+    if (!aux.openings.length) throw new Error("没有可选开场");
+    const idx = Math.min(Math.max(0, Math.trunc(index)), aux.openings.length - 1);
+    const picked = aux.openings[idx]!;
+    s.runtime.setOpeningSelectedIndex(idx);
+
+    const persona = picked.persona;
+    if (usePersona === false) {
+      this.writeOpeningPersonaChoice(s, false);
+    } else if (persona) {
+      board.write({
+        tag: OPENING_PERSONA_TAG,
+        content: serializeOpeningPersona(persona),
+        source: "user",
+      });
+      this.writeOpeningPersonaChoice(s, true);
+    }
+
+    const expanded = this.expandDirectivesText(
+      picked.text,
+      this.playDirectiveContext(s),
+    );
+    board.write({
+      tag: OPENING_OUTPUT_TAG,
+      content: expanded,
+      source: "user",
+    });
+    const first = s.messages[0];
+    if (first?.title === "开场白") {
+      s.messages[0] = this.playOpeningMessage(expanded);
+    }
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
   }
@@ -625,7 +717,7 @@ export class SessionManager {
     return this.toView(id);
   }
 
-  /** 切换到转述整理进料（与配方并行；不跑 design-flow） */
+  /** 切换到对话落盘进料（与工序编排并行；不跑 design-flow） */
   private enterDictateMode(s: ManagedSession): void {
     const board = s.runtime.getBlackboard();
     board.write({
@@ -641,7 +733,7 @@ export class SessionManager {
         }。`
       : "";
     const welcome =
-      `Boss 直聘模式：直接说你想要的体验与设定。我会整理进产物；变量与映射用工具钉死。对话过长时可清空对话（产物保留）。${recipeLine}`;
+      `对话落盘：直接说你想要的体验与设定。我会整理进产物；变量与映射用工具钉死。对话过长时可清空对话（产物保留）。${recipeLine}`;
     s.messages.push({
       id: randomUUID(),
       role: "system",
@@ -649,7 +741,7 @@ export class SessionManager {
       createdAt: new Date().toISOString(),
       kind: "orchestrator_prompt",
       actor: "orchestrator",
-      title: "Boss直聘",
+      title: "对话落盘",
       body: welcome,
     });
   }
@@ -726,6 +818,13 @@ export class SessionManager {
       skillName: s.runtime.getActiveSkill()?.name,
       moduleCatalog: s.moduleCatalog,
     });
+    const insertFeedbackIndex = await resolveDictateInsertFeedbackIndexForSession({
+      skillName: s.runtime.getActiveSkill()?.name,
+      moduleCatalog: s.moduleCatalog,
+    });
+    const repeatableFamilies = (s.moduleCatalog?.modules ?? [])
+      .filter((m) => m.repeatable === true && m.artifact?.trim())
+      .map((m) => m.artifact!.trim());
 
     const result = await runDictateTurn({
       llm,
@@ -733,6 +832,7 @@ export class SessionManager {
       recipeName: recipeView?.name,
       recipeBrief,
       moduleGuide,
+      repeatableFamilies,
       handlers: {
         listProducts: () => this.listDictateProducts(s),
         writeProduct: (tag, content, order) => {
@@ -755,6 +855,7 @@ export class SessionManager {
             },
           });
         },
+        deleteProduct: (tag) => s.runtime.getBlackboard().deleteByTag(tag),
         readTag: (tag) => s.runtime.getBlackboard().getContentByTag(tag),
         writeTag: (tag, content) => {
           const board = s.runtime.getBlackboard();
@@ -768,6 +869,7 @@ export class SessionManager {
             },
           });
         },
+        deleteTag: (tag) => s.runtime.getBlackboard().deleteByTag(tag),
         clearDialogue: () => {
           const kept = this.listDictateProducts(s);
           const lastUser = [...s.messages]
@@ -813,6 +915,8 @@ export class SessionManager {
           if (text.trim()) this.agentThinkingLive.set(id, text);
           this.agentThinkingClosed.add(id);
         },
+        lookupInsertFeedback: (tag) =>
+          lookupDictateInsertFeedback(insertFeedbackIndex, tag),
       },
     });
 
@@ -949,6 +1053,7 @@ export class SessionManager {
   async startNewPlayRun(
     sessionId: string,
     instanceId?: string,
+    opts?: { useOpeningPersona?: boolean },
   ): Promise<SessionView> {
     const s = this.require(sessionId);
     if (!s.bookId) throw new Error("仅绑定作品时可新建游玩");
@@ -958,14 +1063,22 @@ export class SessionManager {
       throw new Error("须先验收 Worker 集、完成收口，或（转述）先写入产物并落档，才能开始游玩");
     }
     this.archivePlayWorking(s.bookId);
-    this.enterPlayLayer(s, { resume: false, instanceId });
+    this.enterPlayLayer(s, {
+      resume: false,
+      instanceId,
+      useOpeningPersona: opts?.useOpeningPersona,
+    });
     return this.toView(sessionId);
   }
 
   /** 进入游玩层：resume 时恢复「当前游玩」，否则从产物新开一条聊天 */
   private enterPlayLayer(
     s: ManagedSession,
-    opts: { resume: boolean; instanceId?: string },
+    opts: {
+      resume: boolean;
+      instanceId?: string;
+      useOpeningPersona?: boolean;
+    },
   ): void {
     this.persistCreationIfDesign(s);
     s.runtime.prepareEnterPlay();
@@ -978,6 +1091,7 @@ export class SessionManager {
       isPlayLayerActive(session.slots) &&
       inferLifecycleStage(session) === "play"
     ) {
+      this.writeOpeningPersonaChoice(s, opts.useOpeningPersona);
       this.sanitizePlayHitl(s);
       return;
     }
@@ -986,10 +1100,11 @@ export class SessionManager {
       const working = loadRunSnapshotFile(s.bookId, PLAY_WORKING_SNAPSHOT_ID);
       if (working?.kind === "run") {
         this.restoreSnapshotInPlace(s, working, "play");
+        this.writeOpeningPersonaChoice(s, opts.useOpeningPersona);
         return;
       }
     }
-    this.beginNewPlayFromInstance(s, opts.instanceId);
+    this.beginNewPlayFromInstance(s, opts.instanceId, opts.useOpeningPersona);
     if (s.bookId) this.savePlayWorking(s);
   }
 
@@ -1009,7 +1124,11 @@ export class SessionManager {
     this.restoreCreationFromDisk(s);
   }
 
-  private beginNewPlayFromInstance(s: ManagedSession, instanceId?: string): void {
+  private beginNewPlayFromInstance(
+    s: ManagedSession,
+    instanceId?: string,
+    useOpeningPersona?: boolean,
+  ): void {
     const keepId = s.runtime.getSession().id;
     // 换上 instance 快照前先记下当前创作里的开场白（可能比上次定稿更新）
     const liveDesignOpening =
@@ -1055,6 +1174,7 @@ export class SessionManager {
         source: "runtime",
       });
     }
+    this.writeOpeningPersonaChoice(s, useOpeningPersona);
     const opening = this.ensurePlayOpeningWritten(
       s,
       instance?.messages as ChatMessage[] | undefined,
@@ -1072,6 +1192,19 @@ export class SessionManager {
     s.branchState = createMessageBranchState();
   }
 
+  /** 开玩时记下是否用这条开场自带的用户角色；须在恢复快照之后写，否则会被冲掉。 */
+  private writeOpeningPersonaChoice(
+    s: ManagedSession,
+    useOpeningPersona?: boolean,
+  ): void {
+    if (useOpeningPersona === undefined) return;
+    s.runtime.getBlackboard().write({
+      tag: OPENING_PERSONA_CHOICE_TAG,
+      content: useOpeningPersona ? "opening" : "global",
+      source: "user",
+    });
+  }
+
   /**
    * 保证黑板上有 输出.开场白，供开玩主区展示。
    * 优先级：设计.开场白（转述产物）> 已有 输出.开场白 > 其它产物拼装 > 非转述聊天兜底。
@@ -1082,6 +1215,7 @@ export class SessionManager {
     s: ManagedSession,
     messageSource?: ChatMessage[],
   ): string {
+    this.sealOpeningPersonaFromBoard(s);
     const board = s.runtime.getBlackboard();
     const fromDesign =
       board.getContentByTag("设计.开场白")?.trim() ||
@@ -1089,9 +1223,10 @@ export class SessionManager {
         ?.content?.trim() ||
       "";
     if (fromDesign) {
+      const body = splitOpeningDocument(fromDesign).text || fromDesign;
       const expanded = this.expandDirectivesText(
-        fromDesign,
-        this.playDirectiveContext(),
+        body,
+        this.playDirectiveContext(s),
       );
       const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
       if (existing !== expanded) {
@@ -1108,7 +1243,7 @@ export class SessionManager {
     if (existing) {
       const expanded = this.expandDirectivesText(
         existing,
-        this.playDirectiveContext(),
+        this.playDirectiveContext(s),
       );
       if (expanded !== existing) {
         board.write({
@@ -1129,7 +1264,7 @@ export class SessionManager {
 
     const expanded = this.expandDirectivesText(
       opening,
-      this.playDirectiveContext(),
+      this.playDirectiveContext(s),
     );
     board.write({
       tag: OPENING_OUTPUT_TAG,
@@ -1139,19 +1274,46 @@ export class SessionManager {
     return expanded;
   }
 
+  /** 开场 meta 里的用户角色：落到 运行.开场用户角色，不进全局列表。 */
+  private sealOpeningPersonaFromBoard(s: ManagedSession): void {
+    const board = s.runtime.getBlackboard();
+    if (readSealedOpeningPersona(board.getContentByTag(OPENING_PERSONA_TAG))) {
+      return;
+    }
+    const selectedRaw = s.runtime.getSession().slots[SLOT_OPENING_SELECTED_INDEX];
+    const selectedIndex =
+      typeof selectedRaw === "number"
+        ? selectedRaw
+        : typeof selectedRaw === "string" && selectedRaw.trim()
+          ? Number(selectedRaw)
+          : 0;
+    const persona =
+      parseOpeningSealPayload(
+        board.getContentByTag("设计.开场白与开场变量"),
+        selectedIndex,
+      )?.persona ?? splitOpeningDocument(board.getContentByTag("设计.开场白")).persona;
+    if (!persona) return;
+    board.write({
+      tag: OPENING_PERSONA_TAG,
+      content: serializeOpeningPersona(persona),
+      source: "runtime",
+    });
+  }
+
   private personaForManaged(s: ManagedSession): ReturnType<
     typeof personaForLifecycle
   > {
     if (!s.runtime) return personaForLifecycle("design");
-    return personaForLifecycle(inferLifecycleStage(s.runtime.getSession()));
+    return overlayPlayPersona(
+      inferLifecycleStage(s.runtime.getSession()),
+      s.runtime.getBlackboard(),
+    );
   }
 
-  private playDirectiveContext(): DirectiveContext {
-    const p = getActivePersona();
+  private playDirectiveContext(s: ManagedSession): DirectiveContext {
+    const p = this.personaForManaged(s);
     if (!p) return {};
-    return {
-      persona: { name: p.name, description: p.description },
-    };
+    return { persona: p };
   }
 
   private directiveContextFor(s: ManagedSession): DirectiveContext {
@@ -3097,6 +3259,7 @@ export class SessionManager {
   private toView(id: string, resumed = false, resumeHint?: string): SessionView {
     const s = this.require(id);
     this.sanitizePlayHitl(s);
+    this.sealOpeningPersonaFromBoard(s);
     const session = s.runtime.getSession();
     const reason = session.waitingReason;
     const book = s.bookId ? getBook(s.bookId) : null;
@@ -3482,6 +3645,7 @@ export class SessionManager {
         : undefined,
       liveStream: this.buildLiveStreamView(id),
       agentThinking: this.agentThinkingLive.get(id),
+      runActive: Boolean(s.runAbort),
       resumed: resumed || undefined,
       tokenStats: {
         sessionTotal: tokens.totalTokens,
@@ -3498,6 +3662,19 @@ export class SessionManager {
           ? { id: p.id, name: p.name, description: p.description }
           : null;
       })(),
+      sessionProtagonist: readSessionProtagonist(s.runtime.getBlackboard()),
+      openingPersonaChoice: ((): "opening" | "global" | null => {
+        const raw = s.runtime
+          .getBlackboard()
+          .getContentByTag(OPENING_PERSONA_CHOICE_TAG)
+          ?.trim();
+        if (raw === "opening" || raw === "global") return raw;
+        return null;
+      })(),
+      playAux: buildPlayAuxView(
+        s.runtime.getBlackboard(),
+        s.runtime.getSession().slots,
+      ),
     };
   }
 
@@ -3927,7 +4104,7 @@ function resolveSelectedRecipeView(
   return { id: ref, name: ref, declaration: "" };
 }
 
-/** Boss 直聘：优先注入 recipe.yaml 方法论，缺则退回 catalog declaration */
+/** 对话落盘：优先注入 recipe.yaml 方法论，缺则退回 catalog declaration */
 async function resolveDictateRecipeBriefForSession(params: {
   skillName?: string | null;
   recipeView: { id: string; name: string; declaration: string } | null;
@@ -3956,7 +4133,7 @@ async function resolveDictateRecipeBriefForSession(params: {
   return view.declaration?.trim() || undefined;
 }
 
-/** Boss 直聘：注入能力何时落盘（modules meta）；优先会话已载 catalog */
+/** 对话落盘：注入能力何时落盘（modules meta）；优先会话已载 catalog */
 async function resolveDictateModuleGuideForSession(params: {
   skillName?: string | null;
   moduleCatalog?: ModuleCatalog | null;
@@ -3977,6 +4154,38 @@ async function resolveDictateModuleGuideForSession(params: {
   }
   if (!catalog?.modules?.length) return undefined;
   return formatModuleCatalogForDictate(catalog);
+}
+
+/** 对话落盘：insert(tag) → 用户可见规范索引 */
+async function resolveDictateInsertFeedbackIndexForSession(params: {
+  skillName?: string | null;
+  moduleCatalog?: ModuleCatalog | null;
+}): Promise<Map<string, string> | undefined> {
+  let catalog = params.moduleCatalog ?? null;
+  let packRoot: string | undefined;
+  const skillName = params.skillName?.trim();
+  if (skillName) {
+    try {
+      const skill = await loadSkill(skillName);
+      packRoot = skill.skillPackRoot?.trim() || undefined;
+      if (!catalog?.modules?.length && packRoot) {
+        catalog = await loadModuleCatalog(packRoot);
+      }
+    } catch (err) {
+      console.error("[会话] 加载 insert 反馈索引失败", err);
+      return undefined;
+    }
+  }
+  if (!catalog?.modules?.length || !packRoot) return undefined;
+  try {
+    return await buildDictateInsertFeedbackIndex({
+      catalog,
+      skillPackRoot: packRoot,
+    });
+  } catch (err) {
+    console.error("[会话] 构建 insert 反馈索引失败", err);
+    return undefined;
+  }
 }
 
 function buildWorkerSetUserView(

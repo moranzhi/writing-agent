@@ -10,6 +10,7 @@
 | 生成规则 | **专用卡** | `renderGenerationRulesBodyHtml` |
 | 具体实例 | 通用 fragment / 结构化 | context-fragment 外壳 |
 | 叙事指南与故事推进 | **专用 mosaic**（风格与写法 \| 推进与决策） | `renderNarrativeBodyHtml` |
+| 叙事指南 / 故事推进 | 同上 mosaic（落盘拆开后各用半栏） | `renderNarrativeBodyHtml` |
 | 变量设计 | **结构化卡**（真值 / side_effects） | `renderVariableDesignHtml` |
 | 变量控制上下文 | 通用 fragment | context-fragment |
 | 正文组成 | **专用卡**：present 壳渲染 `正文.示例.灌数`（看美化）+ 契约折叠 | `renderReplyFormatBodyHtml` |

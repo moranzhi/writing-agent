@@ -36,7 +36,7 @@ import { toActiveSkillSnapshot } from "../skills/snapshot.js";
 import { runWorkerSkill } from "../worker/executor.js";
 import { resolveWorkerId } from "../worker/resolve-id.js";
 import { resolveWorkerLlmProvider } from "../skills/worker-llm.js";
-import { personaForLifecycle } from "../persona/store.js";
+import { overlayPlayPersona } from "../persona/protagonist-bind.js";
 import {
   DIALOGUE_HISTORY_TAG,
   appendDialogueHistoryTurn,
@@ -127,9 +127,11 @@ import {
   OPENING_CURRENT_VARS_TAG,
   OPENING_INITIAL_VARS_TAG,
   OPENING_OUTPUT_TAG,
+  OPENING_PERSONA_TAG,
   OPENING_SETUP_ARTIFACT_TAG,
   parseOpeningSealPayload,
   reopenCreationFlowRaw,
+  serializeOpeningPersona,
   SLOT_CREATION_SEALED_BY_OPENING,
   SLOT_OPENING_SELECTED_INDEX,
 } from "../skills/opening-seal.js";
@@ -138,6 +140,10 @@ import {
   isDictateModeValue,
 } from "../dictate/types.js";
 import { applyDictatePlayBind } from "../dictate/play-bind.js";
+import {
+  dictateProductFamily,
+  mergeGenerationRulesArtifacts,
+} from "../dictate/repeatable-tags.js";
 import {
   VARIABLE_CATALOG_TAG,
   seedVariablesFromCatalog,
@@ -172,7 +178,9 @@ import {
 import {
   mergeTableCells,
   parseTableDoc,
+  patchUserTableCells,
   stringifyTableDoc,
+  type TableCellPatch,
   type TableDoc,
 } from "../blackboard/table-cells.js";
 import {
@@ -330,6 +338,16 @@ export class PhaseRuntime {
 
   getSession(): RuntimeSession {
     return this.session;
+  }
+
+  setOpeningSelectedIndex(index: number): void {
+    this.session = {
+      ...this.session,
+      slots: {
+        ...this.session.slots,
+        [SLOT_OPENING_SELECTED_INDEX]: Math.trunc(index),
+      },
+    };
   }
 
   getLastWorkerRunSnapshot(): {
@@ -739,6 +757,29 @@ export class PhaseRuntime {
         source: "user",
       });
     }
+  }
+
+  /**
+   * 用户按格手改表：须带读到的 rev。版本冲突或只读格跳过，不整表覆盖。
+   */
+  patchUserTable(
+    tag: string,
+    patches: TableCellPatch[],
+  ): ReturnType<typeof patchUserTableCells> {
+    const allowed = tag === "变量.当前" || tag === "运行.初始变量";
+    if (!allowed) throw new Error("该表不可手改");
+    const prev = parseTableDoc(this.blackboard.getContentByTag(tag));
+    const result = patchUserTableCells(prev, patches);
+    if (result.applied.length) {
+      this.blackboard.write({
+        tag,
+        content: stringifyTableDoc(result.doc),
+        source: "user",
+      });
+      this.applyTableSideEffects(prev, result.doc, "user");
+      if (tag === "变量.当前") this.applyValueMapProjections("user");
+    }
+    return result;
   }
 
   /**
@@ -1944,6 +1985,14 @@ export class PhaseRuntime {
       this.writeWorkerTagContent(OPENING_OUTPUT_TAG, openingText, "opening-setup");
     }
 
+    if (payload?.persona) {
+      this.writeWorkerTagContent(
+        OPENING_PERSONA_TAG,
+        serializeOpeningPersona(payload.persona),
+        "opening-setup",
+      );
+    }
+
     if (payload?.variables.length) {
       const source = "worker:opening-setup";
       const initialPatch = mergeOpeningTablePatch(
@@ -1995,15 +2044,15 @@ export class PhaseRuntime {
 
   /** 收口后若还没有运行规格，用草稿或默认槽位补一份，才能进游玩 */
   private ensurePlaySpecReady(): void {
-    // Boss 直聘：落档/开玩时自动挂载产物；种变量初值；按映射重投影
+    // 对话落盘：落档/开玩时自动挂载产物；种变量初值；按映射重投影
     if (this.isDictateIntakeMode()) {
       const bound = applyDictatePlayBind(this.blackboard);
       if (bound.boundTags.length) {
         this.onMessage(
-          `[Boss直聘] 已自动挂载 ${bound.boundTags.length} 个产物到游玩上下文：${bound.boundTags.join("、")}`,
+          `[对话落盘] 已自动挂载 ${bound.boundTags.length} 个产物到游玩上下文：${bound.boundTags.join("、")}`,
         );
       } else {
-        this.onMessage("[Boss直聘] 已生成默认游玩规格（尚无产物可挂载）");
+        this.onMessage("[对话落盘] 已生成默认游玩规格（尚无产物可挂载）");
       }
       this.seedVariablesAndReproject("opening-setup");
     } else {
@@ -2274,7 +2323,7 @@ export class PhaseRuntime {
       slots,
       fallbackLlm: this.llm,
       getPersona: () =>
-        personaForLifecycle(inferLifecycleStage(this.session)),
+        overlayPlayPersona(inferLifecycleStage(this.session), this.blackboard),
     });
 
     this.onMessage(
@@ -2670,7 +2719,19 @@ export class PhaseRuntime {
     need: { rule_id: string; reason: string },
     workerId: string,
   ): void {
-    const rulesRaw = this.blackboard.getContentByTag("设计.生成规则");
+    const board = this.blackboard;
+    const rawPieces: string[] = [];
+    for (const e of board.listTagIndex()) {
+      if (dictateProductFamily(e.tag) !== "设计.生成规则") continue;
+      const c = board.getContentByTag(e.tag)?.trim();
+      if (c) rawPieces.push(c);
+    }
+    const rulesRaw =
+      rawPieces.length === 0
+        ? board.getContentByTag("设计.生成规则")
+        : rawPieces.length === 1
+          ? rawPieces[0]
+          : mergeGenerationRulesArtifacts(rawPieces);
     const result = runMaintainNeedGenerateSampling({
       need,
       generationRulesRaw: rulesRaw,

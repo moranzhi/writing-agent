@@ -80,6 +80,8 @@ export type CompleteOptions = {
   generation?: GenerationParameters;
   /** 统计用途，如 main_agent / worker:write-rules */
   caller?: string;
+  /** 日志短名，如「对话落盘 第2轮」；缺则用 caller */
+  label?: string;
   /** 取消进行中的 LLM 请求（停止并重试） */
   signal?: AbortSignal;
 };

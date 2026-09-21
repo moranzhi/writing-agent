@@ -872,6 +872,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       messages: rest,
       stream: params.stream,
       caller: `worker:${worker.id}`,
+      label: worker.name?.trim() || worker.id,
     });
     // 主世界 harness 终稿是 Markdown；勿强行抽 JSON
     return parseWorkerResponse(harness.content, worker.outputTags, {
@@ -888,7 +889,11 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     : undefined;
 
   if (playGmBody) {
-    const completeOpts = { caller: `worker:${worker.id}`, responseFormat: "text" as const };
+    const completeOpts = {
+      caller: `worker:${worker.id}`,
+      label: worker.name?.trim() || worker.id,
+      responseFormat: "text" as const,
+    };
     const result =
       streamCallbacks && params.llm.completeStream
         ? await params.llm.completeStream(messages, completeOpts, streamCallbacks)
@@ -908,6 +913,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     schemaIsLoose: !playPresent,
     capabilities: resolveActiveProfile()?.capabilities,
     caller: `worker:${worker.id}`,
+    label: worker.name?.trim() || worker.id,
     stream: streamCallbacks,
   });
 

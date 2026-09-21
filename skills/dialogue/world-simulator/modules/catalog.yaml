@@ -9,6 +9,7 @@
 # closer = true 时为创作终节点：选定后程序落库、关 DAG、保存定稿
 # auto = true 时为程序步：不抛默认问题、不经「同意并开始」，提案后直接执行（产物仍验收）
 # kind = 节点特性。缺省=普通执行步。prior-artifact=先验产物（须先定写什么；params 是规划产物，不拦执行）
+# intake = 可选；recipe=仅工序编排 DAG；dictate=仅对话落盘何时落盘。缺省=两族都可见
 # params = 可选；普通节点=编排进 DAG 时 steps[].params 的声明（required 须在执行前钉齐）
 #          〔先验产物〕=规划产物字段（可提前填，空则步内钉）
 # opening = 可选；覆盖 prompt.md 里 ```opening 默认问题（一般只写在 prompt.md）
@@ -34,6 +35,13 @@ modules:
       钉清用户会在意的体验承诺：站位、反复感到什么、轮转何时停。
       询问相近故合为一步。
     artifact: 设计.美学纲领与交互范式
+
+  - id: protagonist
+    name: 主角设定
+    declaration: >-
+      钉清 @玩家 扮演的那个人：名字、背景、特殊设定（身份/金手指等）。
+      仅当开场白 meta 不够用时才排；用户角色优先写在开场白里。
+    artifact: 设计.主角设定
 
   # —— 世界与内容 ——
   - id: world-blueprint
@@ -82,10 +90,27 @@ modules:
 
   - id: narrative
     name: 叙事指南与故事推进
+    intake: recipe
     declaration: >-
       美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与推进方式；
-      不重做体验问卷
+      不重做体验问卷。工序编排用本步；对话落盘拆成「叙事指南」「故事推进」
     artifact: 设计.叙事指南与故事推进
+
+  - id: narrative-guide
+    name: 叙事指南
+    intake: dictate
+    declaration: >-
+      美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与写法档；
+      不重做体验问卷，也不钉故事怎么往前
+    artifact: 设计.叙事指南
+
+  - id: story-progression
+    name: 故事推进
+    intake: dictate
+    declaration: >-
+      美学已有方向时：钉故事怎么往前、用户输入用法（大纲扩写或扮演停笔）；
+      不重做文风问卷
+    artifact: 设计.故事推进
 
   # —— 机制与数据 ——
   - id: mechanism
@@ -143,7 +168,7 @@ modules:
     name: 开场白与开场变量
     closer: true
     declaration: >-
-      创作终节点：写出 1～多条开场白（正文须含字面 @玩家）并钉同真相初值；
+      创作终节点：写出 1～多条开场（每条 = meta 用户角色 + 正文；须含字面 @玩家）并钉同真相初值；
       选定后程序落库、结束创作并保存定稿
     artifact: 设计.开场白与开场变量
 

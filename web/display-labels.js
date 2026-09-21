@@ -1,6 +1,6 @@
 /**
  * 与 docs/ui-glossary.md、src/server/display-labels.ts 保持同步。
- * 用户侧口径：配方 / 编排器 / 技能 / 工作流计划 / 运行规格 / 执行单元。
+ * 用户侧口径：进料方式 / 配方 / 编排器 / 技能 / 工作流计划 / 运行规格 / 执行单元。
  */
 
 const STAGE_LABELS = {
@@ -37,9 +37,12 @@ const FIXED_TOPIC_LABELS = {
   "aesthetics-interaction": "美学纲领与交互范式",
   interaction: "交互范式",
   narrative_guide: "叙事指南与故事推进",
+  "narrative-guide": "叙事指南",
+  "story-progression": "故事推进",
   input_protocol: "输入协议",
   core_premise: "核心前提",
   aesthetics: "美学纲领",
+  protagonist: "主角设定",
 };
 
 const PHASE_UNIT_LABELS = {
@@ -52,11 +55,21 @@ export function displayStageLabel(id) {
   return STAGE_LABELS[id] ?? id;
 }
 
+export function displayCreationModeLabel(id) {
+  if (!id) return "";
+  const map = {
+    recipe: "工序编排",
+    dictate: "对话落盘",
+  };
+  return map[id] ?? id;
+}
+
 export function displaySkillPackLabel(id) {
   if (!id) return "";
   const map = {
-    "world-simulator": "世界模拟器",
+    "world-simulator": "回合推演",
     "expand-assistant": "扩写助手",
+    快穿短局: "快穿短局",
     文本生成器: "文本生成器",
     "text-generator": "文本生成器",
     交互式长文生成器: "交互式长文生成器",

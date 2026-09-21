@@ -47,7 +47,7 @@ Book                跨 Session：过程、资产、游玩
 固定上下文 tag 的主收益是 **跨执行单元复用同一份正文**；写下游时仍依赖上游定稿（不能只报 tag 名省掉正文）。能省的是扯皮过程（验收折叠）。
 
 不再要求用户选择 skill 包；默认 orchestrator 见 `src/config/default-orchestrator.ts`。  
-方法细节见 **`design-orchestrator-guide.md` §7.2**。不要以「世界模拟器」为默认总形态。
+方法细节见 **`design-orchestrator-guide.md` §7.2**。不要以「回合推演 / 世界模拟」为默认总形态。
 
 ### 进入游玩
 

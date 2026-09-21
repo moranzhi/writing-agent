@@ -6,6 +6,7 @@ import {
   reprojectValueMaps,
   serializeValueMapDoc,
   upsertValueMapEntry,
+  removeValueMapEntry,
   VALUE_MAP_TAG,
 } from "../src/skills/value-map.js";
 import {
@@ -13,6 +14,7 @@ import {
   seedVariablesFromCatalog,
   serializeVariableCatalog,
   upsertVariableField,
+  removeVariableField,
   VARIABLE_CATALOG_TAG,
 } from "../src/skills/variable-catalog.js";
 import { stringifyTableDoc, createTableFromValues, parseTableDoc } from "../src/blackboard/table-cells.js";
@@ -46,6 +48,15 @@ describe("variable-catalog", () => {
     expect(seeded.seededKeys).toEqual(expect.arrayContaining(["好感", "地点"]));
     expect(seeded.current).toContain("好感");
     expect(seeded.initial).toContain("旧港");
+  });
+
+  it("removes a catalog field", () => {
+    const a = upsertVariableField(null, { key: "好感", type: "number", initial: 1 });
+    const b = upsertVariableField(a.doc, { key: "章节", type: "number", initial: 1 });
+    const { doc, error } = removeVariableField(b.doc, "好感");
+    expect(error).toBeUndefined();
+    expect(doc.fields.map((f) => f.key)).toEqual(["章节"]);
+    expect(removeVariableField(doc, "好感").error).toMatch(/无字段/);
   });
 });
 
@@ -141,6 +152,20 @@ describe("value-map", () => {
     expect(parsed?.maps[0]?.bands).toHaveLength(2);
     expect(lookupValueMapContent(parsed!.maps[0]!, 1)).toBe("第一章");
     expect(lookupValueMapContent(parsed!.maps[0]!, 9)).toBe("未定");
+  });
+
+  it("removes map by id", () => {
+    const { doc: withMap } = upsertValueMapEntry(null, {
+      id: "aff",
+      field: "好感",
+      target_tag: "上下文.角色态度",
+      bands: [{ min: 0, content: "冷" }],
+    });
+    const { doc, removed, error } = removeValueMapEntry(withMap, "aff");
+    expect(error).toBeUndefined();
+    expect(removed?.id).toBe("aff");
+    expect(doc.maps).toHaveLength(0);
+    expect(removeValueMapEntry(doc, "aff").error).toMatch(/无 id/);
   });
 });
 

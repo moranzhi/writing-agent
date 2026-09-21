@@ -50,7 +50,7 @@ boundary: |
 - 设计.美学纲领与交互范式 → interaction / experience_check
 - 设计.worker规格（游玩拓扑）→ play_slots 或 writing_slots
 - 设计.上下文投影排序 → 写入规格的 context_order（每槽 inserts：order/anchor/ref/projection）；无表且上下文很少时可按默认 static/dynamic 退化
-- 设计.叙事指南与故事推进（旧称 设计.叙事指南）/ 世界 / 机制 / 生成规则等 → resident_context（挂载以排序表与 mount 为准，本步不重排数字序）
+- 设计.叙事指南 / 设计.故事推进（工序编排：设计.叙事指南与故事推进）/ 世界 / 机制 / 生成规则等 → resident_context（挂载以排序表与 mount 为准，本步不重排数字序）
 - 设计.变量设计与更新规则 → tables.side_effects（及 schemas 摘要）
 - 设计.变量控制上下文 → 核对挂载与剧透，写入 notes 或 resident 短句
 

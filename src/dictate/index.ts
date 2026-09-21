@@ -20,12 +20,35 @@ export {
 export { DICTATE_TOOL_DEFINITIONS } from "./tools.js";
 export { runDictateTurn, type DictateTurnResult } from "./turn.js";
 export {
+  DICTATE_INSERT_TAG_ALIASES,
+  DICTATE_MULTI_MODULE_REPLY_HINT,
+  buildDictateInsertFeedback,
+  buildDictateInsertFeedbackIndex,
+  formatDictateUserFacingBrief,
+  lookupDictateInsertFeedback,
+  resolveModuleForInsertTag,
+  extractSelfScoreDimensionNames,
+  type DictateInsertFeedback,
+} from "./insert-feedback.js";
+export {
   applyDictatePlayBind,
   bindDictateProductsToPlaySpec,
   buildDictateContextOrder,
   collectDictateBindProducts,
   type DictatePlayBindResult,
 } from "./play-bind.js";
+export {
+  REPEATABLE_TAG_SEP,
+  buildRepeatableProductTag,
+  collectFamilyContents,
+  dictateProductFamily,
+  dictateProductSlot,
+  extractRepeatableSlotFromContent,
+  isDictateProductFamily,
+  mergeGenerationRulesArtifacts,
+  resolveRepeatableInsertTag,
+  sanitizeRepeatableSlot,
+} from "./repeatable-tags.js";
 export {
   VARIABLE_CATALOG_TAG,
   parseVariableCatalog,

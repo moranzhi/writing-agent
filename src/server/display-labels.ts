@@ -1,7 +1,7 @@
 /**
  * 用户可见中文标签（与 docs/ui-glossary.md 同步）。
  * 内部 id 不变；仅展示层映射。
- * 口径：配方 / 编排器 / 技能 / 工作流计划 / 运行规格 / 执行单元
+ * 口径：进料方式 / 配方 / 编排器 / 技能 / 工作流计划 / 运行规格 / 执行单元
  */
 
 const STAGE_LABELS: Record<string, string> = {
@@ -39,9 +39,12 @@ const FIXED_TOPIC_LABELS: Record<string, string> = {
   "aesthetics-interaction": "美学纲领与交互范式",
   interaction: "交互范式",
   narrative_guide: "叙事指南与故事推进",
+  "narrative-guide": "叙事指南",
+  "story-progression": "故事推进",
   input_protocol: "输入协议",
   core_premise: "核心前提",
   aesthetics: "美学纲领",
+  protagonist: "主角设定",
 };
 
 const PHASE_UNIT_LABELS: Record<string, string> = {
@@ -49,9 +52,15 @@ const PHASE_UNIT_LABELS: Record<string, string> = {
   refine: "细化",
 };
 
+const CREATION_MODE_LABELS: Record<string, string> = {
+  recipe: "工序编排",
+  dictate: "对话落盘",
+};
+
 const SKILL_PACK_LABELS: Record<string, string> = {
-  "world-simulator": "世界模拟器",
+  "world-simulator": "回合推演",
   "expand-assistant": "扩写助手",
+  快穿短局: "快穿短局",
   文本生成器: "文本生成器",
   "text-generator": "文本生成器",
   交互式长文生成器: "交互式长文生成器",
@@ -62,6 +71,12 @@ const SKILL_PACK_LABELS: Record<string, string> = {
 export function displayStageLabel(id: string | undefined | null): string {
   if (!id) return "";
   return STAGE_LABELS[id] ?? id;
+}
+
+/** 进料方式展示名（新建对话框 / 工作面 kicker） */
+export function displayCreationModeLabel(id: string | undefined | null): string {
+  if (!id) return "";
+  return CREATION_MODE_LABELS[id] ?? id;
 }
 
 /** 配方选项 / skill pack 展示名 */
