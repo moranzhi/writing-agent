@@ -135,8 +135,8 @@
 | `design-flow` | **创作 · 流程编排** | 以已选【配方】为起点，编排/增量修订工作流计划（可变 DAG） |
 | `design-step` | **创作 · 执行步骤** | 按工作流计划执行当前【技能】 |
 | `opening-generator` | **开局 · 开场白** | 无 `opening-setup` 时的兜底落库；有则选定开场白节点即收口 |
-| `opening-setup`（技能） | **开场白与开场变量** | 每条开场 = meta（用户角色+初值）+ 正文（present.v1，壳跟正文组成）。游玩辅助 Tab「开场」点选；没有或不采用则用当前用户角色卡 |
-| `protagonist`（技能） | **主角设定** | 旧路径兜底；新开场把用户角色写在开场白 meta 里 |
+| `opening-setup`（技能） | **开场白与开场变量** | 工序路径：1～多条候选 swipe。对话落盘用 `设计.开场白[#短码]` 增殖；游玩辅助 Tab「开场」点选 |
+| `protagonist`（技能） | **主角设定** | `设计.主角设定[#短码]`；与开场白同短码即绑定该开局。挂在当前选用的用户角色卡下 |
 | `worker-spec`（技能） | **游玩拓扑** | 勾选固定槽；旧称「Worker 规格」，勿再当自由发明演员 |
 | `design-core` 等 | （已废弃） | 旧分步 skill；勿再调度 |
 
@@ -207,6 +207,7 @@
 | `narrative_guide` | 叙事指南与故事推进 |
 | `narrative-guide` | 叙事指南（对话落盘） |
 | `story-progression` | 故事推进（对话落盘） |
+| `user-requirements` | 用户需求（偏好库选用） |
 | `input_protocol` | 输入协议 |
 | `core_premise` | 核心前提 |
 | `aesthetics` | 美学纲领（旧；已并入美学纲领与交互范式） |

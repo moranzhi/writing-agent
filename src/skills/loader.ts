@@ -559,11 +559,36 @@ export async function loadWorkerSkillWithContext(
           skill.skillPackRoot,
           skillsRoot,
         );
+        const parts: string[] = [];
         if (shells.length) {
-          rosterBlock = `${formatPresentShellsForPrompt(shells)}\n\n`;
+          parts.push(formatPresentShellsForPrompt(shells));
+        }
+        const {
+          loadMarkdownSafeSubsetCatalog,
+          formatMarkdownSafeSubsetForPrompt,
+        } = await import("./markdown-safe-subset.js");
+        const safeSubset = await loadMarkdownSafeSubsetCatalog(
+          skill.skillPackRoot,
+          skillsRoot,
+        );
+        if (safeSubset) {
+          parts.push(formatMarkdownSafeSubsetForPrompt(safeSubset));
+        }
+        if (parts.length) {
+          rosterBlock = `${parts.join("\n\n")}\n\n`;
         }
       }
-      modulePromptBlock = `${rosterBlock}${paramsBlock}\n\n## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}${inheritNote}`;
+      let libraryBlock = "";
+      if (binding.module.libraries?.length) {
+        const { formatBoundLibrariesForPrompt } = await import(
+          "../libraries/index.js"
+        );
+        const libText = formatBoundLibrariesForPrompt(
+          binding.module.libraries,
+        ).trim();
+        if (libText) libraryBlock = `${libText}\n\n`;
+      }
+      modulePromptBlock = `${rosterBlock}${libraryBlock}${paramsBlock}\n\n## 【本步方法 · ${binding.module.name}】\n\n${binding.modulePrompt.trim()}${openingNote}${inheritNote}`;
       const depTags = inheritTag
         ? binding.depTags.filter((tag) => tag !== inheritTag)
         : binding.depTags;

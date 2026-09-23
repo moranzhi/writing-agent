@@ -10,6 +10,7 @@
 # auto = true 时为程序步：不抛默认问题、不经「同意并开始」，提案后直接执行（产物仍验收）
 # kind = 节点特性。缺省=普通执行步。prior-artifact=先验产物（须先定写什么；params 是规划产物，不拦执行）
 # intake = 可选；recipe=仅工序编排 DAG；dictate=仅对话落盘何时落盘。缺省=两族都可见
+# libraries = 可选；本步绑定的全局库 id 列表（如 style-packs）；design-step 注入，库空跳过
 # params = 可选；普通节点=编排进 DAG 时 steps[].params 的声明（required 须在执行前钉齐）
 #          〔先验产物〕=规划产物字段（可提前填，空则步内钉）
 # opening = 可选；覆盖 prompt.md 里 ```opening 默认问题（一般只写在 prompt.md）
@@ -38,10 +39,19 @@ modules:
 
   - id: protagonist
     name: 主角设定
+    repeatable: true
     declaration: >-
       钉清 @玩家 扮演的那个人：名字、背景、特殊设定（身份/金手指等）。
-      仅当开场白 meta 不够用时才排；用户角色优先写在开场白里。
+      代入有名片时排本步；可 设计.主角设定#短码 与开场白同槽绑定；禁止把名字/简介写进开场白正文。
     artifact: 设计.主角设定
+
+  - id: user-requirements
+    name: 用户需求
+    libraries: [preferences]
+    declaration: >-
+      把跨局偏好库里对本局生效的硬约束（禁区/纠偏/默认取向）落成可执行条目；
+      不重做文风问卷，也不钉体验站位
+    artifact: 设计.用户需求
 
   # —— 世界与内容 ——
   - id: world-blueprint
@@ -91,6 +101,7 @@ modules:
   - id: narrative
     name: 叙事指南与故事推进
     intake: recipe
+    libraries: [style-packs]
     declaration: >-
       美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与推进方式；
       不重做体验问卷。工序编排用本步；对话落盘拆成「叙事指南」「故事推进」
@@ -99,6 +110,7 @@ modules:
   - id: narrative-guide
     name: 叙事指南
     intake: dictate
+    libraries: [style-packs]
     declaration: >-
       美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与写法档；
       不重做体验问卷，也不钉故事怎么往前

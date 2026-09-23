@@ -499,6 +499,16 @@ describe("creation-flow", () => {
     expect(catalog?.modules.find((m) => m.name === "故事推进")?.intake).toBe(
       "dictate",
     );
+    expect(catalog?.modules.find((m) => m.name === "用户需求")?.libraries).toEqual([
+      "preferences",
+    ]);
+    expect(
+      catalog?.modules.find((m) => m.name === "叙事指南")?.libraries,
+    ).toEqual(["style-packs"]);
+    expect(
+      catalog?.modules.find((m) => m.name === "叙事指南与故事推进")?.libraries,
+    ).toEqual(["style-packs"]);
+    expect(dictateBlock).toContain("【偏好库 · 可选用】");
     expect(
       catalogModulesForIntake(catalog!, "recipe").some(
         (m) => m.name === "叙事指南",

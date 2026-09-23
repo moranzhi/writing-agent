@@ -10,6 +10,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import {
+  collectLibraryIdsFromModules,
+  formatBoundLibrariesForPrompt,
+} from "../libraries/index.js";
 import { tryParseJsonDoc } from "../parse/json-doc.js";
 
 export const CREATION_FLOW_TAG = "设计.创作流程";
@@ -211,6 +215,11 @@ export type ModuleCatalogEntry = {
    * recipe = 只进工序编排 DAG；dictate = 只进对话落盘何时落盘。
    */
   intake?: RecipeIntakeFamily;
+  /**
+   * 可选：本步绑定的全局库 id（如 style-packs）。
+   * design-step 执行时按注册表注入对应块；库空则跳过。
+   */
+  libraries?: string[];
   /** 来自 prompt.md ```meta：何时该选用（编排选型） */
   when?: string;
   /** 来自 prompt.md ```meta：何时不该选用 */
@@ -951,6 +960,7 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
     const kind = parseModuleNodeKind(m.kind);
     const params = parseModuleParamSpecs(m.params);
     const intake = parseModuleIntake(m.intake);
+    const libraries = parseModuleLibraries(m.libraries);
     modules.push({
       id,
       name,
@@ -963,6 +973,7 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
       ...(opening ? { opening } : {}),
       ...(params ? { params } : {}),
       ...(intake ? { intake } : {}),
+      ...(libraries ? { libraries } : {}),
     });
   }
   if (modules.length === 0) return null;
@@ -990,6 +1001,19 @@ function parseModuleParamSpecs(raw: unknown): ModuleParamSpec[] | undefined {
     });
   }
   return out.length > 0 ? out : undefined;
+}
+
+function parseModuleLibraries(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const id = typeof item === "string" ? item.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids.length ? ids : undefined;
 }
 
 /**
@@ -1373,7 +1397,8 @@ const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
  * 不写 DAG / design-step 话术；不塞执行全文。
  */
 export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
-  const lines = catalogModulesForIntake(catalog, "dictate").map((m) => {
+  const dictateModules = catalogModulesForIntake(catalog, "dictate");
+  const lines = dictateModules.map((m) => {
     const programSide = DICTATE_PROGRAM_SIDE_MODULE_IDS.has(m.id) || m.auto;
     const flags = [
       m.repeatable ? "〔可反复〕" : "",
@@ -1393,7 +1418,7 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
     if (m.boundary) parts.push(`  边界：${indentMultiline(m.boundary, "  ")}`);
     return parts.join("\n");
   });
-  return [
+  const head = [
     "【能力 · 何时落盘】",
     "对照下方「何时用 / 何时不用 / 边界」与已有产物判定：条件成立才 insert（或 declare_*）；含糊或未到时机 → 本轮不落该能力，改为短确认或问挡住的 1 点。",
     "同轮可多次落盘：凡本轮材料已够且「何时用」成立的能力，都可 insert / declare_*（可并行）；每个 insert 各回 reply_module，可见回复分段附带。",
@@ -1404,6 +1429,10 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
     "能力执行全文不进聊天；规格只走 toolcall。insert 成功后按返回的 reply_module 写可见回复（见系统提示「对用户可见回复」）。",
     lines.join("\n"),
   ].join("\n");
+
+  const libIds = collectLibraryIdsFromModules(dictateModules);
+  const libBlock = formatBoundLibrariesForPrompt(libIds).trim();
+  return libBlock ? `${head}\n\n${libBlock}` : head;
 }
 
 function dictateLandHint(m: ModuleCatalogEntry): string {
