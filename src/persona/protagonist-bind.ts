@@ -1,5 +1,6 @@
 /**
- * 开场白 meta 里的用户角色（名字+简介）是本条开场的初始设定。
+ * 用户代入名片写在「设计.主角设定」；开场白只留叙事。
+ * 旧稿若把名字/简介塞进开场 meta，读取时仍可回退，并建议提升到主角设定节点。
  * 用户选用后只覆盖本局 @玩家 / @人设，不写进全局角色列表。
  */
 import type { Blackboard } from "../blackboard/blackboard.js";
@@ -11,12 +12,115 @@ import {
 import {
   OPENING_PERSONA_CHOICE_TAG,
   OPENING_PERSONA_TAG,
+  OPENING_PRODUCT_FAMILY,
+  OPENING_SETUP_ARTIFACT_TAG,
   parseOpeningSealPayload,
   readSealedOpeningPersona,
   splitOpeningDocument,
+  type OpeningUserPersona,
 } from "../skills/opening-seal.js";
+import {
+  buildRepeatableProductTag,
+  dictateProductFamily,
+  dictateProductSlot,
+} from "../dictate/repeatable-tags.js";
 
 export const PROTAGONIST_TAG = "设计.主角设定";
+
+/** 对话落盘额外可增殖族（catalog 未标 repeatable 的简化 tag） */
+export const DICTATE_OPENING_REPEATABLE_FAMILIES = [
+  OPENING_PRODUCT_FAMILY,
+  PROTAGONIST_TAG,
+] as const;
+
+/** 与开场同槽：设计.开场白#dorm → 设计.主角设定#dorm；无槽则基名 */
+export function protagonistTagForOpeningSlot(openingTag: string): string {
+  const family = dictateProductFamily(openingTag);
+  if (family !== OPENING_PRODUCT_FAMILY && family !== OPENING_SETUP_ARTIFACT_TAG) {
+    return PROTAGONIST_TAG;
+  }
+  const slot = dictateProductSlot(openingTag);
+  return slot ? buildRepeatableProductTag(PROTAGONIST_TAG, slot) : PROTAGONIST_TAG;
+}
+
+/** 把开场/运行里的名字+简介收成可复制的「主角设定」产物。 */
+export function protagonistFragmentFromPersona(
+  persona: OpeningUserPersona,
+): string {
+  const background = persona.description.trim() || "未定";
+  return JSON.stringify(
+    {
+      schema: "context-fragment.v1",
+      技能: "主角设定",
+      brief: `${persona.name} · 代入名片`,
+      mount: ["world-simulator"],
+      稳变: "stable",
+      正文: {
+        名字: persona.name,
+        背景: background,
+        特殊设定: { 身份: "无", 金手指: "无", 其它: "无" },
+      },
+      自评: {
+        维度: [
+          { 名: "可代入", 分数: 8, 说明: "由开场/用户原话收成" },
+          { 名: "够用", 分数: 7, 说明: "简介作背景；特殊设定未另钉" },
+        ],
+        薄弱点: "特殊设定未展开",
+      },
+      追问: { 导语: "", 题目: [] },
+      开放问题: [],
+    },
+    null,
+    2,
+  );
+}
+
+/** 黑板上尚无该 tag 的主角设定时写入（可指定开场同槽 tag）。 */
+export function ensureProtagonistFromPersona(
+  board: Blackboard,
+  persona: OpeningUserPersona | null | undefined,
+  tag: string = PROTAGONIST_TAG,
+): boolean {
+  if (!persona?.name?.trim()) return false;
+  const writeTag = tag.trim() || PROTAGONIST_TAG;
+  if (board.getContentByTag(writeTag)?.trim()) return false;
+  board.write({
+    tag: writeTag,
+    content: protagonistFragmentFromPersona(persona),
+    source: "runtime",
+  });
+  return true;
+}
+
+export function readProtagonistPersonaAt(
+  board: Blackboard,
+  tag: string = PROTAGONIST_TAG,
+): OpeningUserPersona | null {
+  const spec = parseProtagonistSpec(board.getContentByTag(tag));
+  if (!spec) return null;
+  return {
+    name: spec.name,
+    description: formatPersonaDescription(spec),
+  };
+}
+
+/** 某条开场绑定的名片：同槽主角设定 → 基名主角设定 → 开场旧 meta */
+export function personaBoundToOpening(
+  board: Blackboard,
+  openingTag: string,
+  openingContent: string,
+): OpeningUserPersona | null {
+  const slotted = readProtagonistPersonaAt(
+    board,
+    protagonistTagForOpeningSlot(openingTag),
+  );
+  if (slotted) return slotted;
+  if (dictateProductSlot(openingTag)) {
+    const base = readProtagonistPersonaAt(board, PROTAGONIST_TAG);
+    if (base) return base;
+  }
+  return splitOpeningDocument(openingContent).persona;
+}
 
 const RESERVED_NAMES = new Set(["@玩家", "用户", "主角", CREATION_PLACEHOLDER_NAME]);
 
@@ -50,8 +154,22 @@ export function readSessionProtagonist(
   const sealed = readSealedOpeningPersona(
     board.getContentByTag(OPENING_PERSONA_TAG),
   );
+  if (sealed) {
+    return {
+      name: sealed.name,
+      description: sealed.description,
+      summary: firstSentence(sealed.description),
+    };
+  }
+  const spec = parseProtagonistSpec(board.getContentByTag(PROTAGONIST_TAG));
+  if (spec) {
+    return {
+      name: spec.name,
+      description: formatPersonaDescription(spec),
+      summary: formatProtagonistSummary(spec),
+    };
+  }
   const fromOpening =
-    sealed ??
     parseOpeningSealPayload(board.getContentByTag("设计.开场白与开场变量"))
       ?.persona ??
     splitOpeningDocument(board.getContentByTag("设计.开场白")).persona;
@@ -62,13 +180,7 @@ export function readSessionProtagonist(
       summary: firstSentence(fromOpening.description),
     };
   }
-  const spec = parseProtagonistSpec(board.getContentByTag(PROTAGONIST_TAG));
-  if (!spec) return null;
-  return {
-    name: spec.name,
-    description: formatPersonaDescription(spec),
-    summary: formatProtagonistSummary(spec),
-  };
+  return null;
 }
 
 export function formatPersonaDescription(spec: ProtagonistSpec): string {

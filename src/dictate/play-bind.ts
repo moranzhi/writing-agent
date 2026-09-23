@@ -48,6 +48,7 @@ import {
 /** 开场白进对话历史，不重复挂进每轮投影 */
 const SKIP_BIND_TAGS = new Set([
   "设计.开场白",
+  "设计.开场白与开场变量",
   "设计.worker集",
   "设计.worker集.草稿",
   CONTEXT_ORDER_TAG,
@@ -57,9 +58,20 @@ const SKIP_BIND_TAGS = new Set([
   VALUE_MAP_TAG,
 ]);
 
-/** 偏文风/呈现：有叙事转述时挂转述；否则仍挂主世界层 */
+function shouldSkipBindTag(tag: string): boolean {
+  const t = tag.trim();
+  if (!t) return true;
+  if (SKIP_BIND_TAGS.has(t)) return true;
+  if (t.startsWith("设计.开场白#")) return true;
+  if (t.startsWith("输出.")) return true;
+  if (t.startsWith("运行.")) return true;
+  if (t.startsWith("创作.")) return true;
+  return false;
+}
+
+/** 偏文风/呈现/硬约束：有叙事转述时挂转述；否则仍挂主世界层 */
 const STYLE_TAG_RE =
-  /叙事指南|故事推进|文风|美学|纲领|禁忌|示例|模仿|正文组成|回复格式|监控栏|篇幅|结构/;
+  /叙事指南|故事推进|文风|美学|纲领|禁忌|用户约束|用户需求|示例|模仿|正文组成|回复格式|监控栏|篇幅|结构/;
 
 /** 这些配方开玩时刚需叙事转述（主世界出内容、转述出文风） */
 const RECIPES_REQUIRE_NARRATOR = new Set(["文本生成器"]);
@@ -73,16 +85,6 @@ export type DictatePlayBindResult = {
 
 function isStyleProductTag(tag: string): boolean {
   return STYLE_TAG_RE.test(tag);
-}
-
-function shouldSkipBindTag(tag: string): boolean {
-  const t = tag.trim();
-  if (!t) return true;
-  if (SKIP_BIND_TAGS.has(t)) return true;
-  if (t.startsWith("输出.")) return true;
-  if (t.startsWith("运行.")) return true;
-  if (t.startsWith("创作.")) return true;
-  return false;
 }
 
 /** 从黑板收集对话落盘产物（有正文的 用户.* / 设计.*） */

@@ -130,6 +130,7 @@ function openingPanelHtml(aux) {
       const selected = item.index === aux.selectedOpeningIndex;
       const persona = item.persona;
       return `<article class="play-open-card${selected ? " is-selected" : ""}" data-opening-index="${item.index}" tabindex="0" role="button">
+        ${item.slot ? `<p class="play-open-slot">${esc(item.slot)}</p>` : ""}
         <p class="play-open-text">${esc(previewOpening(item.text))}</p>
         ${
           persona

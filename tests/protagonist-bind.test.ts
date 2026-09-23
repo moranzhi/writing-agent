@@ -155,6 +155,54 @@ describe("protagonist overlay", () => {
     });
   });
 
+  it("prefers 设计.主角设定 over legacy opening meta", async () => {
+    const {
+      PROTAGONIST_TAG,
+      readSessionProtagonist,
+      ensureProtagonistFromPersona,
+      protagonistFragmentFromPersona,
+      protagonistTagForOpeningSlot,
+    } = await import("../src/persona/protagonist-bind.js");
+
+    const board = new Blackboard();
+    board.write({
+      tag: "设计.开场白",
+      content: `用户角色.名字: 旧名
+用户角色.简介: 旧简介
+@玩家推开门。`,
+      source: "agent",
+    });
+    board.write({
+      tag: PROTAGONIST_TAG,
+      content: protagonistFragmentFromPersona({
+        name: "李宗",
+        description: "男大学生",
+      }),
+      source: "agent",
+    });
+    expect(readSessionProtagonist(board)?.name).toBe("李宗");
+
+    const empty = new Blackboard();
+    expect(
+      ensureProtagonistFromPersona(empty, {
+        name: "阿泽",
+        description: "社畜",
+      }),
+    ).toBe(true);
+    expect(readSessionProtagonist(empty)?.name).toBe("阿泽");
+    expect(
+      ensureProtagonistFromPersona(empty, {
+        name: "另一个",
+        description: "不覆盖",
+      }),
+    ).toBe(false);
+
+    expect(protagonistTagForOpeningSlot("设计.开场白#dorm")).toBe(
+      "设计.主角设定#dorm",
+    );
+    expect(protagonistTagForOpeningSlot("设计.开场白")).toBe(PROTAGONIST_TAG);
+  });
+
   it("overlays opening meta 用户角色 when the user switches to that preset", async () => {
     const { readSessionProtagonist, overlayPlayPersona } = await import(
       "../src/persona/protagonist-bind.js"

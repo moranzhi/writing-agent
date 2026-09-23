@@ -73,4 +73,39 @@ describe("play-aux view", () => {
     expect(view.openings[0]?.text).toBe("@玩家站在债契前，堂屋很静。");
     expect(view.openings[0]?.text).not.toContain("present.v1");
   });
+
+  it("lists dictate 设计.开场白#slot openings with same-slot 主角设定", () => {
+    const board = new Blackboard();
+    board.write({
+      tag: "设计.开场白#dorm",
+      content: "@玩家推开宿舍门。",
+      source: "agent",
+    });
+    board.write({
+      tag: "设计.开场白#gate",
+      content: "@玩家停在闸机前。",
+      source: "agent",
+    });
+    board.write({
+      tag: "设计.主角设定#dorm",
+      content: JSON.stringify({
+        正文: { 名字: "李宗", 背景: "男大学生", 特殊设定: { 身份: "无", 金手指: "无", 其它: "无" } },
+      }),
+      source: "agent",
+    });
+    board.write({
+      tag: "设计.主角设定#gate",
+      content: JSON.stringify({
+        正文: { 名字: "阿泽", 背景: "社畜", 特殊设定: { 身份: "无", 金手指: "无", 其它: "无" } },
+      }),
+      source: "agent",
+    });
+    const view = buildPlayAuxView(board, { [SLOT_OPENING_SELECTED_INDEX]: 0 });
+    expect(view.openings).toHaveLength(2);
+    expect(view.openings.map((o) => o.slot).sort()).toEqual(["dorm", "gate"]);
+    const dorm = view.openings.find((o) => o.slot === "dorm");
+    const gate = view.openings.find((o) => o.slot === "gate");
+    expect(dorm?.persona?.name).toBe("李宗");
+    expect(gate?.persona?.name).toBe("阿泽");
+  });
 });

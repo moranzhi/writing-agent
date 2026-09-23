@@ -36,7 +36,7 @@ import { toActiveSkillSnapshot } from "../skills/snapshot.js";
 import { runWorkerSkill } from "../worker/executor.js";
 import { resolveWorkerId } from "../worker/resolve-id.js";
 import { resolveWorkerLlmProvider } from "../skills/worker-llm.js";
-import { overlayPlayPersona } from "../persona/protagonist-bind.js";
+import { ensureProtagonistFromPersona, overlayPlayPersona } from "../persona/protagonist-bind.js";
 import {
   DIALOGUE_HISTORY_TAG,
   appendDialogueHistoryTurn,
@@ -1991,6 +1991,7 @@ export class PhaseRuntime {
         serializeOpeningPersona(payload.persona),
         "opening-setup",
       );
+      ensureProtagonistFromPersona(this.blackboard, payload.persona);
     }
 
     if (payload?.variables.length) {
@@ -2045,6 +2046,7 @@ export class PhaseRuntime {
   /** 收口后若还没有运行规格，用草稿或默认槽位补一份，才能进游玩 */
   private ensurePlaySpecReady(): void {
     // 对话落盘：落档/开玩时自动挂载产物；种变量初值；按映射重投影
+    // 偏好/文风改由节点产物（设计.用户需求 / 设计.叙事指南*）挂载，不再全量自动摊库
     if (this.isDictateIntakeMode()) {
       const bound = applyDictatePlayBind(this.blackboard);
       if (bound.boundTags.length) {

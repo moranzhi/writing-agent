@@ -153,9 +153,11 @@ export function resolveRepeatableInsertTag(params: {
     .filter((t) => t && dictateProductFamily(t) === family);
 
   if (!slot) {
-    if (siblings.length > 0 && raw === family) {
+    // 允许覆盖基名自身；若已有其它 #槽位，禁止再用裸基名（须写明 #id）
+    const otherSiblings = siblings.filter((t) => t !== family);
+    if (otherSiblings.length > 0 && raw === family) {
       return {
-        error: `「${family}」是可增殖产物，追加请用「${family}#唯一id」（生成规则用 rule_id，具体实例用 batch_id/姓名），不要覆盖基 tag。改某一条则 insert 同一完整 tag。`,
+        error: `「${family}」是可增殖产物，追加请用「${family}#唯一id」（生成规则用 rule_id，具体实例用 batch_id/姓名，开场白/主角设定用场景短码），不要覆盖基 tag。改某一条则 insert 同一完整 tag。`,
       };
     }
     return { tag: family };

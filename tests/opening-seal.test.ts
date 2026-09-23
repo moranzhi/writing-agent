@@ -175,6 +175,24 @@ describe("opening-seal", () => {
     expect(dotted.text).toBe("门外有人喊 @玩家。");
   });
 
+  it("strips bare 用户角色 meta lines without YAML fence", () => {
+    const bare = splitOpeningDocument(`用户角色.名字: 李宗
+用户角色.简介: 18cm 男大学生，家境贫穷
+……@玩家推开宿舍门。
+`);
+    expect(bare.persona).toEqual({
+      name: "李宗",
+      description: "18cm 男大学生，家境贫穷",
+    });
+    expect(bare.text).toBe("……@玩家推开宿舍门。");
+
+    const onlyMeta = splitOpeningDocument(`用户角色.名字: 李宗
+用户角色.简介: 男大学生
+`);
+    expect(onlyMeta.persona?.name).toBe("李宗");
+    expect(onlyMeta.text).toBe("");
+  });
+
   it("builds table rows from opening variables", () => {
     const payload = parseOpeningSealPayload(fragment, 0);
     const doc = openingVariablesToTableDoc(payload!.variables);

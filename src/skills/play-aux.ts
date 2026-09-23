@@ -7,7 +7,16 @@ import {
   parseTableDoc,
 } from "../blackboard/table-cells.js";
 import {
+  dictateProductFamily,
+  dictateProductSlot,
+} from "../dictate/repeatable-tags.js";
+import {
+  DICTATE_ORDER_META_KEY,
+  effectiveDictateOrder,
+} from "../dictate/types.js";
+import {
   OPENING_PERSONA_CHOICE_TAG,
+  OPENING_PRODUCT_FAMILY,
   OPENING_SETUP_ARTIFACT_TAG,
   SLOT_OPENING_SELECTED_INDEX,
   parseOpeningSealPayload,
@@ -15,7 +24,10 @@ import {
   type OpeningUserPersona,
 } from "./opening-seal.js";
 import { CURRENT_VARS_TAG } from "./variable-catalog.js";
-import { readSessionProtagonist } from "../persona/protagonist-bind.js";
+import {
+  personaBoundToOpening,
+  readSessionProtagonist,
+} from "../persona/protagonist-bind.js";
 import { presentReadablePlain } from "./present-packet.js";
 
 export type PlayAuxTableRow = {
@@ -29,6 +41,9 @@ export type PlayAuxTableRow = {
 
 export type PlayAuxOpening = {
   index: number;
+  /** 产物 tag：设计.开场白 或 设计.开场白#槽位；opening-setup 候选为假想 tag */
+  tag: string;
+  slot: string;
   text: string;
   persona: OpeningUserPersona | null;
 };
@@ -51,7 +66,8 @@ function selectedOpeningIndex(slots: Record<string, unknown> | undefined): numbe
   return 0;
 }
 
-function collectOpenings(board: Blackboard): PlayAuxOpening[] {
+/** 黑板上全部可选用开场（工序候选优先；否则对话落盘 设计.开场白[#槽]） */
+export function collectOpenings(board: Blackboard): PlayAuxOpening[] {
   const payload = parseOpeningSealPayload(
     board.getContentByTag(OPENING_SETUP_ARTIFACT_TAG),
     0,
@@ -62,18 +78,50 @@ function collectOpenings(board: Blackboard): PlayAuxOpening[] {
         board.getContentByTag(OPENING_SETUP_ARTIFACT_TAG),
         index,
       );
+      const tag = `${OPENING_SETUP_ARTIFACT_TAG}#${index + 1}`;
       return {
         index,
+        tag,
+        slot: String(index + 1),
         text: presentReadablePlain(text) || text,
         persona: one?.persona ?? payload.persona,
       };
     });
   }
-  const split = splitOpeningDocument(board.getContentByTag("设计.开场白"));
-  if (split.text) {
-    return [{ index: 0, text: split.text, persona: split.persona }];
+
+  const rows: Array<{
+    tag: string;
+    content: string;
+    order: number;
+  }> = [];
+  for (const e of board.listTagIndex()) {
+    if (dictateProductFamily(e.tag) !== OPENING_PRODUCT_FAMILY) continue;
+    const item = board.getLatestByTag(e.tag);
+    const content = item?.content?.trim() ?? "";
+    if (!content) continue;
+    const rawOrder = item?.metadata?.[DICTATE_ORDER_META_KEY];
+    const order =
+      typeof rawOrder === "number" && Number.isFinite(rawOrder)
+        ? rawOrder
+        : effectiveDictateOrder({ tag: e.tag });
+    rows.push({ tag: e.tag, content, order });
   }
-  return [];
+  rows.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    return a.tag.localeCompare(b.tag, "zh");
+  });
+
+  return rows.map((row, index) => {
+    const split = splitOpeningDocument(row.content);
+    const text = split.text.trim() || row.content;
+    return {
+      index,
+      tag: row.tag,
+      slot: dictateProductSlot(row.tag),
+      text: presentReadablePlain(text) || text,
+      persona: personaBoundToOpening(board, row.tag, row.content),
+    };
+  });
 }
 
 export function buildPlayAuxView(
@@ -100,6 +148,7 @@ export function buildPlayAuxView(
   const selectedOpeningIndexClamped = openings.length
     ? Math.min(idx, openings.length - 1)
     : 0;
+  const picked = openings[selectedOpeningIndexClamped];
   const sealed = readSessionProtagonist(board);
   const choiceRaw = board.getContentByTag(OPENING_PERSONA_CHOICE_TAG)?.trim();
   const openingPersonaChoice =
@@ -111,7 +160,7 @@ export function buildPlayAuxView(
     selectedOpeningIndex: selectedOpeningIndexClamped,
     openingPersona: sealed
       ? { name: sealed.name, description: sealed.description }
-      : openings[selectedOpeningIndexClamped]?.persona ?? null,
+      : picked?.persona ?? null,
     openingPersonaChoice,
   };
 }

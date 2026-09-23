@@ -19,6 +19,8 @@ import {
 } from "./present-packet.js";
 
 export const OPENING_SETUP_ARTIFACT_TAG = "设计.开场白与开场变量";
+/** 对话落盘开场正文族（可 设计.开场白#槽位 增殖） */
+export const OPENING_PRODUCT_FAMILY = "设计.开场白";
 export const OPENING_OUTPUT_TAG = "输出.开场白";
 export const OPENING_INITIAL_VARS_TAG = "运行.初始变量";
 export const OPENING_CURRENT_VARS_TAG = "变量.当前";
@@ -222,20 +224,75 @@ export function parseUserPersonaField(raw: unknown): OpeningUserPersona | null {
   return { name, description };
 }
 
+/** 去掉文首用户角色 meta 行（含无 --- 篱笆的旧稿），避免 meta 进开场正文。 */
+export function stripLeadingPersonaMeta(raw: string): string {
+  const lines = raw.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length && !lines[i]!.trim()) i++;
+  let saw = false;
+  let inUserRoleBlock = false;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (saw) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    if (/^---+$/.test(trimmed) && saw) {
+      i++;
+      break;
+    }
+    if (/^用户角色\s*:\s*$/.test(trimmed)) {
+      saw = true;
+      inUserRoleBlock = true;
+      i++;
+      continue;
+    }
+    if (
+      inUserRoleBlock &&
+      /^\s+(?:名字|简介|name|description|人设|描述)\s*[：:]/.test(line)
+    ) {
+      i++;
+      continue;
+    }
+    inUserRoleBlock = false;
+    if (/^(?:用户角色\.)?(?:名字|简介)[：:]/.test(trimmed)) {
+      saw = true;
+      i++;
+      continue;
+    }
+    break;
+  }
+  return lines.slice(i).join("\n").trim();
+}
+
 function splitYamlFrontmatter(raw: string): {
   text: string;
   persona: OpeningUserPersona | null;
 } {
   const text = raw.trim();
   const fence = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!fence) return { text, persona: parseOpeningUserPersona(text) };
+  if (!fence) {
+    const persona = parseOpeningUserPersona(text);
+    if (!persona) return { text, persona: null };
+    const stripped = stripLeadingPersonaMeta(text);
+    // 能认出文首 meta 才剥；正文里偶然出现「名字：」不剥
+    if (stripped !== text.trim()) return { text: stripped, persona };
+    if (/^(?:用户角色\.|用户角色\s*:)/m.test(text)) {
+      return { text: stripped, persona };
+    }
+    return { text, persona };
+  }
   const persona =
     parseUserPersonaField(parseSimpleYamlMap(fence[1] ?? "")) ||
     parseOpeningUserPersona(fence[1] ?? "");
   return { text: (fence[2] ?? "").trim(), persona };
 }
 
-/** 开场正文前的 YAML 式 meta：用户角色名字+简介，其余当正文。 */
+/** 开场正文与用户角色 meta 分离；meta 不应进「系统 开场白」。 */
 export function splitOpeningDocument(raw: string | null | undefined): {
   text: string;
   persona: OpeningUserPersona | null;

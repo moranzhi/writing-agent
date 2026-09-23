@@ -18,6 +18,8 @@ describe("dictate play-bind", () => {
     expect(isDictateStyleBindTag("设计.模仿要点")).toBe(true);
     expect(isDictateStyleBindTag("设计.叙事指南")).toBe(true);
     expect(isDictateStyleBindTag("设计.故事推进")).toBe(true);
+    expect(isDictateStyleBindTag("设计.用户需求")).toBe(true);
+    expect(isDictateStyleBindTag("设计.用户约束")).toBe(true);
     expect(isDictateStyleBindTag("用户.需求")).toBe(false);
   });
 

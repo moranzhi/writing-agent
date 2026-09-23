@@ -259,6 +259,36 @@ describe("dictate context", () => {
     });
     expect("error" in overwriteBare).toBe(true);
 
+    const openingFamilies = new Set(["设计.开场白", "设计.主角设定"]);
+    const firstOpen = resolveRepeatableInsertTag({
+      tag: "设计.开场白",
+      content: "@玩家推开门。",
+      existingTags: [],
+      repeatableFamilies: openingFamilies,
+    });
+    expect("tag" in firstOpen && firstOpen.tag).toBe("设计.开场白");
+    const overwriteFirst = resolveRepeatableInsertTag({
+      tag: "设计.开场白",
+      content: "@玩家改写第一幕。",
+      existingTags: ["设计.开场白"],
+      repeatableFamilies: openingFamilies,
+    });
+    expect("tag" in overwriteFirst && overwriteFirst.tag).toBe("设计.开场白");
+    const secondOpen = resolveRepeatableInsertTag({
+      tag: "设计.开场白#gate",
+      content: "@玩家在闸机前。",
+      existingTags: ["设计.开场白"],
+      repeatableFamilies: openingFamilies,
+    });
+    expect("tag" in secondOpen && secondOpen.tag).toBe("设计.开场白#gate");
+    const bareOpenConflict = resolveRepeatableInsertTag({
+      tag: "设计.开场白",
+      content: "又写一条",
+      existingTags: ["设计.开场白", "设计.开场白#gate"],
+      repeatableFamilies: openingFamilies,
+    });
+    expect("error" in bareOpenConflict).toBe(true);
+
     const catalog = await loadModuleCatalog("dialogue/world-simulator");
     const index = await buildDictateInsertFeedbackIndex({
       catalog: catalog!,

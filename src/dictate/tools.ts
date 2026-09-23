@@ -16,12 +16,12 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
           position: {
             type: "string",
             description:
-              "产物 tag，须以「用户.」或「设计.」开头。例：用户.需求、设计.正文组成、设计.开场白；可增殖例：设计.生成规则#rule-id、设计.具体实例#batch-id。勿用本工具写变量目录/映射。",
+              "产物 tag，须以「用户.」或「设计.」开头。例：用户.需求、设计.正文组成、设计.开场白、设计.开场白#dorm；可增殖例：设计.生成规则#rule-id、设计.具体实例#batch-id、设计.主角设定#dorm。勿用本工具写变量目录/映射。",
           },
           content: {
             type: "string",
             description:
-              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白=meta + 正文（有正文组成时正文为 present.v1 JSON；否则 Markdown），必须含字面 @玩家（用户角色名位，禁止写死姓名）",
+              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白[#短码]=叙事正文（有正文组成时为 present.v1 JSON；否则 Markdown），必须含字面 @玩家，禁止写入用户角色.名字/简介；设计.主角设定[#同短码]=名字/背景/特殊设定 JSON，与开场同短码即绑定该开局",
           },
           order: {
             type: "number",
