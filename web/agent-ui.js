@@ -174,15 +174,21 @@ function canEditMessage(msg) {
   return msg.role === "user";
 }
 
+/** 是否显示重 roll（↻ / 末页 ›）。已有多版时即使服务端 canRefresh=false 也允许再点。 */
 function canRefreshMessage(msg) {
   if (!msg?.id) return false;
-  if (typeof msg.canRefresh === "boolean") return msg.canRefresh;
   if (msg.role === "user") return false;
   const kind = msg.kind ?? "system_info";
-  return kind === "worker_questions" || kind === "worker_output";
+  const kindOk = kind === "worker_questions" || kind === "worker_output";
+  if (!kindOk) return false;
+  const total = Math.max(1, Number(msg.branchTotal) || 1);
+  // 已经 swipe / 重 roll 出过多版 → 再点应仍可生成
+  if (total > 1) return true;
+  if (typeof msg.canRefresh === "boolean") return msg.canRefresh;
+  return true;
 }
 
-/** ‹ n/total › 仅在有多版时出现；↻ 仅在这条真能重跑时出现 */
+/** ‹ n/total › 多版切换；末页 › 与 ↻ 均可重 roll；单版只显示 ↻ */
 function renderVariantNavHtml(msg) {
   if (!msg?.id) return "";
   const total = Math.max(1, Number(msg.branchTotal) || 1);
@@ -191,15 +197,21 @@ function renderVariantNavHtml(msg) {
   const showPager = total > 1;
   if (!showPager && !refreshable) return "";
   const id = esc(msg.id);
+  const atLast = index >= total;
+  // 末页 ›：可重 roll 时改为 refresh；不可则禁用
+  const nextAction = atLast && refreshable ? "refresh" : "variant-next";
+  const nextDisabled = atLast && !refreshable;
+  const nextTitle = atLast && refreshable ? "已是最新版，再点重出一版" : "下一版";
+  const nextAria = atLast && refreshable ? "重出一版" : "下一版";
   const pager = showPager
     ? `<button type="button" class="msg-action" data-msg-action="variant-prev" data-msg-id="${id}"${index <= 1 ? " disabled" : ""} aria-label="上一版">‹</button>
     <span class="msg-variant-count">${index}/${total}</span>
-    <button type="button" class="msg-action" data-msg-action="variant-next" data-msg-id="${id}"${index >= total ? " disabled" : ""} aria-label="下一版">›</button>`
+    <button type="button" class="msg-action${atLast && refreshable ? " msg-action-primary" : ""}" data-msg-action="${nextAction}" data-msg-id="${id}" data-variant-at-last="${atLast ? "1" : "0"}"${nextDisabled ? " disabled" : ""} aria-label="${nextAria}" title="${esc(nextTitle)}">›</button>`
     : "";
   const refresh = refreshable
     ? `<button type="button" class="msg-action msg-action-primary" data-msg-action="refresh" data-msg-id="${id}" title="重出一版（新版本）">↻</button>`
     : "";
-  return `<span class="msg-variant-nav" title="${showPager ? "切换版本；在此版本上继续输入" : "重出一版"}">
+  return `<span class="msg-variant-nav" title="${showPager ? "‹ › 切换版本；最新版 › 或 ↻ 重出一版" : "重出一版"}">
     ${pager}
     ${refresh}
   </span>`;
@@ -228,23 +240,50 @@ const flowMenuState = {
   handlers: null,
 };
 
-function placeMenu(menu, x, y) {
+/** html { zoom } 时：clientX/Y 是视口像素，fixed 的 left/top 是未缩放布局坐标 */
+function readDocumentCssZoom() {
+  const raw = getComputedStyle(document.documentElement).zoom;
+  if (!raw || raw === "normal") return 1;
+  const z = Number.parseFloat(raw);
+  return Number.isFinite(z) && z > 0 ? z : 1;
+}
+
+/**
+ * 把菜单放到光标旁（视口坐标 clientX/Y）。
+ * 自动消化 html zoom，避免菜单相对光标漂移。
+ */
+export function placeMenu(menu, clientX, clientY) {
+  if (!menu) return;
+  const zoom = readDocumentCssZoom();
+  const pad = 4;
+
   menu.hidden = false;
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
-  }
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
-  }
+  menu.style.position = "fixed";
+  menu.style.display = "block";
+  menu.style.zIndex = "1200";
+  menu.style.right = "auto";
+  menu.style.bottom = "auto";
+  menu.style.margin = "0";
+  // 先放到 0,0 量真实视觉尺寸（getBoundingClientRect 已含 zoom）
+  menu.style.left = "0";
+  menu.style.top = "0";
+  const { width: w, height: h } = menu.getBoundingClientRect();
+
+  // 默认锚在光标处；溢出时只做最小贴边，避免整块翻到光标另一侧（右侧栏会像「差一截」）
+  let visualLeft = Math.min(clientX, window.innerWidth - w - pad);
+  let visualTop = Math.min(clientY, window.innerHeight - h - pad);
+  if (visualLeft < pad) visualLeft = pad;
+  if (visualTop < pad) visualTop = pad;
+
+  menu.style.left = `${visualLeft / zoom}px`;
+  menu.style.top = `${visualTop / zoom}px`;
 }
 
 function showFlowNodeMenu(node, x, y, handlers) {
   const menu = document.getElementById("flow-node-menu");
   if (!menu || !node) return;
   hideMsgMenu();
+  hideDictateProductMenu();
   const stepId = node.getAttribute("data-flow-done");
   if (!stepId) return;
   flowMenuState.stepId = stepId;
@@ -330,19 +369,27 @@ const MSG_PEEK_SIZE_KEY = "wa.msg-peek.size";
 const MSG_PEEK_KEEP_VISIBLE = 48;
 /** 标题栏必须可见的顶边距（px）——保证可拖 */
 const MSG_PEEK_TOP_MARGIN = 8;
+/** 贴边时与视口边缘的最小间距（px） */
+const MSG_PEEK_VIEW_PAD = 8;
 const MSG_PEEK_MIN_W = 280;
 const MSG_PEEK_MIN_H = 180;
+
+const MSG_PEEK_CORNER_HANDLES = new Set(["nw", "ne", "sw", "se"]);
 
 const msgPeekState = {
   wired: false,
   dragging: false,
   resizing: false,
+  resizeHandle: "se",
   offsetX: 0,
   offsetY: 0,
   resizeStartX: 0,
   resizeStartY: 0,
   resizeStartW: 0,
   resizeStartH: 0,
+  resizeStartLeft: 0,
+  resizeStartTop: 0,
+  resizeAspect: 1,
   lastLeft: null,
   lastTop: null,
 };
@@ -386,16 +433,24 @@ function saveMsgPeekSize(width, height) {
   }
 }
 
-function defaultMsgPeekSize() {
+function msgPeekViewportMaxSize() {
   return {
-    width: Math.min(680, Math.max(MSG_PEEK_MIN_W, window.innerWidth * 0.92)),
-    height: Math.min(760, Math.max(MSG_PEEK_MIN_H, window.innerHeight * 0.82)),
+    maxW: Math.max(MSG_PEEK_MIN_W, window.innerWidth - MSG_PEEK_VIEW_PAD * 2),
+    maxH: Math.max(MSG_PEEK_MIN_H, window.innerHeight - MSG_PEEK_TOP_MARGIN - MSG_PEEK_VIEW_PAD),
   };
 }
 
+function defaultMsgPeekSize() {
+  const { maxW, maxH } = msgPeekViewportMaxSize();
+  return {
+    width: Math.min(680, Math.max(MSG_PEEK_MIN_W, Math.min(maxW, window.innerWidth * 0.92))),
+    height: Math.min(760, Math.max(MSG_PEEK_MIN_H, Math.min(maxH, window.innerHeight * 0.82))),
+  };
+}
+
+/** 全局上下限：不小于最小尺寸，不大于当前视口可容纳尺寸 */
 function clampMsgPeekSize(width, height) {
-  const maxW = Math.max(MSG_PEEK_MIN_W, window.innerWidth - 16);
-  const maxH = Math.max(MSG_PEEK_MIN_H, window.innerHeight - MSG_PEEK_TOP_MARGIN * 2);
+  const { maxW, maxH } = msgPeekViewportMaxSize();
   return {
     width: Math.min(Math.max(MSG_PEEK_MIN_W, width), maxW),
     height: Math.min(Math.max(MSG_PEEK_MIN_H, height), maxH),
@@ -441,6 +496,89 @@ function isMsgPeekFullyOffscreen(panel) {
   );
 }
 
+/**
+ * 按手柄计算下一帧尺寸与位置。
+ * - 左右边：只改宽，高度不变（内容区滚动）
+ * - 上下边：只改高，宽度不变
+ * - 四角：保持宽高比同时缩放
+ * 尺寸上限贴紧视口，避免直接撑出屏幕。
+ */
+function computeMsgPeekResize(handle, start, dw, dh) {
+  const fromLeft = handle === "w" || handle === "nw" || handle === "sw";
+  const fromTop = handle === "n" || handle === "nw" || handle === "ne";
+  const edgeW = handle === "e" || handle === "w";
+  const edgeH = handle === "n" || handle === "s";
+  const aspect = MSG_PEEK_CORNER_HANDLES.has(handle);
+
+  const rightEdge = start.left + start.w;
+  const bottomEdge = start.top + start.h;
+  const minLeft = MSG_PEEK_VIEW_PAD;
+  const maxRight = window.innerWidth - MSG_PEEK_VIEW_PAD;
+  const minTop = MSG_PEEK_TOP_MARGIN;
+  const maxBottom = window.innerHeight - MSG_PEEK_VIEW_PAD;
+  const ratio = start.aspect > 0 ? start.aspect : start.w / Math.max(1, start.h);
+
+  const maxW = fromLeft
+    ? Math.max(MSG_PEEK_MIN_W, rightEdge - minLeft)
+    : Math.max(MSG_PEEK_MIN_W, maxRight - start.left);
+  const maxH = fromTop
+    ? Math.max(MSG_PEEK_MIN_H, bottomEdge - minTop)
+    : Math.max(MSG_PEEK_MIN_H, maxBottom - start.top);
+
+  let nextW = start.w;
+  let nextH = start.h;
+
+  if (edgeW) {
+    nextW = Math.min(Math.max(MSG_PEEK_MIN_W, start.w + (fromLeft ? -dw : dw)), maxW);
+    nextH = start.h; // 只改宽，高度保持，溢出由内容区滚动消化
+  } else if (edgeH) {
+    nextW = start.w; // 只改高，宽度保持
+    nextH = Math.min(Math.max(MSG_PEEK_MIN_H, start.h + (fromTop ? -dh : dh)), maxH);
+  } else if (aspect) {
+    const rawW = start.w + (fromLeft ? -dw : dw);
+    const rawH = start.h + (fromTop ? -dh : dh);
+    const useWidth =
+      Math.abs(rawW - start.w) / Math.max(1, start.w) >=
+      Math.abs(rawH - start.h) / Math.max(1, start.h);
+    if (useWidth) {
+      nextW = rawW;
+      nextH = nextW / ratio;
+    } else {
+      nextH = rawH;
+      nextW = nextH * ratio;
+    }
+    const upScale = Math.min(maxW / Math.max(1, nextW), maxH / Math.max(1, nextH), 1);
+    nextW *= upScale;
+    nextH *= upScale;
+    if (nextW < MSG_PEEK_MIN_W || nextH < MSG_PEEK_MIN_H) {
+      const downScale = Math.max(
+        MSG_PEEK_MIN_W / Math.max(1, nextW),
+        MSG_PEEK_MIN_H / Math.max(1, nextH),
+      );
+      nextW *= downScale;
+      nextH *= downScale;
+    }
+    nextW = Math.min(Math.max(MSG_PEEK_MIN_W, nextW), maxW);
+    nextH = nextW / ratio;
+    if (nextH > maxH) {
+      nextH = maxH;
+      nextW = Math.min(nextH * ratio, maxW);
+      nextH = nextW / ratio;
+    }
+    if (nextH < MSG_PEEK_MIN_H) {
+      nextH = MSG_PEEK_MIN_H;
+      nextW = Math.min(Math.max(MSG_PEEK_MIN_W, nextH * ratio), maxW);
+    }
+  }
+
+  return {
+    width: nextW,
+    height: nextH,
+    left: fromLeft ? rightEdge - nextW : start.left,
+    top: fromTop ? bottomEdge - nextH : start.top,
+  };
+}
+
 /** 每次打开：记忆尺寸 + 屏幕居中（标题栏保证可见） */
 function placeMsgPeek(panel) {
   const size = applyMsgPeekSize(panel);
@@ -480,21 +618,28 @@ function wireMsgPeekPanel() {
     e.preventDefault();
   });
 
-  const resizeHandle = panel.querySelector("[data-peek-resize]");
-  resizeHandle?.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
-    if (msgPeekState.dragging) return;
-    const rect = panel.getBoundingClientRect();
-    msgPeekState.resizing = true;
-    msgPeekState.resizeStartX = e.clientX;
-    msgPeekState.resizeStartY = e.clientY;
-    msgPeekState.resizeStartW = rect.width;
-    msgPeekState.resizeStartH = rect.height;
-    panel.classList.add("is-resizing");
-    resizeHandle.setPointerCapture?.(e.pointerId);
-    e.preventDefault();
-    e.stopPropagation();
-  });
+  const resizeHandles = panel.querySelectorAll("[data-peek-resize]");
+  for (const resizeHandle of resizeHandles) {
+    resizeHandle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      if (msgPeekState.dragging) return;
+      const handle = resizeHandle.getAttribute("data-peek-resize") || "se";
+      const rect = panel.getBoundingClientRect();
+      msgPeekState.resizing = true;
+      msgPeekState.resizeHandle = handle;
+      msgPeekState.resizeStartX = e.clientX;
+      msgPeekState.resizeStartY = e.clientY;
+      msgPeekState.resizeStartW = rect.width;
+      msgPeekState.resizeStartH = rect.height;
+      msgPeekState.resizeStartLeft = rect.left;
+      msgPeekState.resizeStartTop = rect.top;
+      msgPeekState.resizeAspect = rect.width / Math.max(1, rect.height);
+      panel.classList.add("is-resizing");
+      resizeHandle.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  }
 
   const onMove = (e) => {
     if (msgPeekState.dragging) {
@@ -510,14 +655,24 @@ function wireMsgPeekPanel() {
       return;
     }
     if (msgPeekState.resizing) {
-      const dw = e.clientX - msgPeekState.resizeStartX;
-      const dh = e.clientY - msgPeekState.resizeStartY;
-      const size = clampMsgPeekSize(
-        msgPeekState.resizeStartW + dw,
-        msgPeekState.resizeStartH + dh,
+      const frame = computeMsgPeekResize(
+        msgPeekState.resizeHandle,
+        {
+          w: msgPeekState.resizeStartW,
+          h: msgPeekState.resizeStartH,
+          left: msgPeekState.resizeStartLeft,
+          top: msgPeekState.resizeStartTop,
+          aspect: msgPeekState.resizeAspect,
+        },
+        e.clientX - msgPeekState.resizeStartX,
+        e.clientY - msgPeekState.resizeStartY,
       );
-      panel.style.width = `${size.width}px`;
-      panel.style.height = `${size.height}px`;
+      panel.style.width = `${frame.width}px`;
+      panel.style.height = `${frame.height}px`;
+      panel.style.left = `${frame.left}px`;
+      panel.style.top = `${frame.top}px`;
+      msgPeekState.lastLeft = frame.left;
+      msgPeekState.lastTop = frame.top;
     }
   };
   const onUp = (e) => {
@@ -533,7 +688,9 @@ function wireMsgPeekPanel() {
     if (msgPeekState.resizing) {
       msgPeekState.resizing = false;
       panel.classList.remove("is-resizing");
-      resizeHandle?.releasePointerCapture?.(e.pointerId);
+      for (const handle of resizeHandles) {
+        handle.releasePointerCapture?.(e.pointerId);
+      }
       if (!panel.hidden) {
         const rect = panel.getBoundingClientRect();
         const size = clampMsgPeekSize(rect.width, rect.height);
@@ -612,6 +769,8 @@ function readDictateProductContent(card) {
 const dictateProductMenuState = {
   card: null,
   wired: false,
+  openedAt: 0,
+  docWired: false,
 };
 
 function hideDictateProductMenu() {
@@ -620,22 +779,47 @@ function hideDictateProductMenu() {
   dictateProductMenuState.card = null;
 }
 
+/** 右键落在行间/内边距时，按纵向距离就近命中产物行（slack 放宽命中） */
+function nearestDictateProduct(root, clientX, clientY, slack = 28) {
+  if (!root) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const card of root.querySelectorAll("[data-dictate-product]")) {
+    const r = card.getBoundingClientRect();
+    const inX = clientX >= r.left - slack && clientX <= r.right + slack;
+    const inY = clientY >= r.top - slack && clientY <= r.bottom + slack;
+    if (!inX || !inY) continue;
+    const dx = clientX < r.left ? r.left - clientX : clientX > r.right ? clientX - r.right : 0;
+    const dy = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0;
+    const dist = dx + dy;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = card;
+    }
+  }
+  return best;
+}
+
+function resolveDictateProductCard(clientX, clientY, fallbackRoot) {
+  const hit = document.elementFromPoint(clientX, clientY);
+  let card =
+    hit instanceof Element ? hit.closest("[data-dictate-product]") : null;
+  if (card) return card;
+  const root =
+    fallbackRoot ||
+    document.getElementById("coord-drawer-body") ||
+    document.querySelector(".dictate-products-list");
+  return nearestDictateProduct(root, clientX, clientY);
+}
+
 function showDictateProductMenu(card, x, y) {
   const menu = document.getElementById("dictate-product-menu");
   if (!menu || !card) return;
   hideMsgMenu();
-  hideDictateProductMenu();
+  hideFlowNodeMenu();
   dictateProductMenuState.card = card;
-  menu.hidden = false;
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
-  }
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
-  }
+  dictateProductMenuState.openedAt = Date.now();
+  placeMenu(menu, x, y);
 }
 
 function wireDictateProductMenu() {
@@ -673,23 +857,39 @@ function wireDictateProductMenu() {
   });
 }
 
-function wireDictateProductContextMenu(root) {
-  if (!root || root.dataset.dictateProductMenuWired) return;
-  root.dataset.dictateProductMenuWired = "1";
+/** 文档级捕获：整行任意位置右键都能打开（不依赖 summary 命中） */
+function wireDictateProductContextMenu(_root) {
   wireDictateProductMenu();
-  root.addEventListener("contextmenu", (e) => {
-    const card = e.target.closest(".dictate-product");
-    if (!card || !root.contains(card)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    showDictateProductMenu(card, e.clientX, e.clientY);
-  });
+  if (dictateProductMenuState.docWired) return;
+  dictateProductMenuState.docWired = true;
+  document.addEventListener(
+    "contextmenu",
+    (e) => {
+      const inRail =
+        e.target instanceof Element &&
+        (e.target.closest("#coord-drawer-body") ||
+          e.target.closest(".dictate-products-list") ||
+          e.target.closest("[data-dictate-product]"));
+      if (!inRail) return;
+      const card = resolveDictateProductCard(
+        e.clientX,
+        e.clientY,
+        document.getElementById("coord-drawer-body"),
+      );
+      if (!card) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showDictateProductMenu(card, e.clientX, e.clientY);
+    },
+    true,
+  );
 }
 
 function showMsgMenu(card, x, y) {
   const menu = document.getElementById("msg-action-menu");
   if (!menu || !card) return;
   hideFlowNodeMenu();
+  hideDictateProductMenu();
   const pack = card.closest(".coord-pack");
   const rollbackHost = pack || card;
   // 上下文按单次请求（这条消息）区分，不能回落到整包里的另一条
@@ -716,22 +916,13 @@ function showMsgMenu(card, x, y) {
   }
   if (ctxBtn) ctxBtn.toggleAttribute("hidden", !hasContext);
   if (compareBtn) compareBtn.toggleAttribute("hidden", !hasContext);
-  menu.hidden = false;
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   msgMenuState.messageId = card.dataset.messageId ?? null;
   msgMenuState.contextMessageId = contextTarget?.dataset.messageId ?? card.dataset.messageId ?? null;
   msgMenuState.rollbackMessageId = rollbackMessageId;
   msgMenuState.rollbackMode = rollbackMode;
   msgMenuState.restoreDraft = rollbackHost.dataset.restoreDraft ?? "";
   msgMenuState.card = card;
-  const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
-  }
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
-  }
+  placeMenu(menu, x, y);
 }
 
 function wireMsgActionMenu(handlers) {
@@ -804,13 +995,22 @@ function wireMessageContextMenu(feed, handlers) {
   if (!feed || feed.dataset.contextWired) return;
   feed.dataset.contextWired = "1";
   wireMsgActionMenu(handlers);
-  feed.addEventListener("contextmenu", (e) => {
-    const bubble = e.target.closest(".msg-bubble, .workspace-review, .coord-line, .coord-pack");
-    const card = e.target.closest("[data-message-id]");
-    if (!bubble || !card || card.classList.contains("msg-pending")) return;
-    e.preventDefault();
-    showMsgMenu(card, e.clientX, e.clientY);
-  });
+  // 与右侧产物菜单一致：捕获阶段 + 光标坐标走 placeMenu（含 html zoom）
+  feed.addEventListener(
+    "contextmenu",
+    (e) => {
+      const bubble = e.target.closest(
+        ".msg-bubble, .workspace-review, .coord-line, .coord-pack",
+      );
+      const card = e.target.closest("[data-message-id]");
+      if (!bubble || !card || card.classList.contains("msg-pending")) return;
+      if (!feed.contains(card)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showMsgMenu(card, e.clientX, e.clientY);
+    },
+    true,
+  );
   feed.addEventListener("click", (e) => {
     const contextTrigger = e.target.closest("[data-context-trigger]");
     const contextCard = contextTrigger?.closest("[data-message-id]");
@@ -950,6 +1150,11 @@ function wireMessageFeedActions(feed, handlers) {
     }
 
     if (action === "variant-next") {
+      // 兜底：末页仍走到 next 时改走重 roll
+      if (btn.getAttribute("data-variant-at-last") === "1") {
+        h.onRefreshMessage?.(messageId);
+        return;
+      }
       h.onSwitchVariant?.(messageId, "next");
     }
   });
@@ -5483,27 +5688,29 @@ function renderDictateProductsList(view) {
         .replace(/^设计\./, "")
         .replace(/^用户\./, "")
         .replace(/#/g, " · ");
-      return `<details class="dictate-product dictate-product--rail" role="listitem">
-        <summary class="dictate-product-sum">
-          <span class="dictate-product-sum-top">
-            <span class="dictate-product-tag" title="${esc(tag)}">${esc(shortTag || tag || "未命名")}</span>
+      return `<div class="dictate-product dictate-product--rail" role="listitem" data-dictate-product>
+        <button type="button" class="dictate-product-sum" aria-expanded="false">
+          <span class="dictate-product-sum-inner">
+            <span class="dictate-product-sum-top">
+              <span class="dictate-product-tag" title="${esc(tag)}">${esc(shortTag || tag || "未命名")}</span>
+              ${
+                order != null
+                  ? `<span class="dictate-product-order" title="相对序">${order}</span>`
+                  : ""
+              }
+              <span class="dictate-product-chevron" aria-hidden="true"></span>
+            </span>
             ${
-              order != null
-                ? `<span class="dictate-product-order" title="相对序">${order}</span>`
-                : ""
+              preview
+                ? `<span class="dictate-product-preview">${esc(preview)}${
+                    content.length > 72 ? "…" : ""
+                  }</span>`
+                : `<span class="dictate-product-preview is-empty">（空）</span>`
             }
-            <span class="dictate-product-chevron" aria-hidden="true"></span>
           </span>
-          ${
-            preview
-              ? `<span class="dictate-product-preview">${esc(preview)}${
-                  content.length > 72 ? "…" : ""
-                }</span>`
-              : `<span class="dictate-product-preview is-empty">（空）</span>`
-          }
-        </summary>
-        <div class="dictate-product-body" data-pending="1"></div>
-      </details>`;
+        </button>
+        <div class="dictate-product-body" hidden data-pending="1"></div>
+      </div>`;
     })
     .join("")}</div>`;
 }
@@ -5519,19 +5726,33 @@ function hydrateDictateProductBody(card) {
   delete body.dataset.pending;
 }
 
+function setDictateProductOpen(card, open) {
+  if (!card) return;
+  const sum = card.querySelector(".dictate-product-sum");
+  const body = card.querySelector(".dictate-product-body");
+  card.classList.toggle("is-open", open);
+  if (sum) sum.setAttribute("aria-expanded", open ? "true" : "false");
+  if (body) body.hidden = !open;
+  if (open) hydrateDictateProductBody(card);
+}
+
 function wireDictateProductAccordion(root) {
   if (!root || root.dataset.dictateProductAccordionWired) return;
   root.dataset.dictateProductAccordionWired = "1";
-  root.addEventListener("toggle", (e) => {
-    const card = e.target;
-    if (!(card instanceof HTMLDetailsElement)) return;
-    if (!card.classList.contains("dictate-product--rail")) return;
-    if (!card.open) return;
-    hydrateDictateProductBody(card);
-    root.querySelectorAll("details.dictate-product--rail[open]").forEach((other) => {
-      if (other !== card) other.open = false;
+  root.addEventListener("click", (e) => {
+    const sum = e.target.closest(".dictate-product-sum");
+    if (!sum || !root.contains(sum)) return;
+    // 右键菜单用 pointer，这里只处理左键展开
+    if (e.button != null && e.button !== 0) return;
+    const card = sum.closest("[data-dictate-product]");
+    if (!card) return;
+    e.preventDefault();
+    const willOpen = !card.classList.contains("is-open");
+    root.querySelectorAll("[data-dictate-product].is-open").forEach((other) => {
+      if (other !== card) setDictateProductOpen(other, false);
     });
-  }, true);
+    setDictateProductOpen(card, willOpen);
+  });
 }
 
 function fillCoordRailProducts(view) {
@@ -6101,7 +6322,14 @@ document.addEventListener("keydown", (e) => {
     hideFlowNodeMenu();
   }
 });
-document.addEventListener("scroll", () => {
+document.addEventListener("scroll", (e) => {
+  // 打开菜单后短时间内忽略（避免焦点/布局引起的误关）
+  if (Date.now() - dictateProductMenuState.openedAt < 250) return;
+  // 菜单自身或菜单内滚动不关
+  const menu = document.getElementById("dictate-product-menu");
+  if (menu && !menu.hidden && e.target instanceof Node && menu.contains(e.target)) {
+    return;
+  }
   hideMsgMenu();
   hideDictateProductMenu();
   hideFlowNodeMenu();

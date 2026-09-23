@@ -20,12 +20,17 @@ import {
   OPENING_OUTPUT_TAG,
   OPENING_PERSONA_CHOICE_TAG,
   OPENING_PERSONA_TAG,
+  OPENING_PRODUCT_FAMILY,
   SLOT_OPENING_SELECTED_INDEX,
   parseOpeningSealPayload,
   readSealedOpeningPersona,
   serializeOpeningPersona,
   splitOpeningDocument,
 } from "../skills/opening-seal.js";
+import { buildPlayAuxView, collectOpenings } from "../skills/play-aux.js";
+import {
+  dictateProductFamily,
+} from "../dictate/repeatable-tags.js";
 import {
   PLAY_WORKING_SNAPSHOT_ID,
   PLAY_WORKING_SNAPSHOT_LABEL,
@@ -45,6 +50,16 @@ import {
   reloadDefaultMainAgentLlm,
   type LlmTrackingRef,
 } from "../runtime/llm-factory.js";
+import {
+  acceptPreferenceCandidate,
+  collectPreferenceCandidates,
+  formatRecentDialogueForCollect,
+} from "../preference/index.js";
+import {
+  loadAppSettings,
+  normalizeContextTraceKeepLatest,
+  normalizePreferenceCollectEveryTurns,
+} from "../config/settings.js";
 import { isAbortError, runWithAbortSignal } from "../llm/run-abort.js";
 import { getSessionTokenTotals, type MessageTokenUsage } from "../stats/token-store.js";
 import type { PersistedBookSession } from "../types/book-session.js";
@@ -78,10 +93,6 @@ import {
   sessionSkillPackId,
   skillPacksMatch,
 } from "../book/skill-id.js";
-import {
-  loadAppSettings,
-  normalizeContextTraceKeepLatest,
-} from "../config/settings.js";
 import {
   pruneContextTraces,
   type LlmContextTrace,
@@ -183,10 +194,16 @@ import {
   personaForLifecycle,
 } from "../persona/store.js";
 import {
+  DICTATE_OPENING_REPEATABLE_FAMILIES,
+  ensureProtagonistFromPersona,
+  formatPersonaDescription,
   overlayPlayPersona,
+  parseProtagonistSpec,
+  personaBoundToOpening,
+  PROTAGONIST_TAG,
+  protagonistTagForOpeningSlot,
   readSessionProtagonist,
 } from "../persona/protagonist-bind.js";
-import { buildPlayAuxView } from "../skills/play-aux.js";
 import type { TableCellPatch } from "../blackboard/table-cells.js";
 import {
   appendBranchVariant,
@@ -336,6 +353,8 @@ export type SessionView = {
   openingPersonaChoice?: "opening" | "global" | null;
   /** 游玩辅助 Tab：表格 / 开场与角色 */
   playAux?: import("../skills/play-aux.js").PlayAuxView;
+  /** 待审核偏好候选：展示时可编辑，收下 / 不要 */
+  preferenceReview?: Array<{ id: string; content: string }>;
 };
 
 export type SessionAction =
@@ -425,6 +444,10 @@ type ManagedSession = {
   runGen?: number;
   /** 本轮开始时的消息条数，取消时裁掉执行中产生的调度句 */
   runMessageCutoff?: number;
+  /** 本局游玩已完成的用户回合数（偏好采集计数；不进快照） */
+  preferencePlayTurns?: number;
+  /** 待审核的偏好候选（可编辑后收下/不要） */
+  preferenceReview?: import("../preference/collect.js").PreferenceCandidate[];
 };
 
 export class SessionManager {
@@ -822,9 +845,12 @@ export class SessionManager {
       skillName: s.runtime.getActiveSkill()?.name,
       moduleCatalog: s.moduleCatalog,
     });
-    const repeatableFamilies = (s.moduleCatalog?.modules ?? [])
-      .filter((m) => m.repeatable === true && m.artifact?.trim())
-      .map((m) => m.artifact!.trim());
+    const repeatableFamilies = [
+      ...(s.moduleCatalog?.modules ?? [])
+        .filter((m) => m.repeatable === true && m.artifact?.trim())
+        .map((m) => m.artifact!.trim()),
+      ...DICTATE_OPENING_REPEATABLE_FAMILIES,
+    ];
 
     const result = await runDictateTurn({
       llm,
@@ -837,6 +863,22 @@ export class SessionManager {
         listProducts: () => this.listDictateProducts(s),
         writeProduct: (tag, content, order) => {
           const board = s.runtime.getBlackboard();
+          let writeContent = content;
+          if (dictateProductFamily(tag) === OPENING_PRODUCT_FAMILY) {
+            const split = splitOpeningDocument(content);
+            if (split.persona) {
+              ensureProtagonistFromPersona(
+                board,
+                split.persona,
+                protagonistTagForOpeningSlot(tag),
+              );
+            }
+            // 仅有用户角色 meta、无叙事：抬到主角设定，不污染开场白
+            if (split.persona && !split.text.trim()) {
+              return;
+            }
+            writeContent = split.text.trim() || content;
+          }
           const existing = board.getLatestByTag(tag);
           const prev = existing?.metadata?.[DICTATE_ORDER_META_KEY];
           const resolved =
@@ -847,7 +889,7 @@ export class SessionManager {
                 : defaultDictateOrder(tag);
           board.write({
             tag,
-            content,
+            content: writeContent,
             source: "agent",
             metadata: {
               ...(existing?.metadata ?? {}),
@@ -1190,6 +1232,8 @@ export class SessionManager {
       s.messages = [];
     }
     s.branchState = createMessageBranchState();
+    s.preferencePlayTurns = 0;
+    s.preferenceReview = undefined;
   }
 
   /** 开玩时记下是否用这条开场自带的用户角色；须在恢复快照之后写，否则会被冲掉。 */
@@ -1207,7 +1251,7 @@ export class SessionManager {
 
   /**
    * 保证黑板上有 输出.开场白，供开玩主区展示。
-   * 优先级：设计.开场白（转述产物）> 已有 输出.开场白 > 其它产物拼装 > 非转述聊天兜底。
+   * 优先级：选中的设计.开场白[#槽] / 开场白与开场变量候选 > 已有 输出.开场白 > 其它产物拼装。
    * 切勿用 dictate_reply（常含确认/建议补充）盖过已钉的设计.开场白。
    * 返回值已展开 @ 指令（进游玩时绑定当前用户角色 / 掷骰）。
    */
@@ -1217,26 +1261,69 @@ export class SessionManager {
   ): string {
     this.sealOpeningPersonaFromBoard(s);
     const board = s.runtime.getBlackboard();
-    const fromDesign =
-      board.getContentByTag("设计.开场白")?.trim() ||
-      this.listDictateProducts(s).find((p) => p.tag === "设计.开场白")
-        ?.content?.trim() ||
-      "";
-    if (fromDesign) {
-      const body = splitOpeningDocument(fromDesign).text || fromDesign;
-      const expanded = this.expandDirectivesText(
-        body,
-        this.playDirectiveContext(s),
-      );
-      const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
-      if (existing !== expanded) {
-        board.write({
-          tag: OPENING_OUTPUT_TAG,
-          content: expanded,
-          source: "runtime",
-        });
+    const openings = collectOpenings(board);
+    const selectedRaw = s.runtime.getSession().slots[SLOT_OPENING_SELECTED_INDEX];
+    const selectedIndex =
+      typeof selectedRaw === "number"
+        ? selectedRaw
+        : typeof selectedRaw === "string" && selectedRaw.trim()
+          ? Number(selectedRaw)
+          : 0;
+    const picked =
+      openings.length > 0
+        ? openings[
+            Math.min(
+              Math.max(0, Math.trunc(selectedIndex) || 0),
+              openings.length - 1,
+            )
+          ]
+        : null;
+
+    if (picked) {
+      if (picked.persona) {
+        ensureProtagonistFromPersona(
+          board,
+          picked.persona,
+          protagonistTagForOpeningSlot(picked.tag),
+        );
       }
-      return expanded;
+      const body = splitOpeningDocument(
+        board.getContentByTag(picked.tag) ?? picked.text,
+      ).text.trim() || picked.text.trim();
+      if (body) {
+        // 若叙事与黑板原文不同（剥了 meta），回写该开场 tag
+        const rawOnBoard = board.getContentByTag(picked.tag)?.trim() ?? "";
+        if (
+          dictateProductFamily(picked.tag) === OPENING_PRODUCT_FAMILY &&
+          rawOnBoard &&
+          body !== rawOnBoard &&
+          splitOpeningDocument(rawOnBoard).persona
+        ) {
+          const existingDesign = board.getLatestByTag(picked.tag);
+          board.write({
+            tag: picked.tag,
+            content: body,
+            source: "runtime",
+            metadata: existingDesign?.metadata,
+          });
+        }
+        const expanded = this.expandDirectivesText(
+          body,
+          this.playDirectiveContext(s),
+        );
+        const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
+        if (existing !== expanded) {
+          board.write({
+            tag: OPENING_OUTPUT_TAG,
+            content: expanded,
+            source: "runtime",
+          });
+        }
+        return expanded;
+      }
+      if (picked.persona) {
+        return board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
+      }
     }
 
     const existing = board.getContentByTag(OPENING_OUTPUT_TAG)?.trim() ?? "";
@@ -1274,12 +1361,13 @@ export class SessionManager {
     return expanded;
   }
 
-  /** 开场 meta 里的用户角色：落到 运行.开场用户角色，不进全局列表。 */
+  /** 选中开场绑定的用户角色 → 运行.开场用户角色，并补写同槽主角设定。 */
   private sealOpeningPersonaFromBoard(s: ManagedSession): void {
     const board = s.runtime.getBlackboard();
     if (readSealedOpeningPersona(board.getContentByTag(OPENING_PERSONA_TAG))) {
       return;
     }
+    const openings = collectOpenings(board);
     const selectedRaw = s.runtime.getSession().slots[SLOT_OPENING_SELECTED_INDEX];
     const selectedIndex =
       typeof selectedRaw === "number"
@@ -1287,17 +1375,44 @@ export class SessionManager {
         : typeof selectedRaw === "string" && selectedRaw.trim()
           ? Number(selectedRaw)
           : 0;
+    const picked =
+      openings.length > 0
+        ? openings[
+            Math.min(
+              Math.max(0, Math.trunc(selectedIndex) || 0),
+              openings.length - 1,
+            )
+          ]
+        : null;
+    const fromPicked = picked
+      ? personaBoundToOpening(
+          board,
+          picked.tag,
+          board.getContentByTag(picked.tag) ?? picked.text,
+        )
+      : null;
+    const protagonist = parseProtagonistSpec(
+      board.getContentByTag(PROTAGONIST_TAG),
+    );
     const persona =
-      parseOpeningSealPayload(
-        board.getContentByTag("设计.开场白与开场变量"),
-        selectedIndex,
-      )?.persona ?? splitOpeningDocument(board.getContentByTag("设计.开场白")).persona;
+      fromPicked ??
+      (protagonist
+        ? {
+            name: protagonist.name,
+            description: formatPersonaDescription(protagonist),
+          }
+        : null);
     if (!persona) return;
     board.write({
       tag: OPENING_PERSONA_TAG,
       content: serializeOpeningPersona(persona),
       source: "runtime",
     });
+    ensureProtagonistFromPersona(
+      board,
+      persona,
+      picked ? protagonistTagForOpeningSlot(picked.tag) : PROTAGONIST_TAG,
+    );
   }
 
   private personaForManaged(s: ManagedSession): ReturnType<
@@ -1366,8 +1481,10 @@ export class SessionManager {
   private deriveOpeningFromDictateProducts(s: ManagedSession): string {
     const products = this.listDictateProducts(s);
     if (!products.length) return "";
-    // 开场白是「按正文格式生成的内容」，优先设计.开场白；不要把设计.正文组成（格式）当开场白
-    const opening = products.find((p) => p.tag === "设计.开场白")?.content?.trim();
+    const opening =
+      products.find((p) => p.tag === "设计.开场白")?.content?.trim() ||
+      products.find((p) => dictateProductFamily(p.tag) === OPENING_PRODUCT_FAMILY)
+        ?.content?.trim();
     if (opening) return opening;
     const preferred = products.filter(
       (p) =>
@@ -1860,9 +1977,88 @@ export class SessionManager {
       console.error("[会话] 发送消息失败", detail);
       await this.recoverFailedRun(s, detail);
     }
+    await this.maybeCollectPreferencesAfterPlayTurn(s, {
+      countedPlayInput: Boolean(
+        waitingBefore?.kind === "input" &&
+          isPlayLayerActive(s.runtime.getSession().slots) &&
+          s.runtime.getSession().waitingReason?.kind === "input",
+      ),
+    });
     this.syncCreationDialogue(s);
     this.persist(s);
     return this.toView(id);
+  }
+
+  /**
+   * 游玩回合结束后：计数；到期则采集偏好候选（不改本局用户约束）。
+   */
+  private async maybeCollectPreferencesAfterPlayTurn(
+    s: ManagedSession,
+    opts: { countedPlayInput: boolean },
+  ): Promise<void> {
+    if (!opts.countedPlayInput) return;
+    if (!isPlayLayerActive(s.runtime.getSession().slots)) return;
+    if (s.preferenceReview?.length) return;
+
+    const every = normalizePreferenceCollectEveryTurns(
+      loadAppSettings().preferenceCollectEveryTurns,
+    );
+    if (every <= 0) return;
+
+    const turns = (s.preferencePlayTurns ?? 0) + 1;
+    s.preferencePlayTurns = turns;
+    if (turns % every !== 0) return;
+    if (!hasRealLlmConfig()) return;
+
+    const dialogue = formatRecentDialogueForCollect(s.messages);
+    if (!dialogue.trim()) return;
+
+    try {
+      const llm = createDefaultMainAgentLlm(s.trackingRef, () =>
+        this.personaForManaged(s),
+      );
+      const candidates = await collectPreferenceCandidates({
+        llm,
+        recentDialogue: dialogue,
+      });
+      if (candidates.length) {
+        s.preferenceReview = candidates;
+        s.messages.push(
+          this.msg(
+            "system",
+            `[偏好] 发现 ${candidates.length} 条可记入偏好库的候选，请在卡片上编辑后收下或不要。`,
+          ),
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[偏好] 采集失败",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  /** 审核偏好候选：收下（可改正文）/ 不要。不改本局「设计.用户约束」。 */
+  resolvePreferenceReview(
+    sessionId: string,
+    candidateId: string,
+    action: "accept" | "reject",
+    content?: string,
+  ): SessionView {
+    const s = this.require(sessionId);
+    const list = s.preferenceReview ?? [];
+    const idx = list.findIndex((c) => c.id === candidateId);
+    if (idx < 0) throw new Error("没有这条待审偏好");
+    const cur = list[idx]!;
+    if (action === "accept") {
+      const body = (content ?? cur.content).trim();
+      if (!body) throw new Error("偏好内容不能为空");
+      acceptPreferenceCandidate(body);
+    }
+    const next = list.filter((c) => c.id !== candidateId);
+    s.preferenceReview = next.length ? next : undefined;
+    if (s.bookId) this.persist(s);
+    return this.toView(sessionId);
   }
 
   /**
@@ -2045,7 +2241,15 @@ export class SessionManager {
     const workerId = target.actor ?? workerSnap?.workerId;
     if (!workerId) throw new Error("无法识别要刷新的 Worker");
 
-    const checkpoint = workerSnap ?? s.branchState.preMessageCheckpoints[idx];
+    const groupId = target.branchGroupId ?? target.id;
+    const existingBranch = s.branchState.branches[groupId];
+    const branchVariantCp =
+      existingBranch?.variants[existingBranch.activeIndex]?.checkpoint;
+
+    const checkpoint =
+      workerSnap ??
+      s.branchState.preMessageCheckpoints[idx] ??
+      branchVariantCp;
     if (!checkpoint) {
       throw new Error("缺少重 roll 快照，请尝试编辑上一条用户消息");
     }
@@ -3547,6 +3751,12 @@ export class SessionManager {
           hasMessageCheckpoint: Boolean(
             s.branchState.preMessageCheckpoints[idx],
           ),
+          hasBranchVariants: Boolean(
+            (typeof m.branchTotal === "number" && m.branchTotal > 1) ||
+              (m.branchGroupId &&
+                (s.branchState.branches[m.branchGroupId]?.variants.length ?? 0) >
+                  1),
+          ),
         }),
       }),
     );
@@ -3675,6 +3885,9 @@ export class SessionManager {
         s.runtime.getBlackboard(),
         s.runtime.getSession().slots,
       ),
+      preferenceReview: s.preferenceReview?.length
+        ? s.preferenceReview.map((c) => ({ id: c.id, content: c.content }))
+        : undefined,
     };
   }
 

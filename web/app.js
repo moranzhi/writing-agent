@@ -6,6 +6,7 @@ import {
   fillStepArtifactDialog,
   canOfferSaveProduct,
   canOfferEnterPlay,
+  placeMenu,
 } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
@@ -1201,12 +1202,83 @@ function endComposerSubmit() {
   skipComposerStash = false;
 }
 
+function renderPreferenceReview(view) {
+  const host = $("preference-review");
+  if (!host) return;
+  const items = Array.isArray(view?.preferenceReview) ? view.preferenceReview : [];
+  if (!items.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = "";
+  items.forEach((c, i) => {
+    const card = document.createElement("article");
+    card.className = "preference-review-card";
+    card.dataset.candidateId = c.id;
+
+    const head = document.createElement("header");
+    head.className = "preference-review-head";
+    const title = document.createElement("strong");
+    title.textContent = `偏好候选${items.length > 1 ? ` ${i + 1}/${items.length}` : ""}`;
+    const hint = document.createElement("span");
+    hint.className = "preference-review-hint";
+    hint.textContent = "可编辑后收下；本局正文不受影响";
+    head.append(title, hint);
+
+    const ta = document.createElement("textarea");
+    ta.className = "preference-review-content";
+    ta.rows = 3;
+    ta.value = c.content ?? "";
+
+    const actions = document.createElement("div");
+    actions.className = "preference-review-actions";
+    const acceptBtn = document.createElement("button");
+    acceptBtn.type = "button";
+    acceptBtn.className = "btn-primary";
+    acceptBtn.textContent = "收下";
+    acceptBtn.addEventListener("click", () => {
+      resolvePreferenceReview(c.id, "accept", ta.value);
+    });
+    const rejectBtn = document.createElement("button");
+    rejectBtn.type = "button";
+    rejectBtn.className = "btn-secondary";
+    rejectBtn.textContent = "不要";
+    rejectBtn.addEventListener("click", () => {
+      resolvePreferenceReview(c.id, "reject");
+    });
+    actions.append(acceptBtn, rejectBtn);
+
+    card.append(head, ta, actions);
+    host.appendChild(card);
+  });
+}
+
+async function resolvePreferenceReview(candidateId, action, content) {
+  if (!sessionId) return;
+  try {
+    const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}/preferences/review`, {
+      method: "POST",
+      body: JSON.stringify({
+        candidateId,
+        action,
+        ...(action === "accept" ? { content } : {}),
+      }),
+    });
+    renderSession(view);
+  } catch (err) {
+    alert(err.message || "审核失败");
+  }
+}
+
 function renderComposer(view, loading) {
   stashComposerDraftFromDom();
   if (pendingComposerDraft) composerForceInput = true;
   const host = $("composer");
   const root = $("composer-main") || host;
   if (!root || !host) return;
+  renderPreferenceReview(view);
   if (host._enterHandler) {
     document.removeEventListener("keydown", host._enterHandler);
     host._enterHandler = null;
@@ -1748,18 +1820,8 @@ function showEnterPicker(bookId, anchorEl) {
   }
   pop.hidden = false;
   const rect = anchorEl.getBoundingClientRect();
-  const left = rect.right + 8;
-  let top = rect.top;
-  pop.style.left = `${left}px`;
-  pop.style.top = `${top}px`;
-  const box = pop.getBoundingClientRect();
-  if (box.bottom > window.innerHeight - 8) {
-    top = Math.max(8, window.innerHeight - box.height - 8);
-    pop.style.top = `${top}px`;
-  }
-  if (box.right > window.innerWidth - 8) {
-    pop.style.left = `${Math.max(8, rect.left - box.width - 8)}px`;
-  }
+  // 与右键菜单同一套定位（消化 html zoom）
+  placeMenu(pop, rect.right + 8, rect.top);
 }
 
 let saveMenuState = { bookId: null, saveId: null, label: "" };
@@ -1770,22 +1832,17 @@ function hideSaveMenu() {
   saveMenuState = { bookId: null, saveId: null, label: "" };
 }
 
+function placeFixedMenu(menu, x, y) {
+  placeMenu(menu, x, y);
+}
+
 function showSaveMenu(bookId, saveId, label, x, y) {
   const menu = $("save-action-menu");
   if (!menu) return;
   hideEnterPicker();
   hideBookMenu();
   saveMenuState = { bookId, saveId, label: label || "" };
-  menu.hidden = false;
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
-  }
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
-  }
+  placeFixedMenu(menu, x, y);
 }
 
 async function openSnapshotProductsEditor(bookId, saveId, label) {
@@ -1896,16 +1953,7 @@ function showBookMenu(bookId, x, y) {
   hideSaveMenu();
   bookMenuBookId = bookId;
   refreshBookMenuLabels();
-  menu.hidden = false;
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${Math.max(4, window.innerWidth - rect.width - 4)}px`;
-  }
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${Math.max(4, window.innerHeight - rect.height - 4)}px`;
-  }
+  placeFixedMenu(menu, x, y);
 }
 
 function isCatalogNav() {

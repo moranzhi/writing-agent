@@ -188,6 +188,35 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/preferences/review") {
+        const body = JSON.parse(await readBody(req)) as {
+          candidateId?: string;
+          action?: "accept" | "reject";
+          content?: string;
+        };
+        const candidateId =
+          typeof body.candidateId === "string" ? body.candidateId.trim() : "";
+        const action = body.action;
+        if (!candidateId || (action !== "accept" && action !== "reject")) {
+          json(res, 400, { error: "需要 candidateId 与 action=accept|reject" });
+          return;
+        }
+        try {
+          const view = sessionManager.resolvePreferenceReview(
+            sessionId,
+            candidateId,
+            action,
+            typeof body.content === "string" ? body.content : undefined,
+          );
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "审核失败",
+          });
+        }
+        return;
+      }
+
       if (req.method === "POST" && sub === "/dictate/clear-dialogue") {
         try {
           const view = await sessionManager.clearDictateDialogue(sessionId);

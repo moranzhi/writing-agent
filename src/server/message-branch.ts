@@ -215,13 +215,15 @@ export function isRefreshableMessage(msg: BranchableMessage): boolean {
   return kind === "worker_questions" || kind === "worker_output";
 }
 
-/** 与 refreshMessage 同一套门槛：类型对，且有 worker 快照或该条检查点。 */
+/** 与 refreshMessage 同一套门槛：类型对，且有可回滚快照。 */
 export function canAttemptRefresh(
   msg: BranchableMessage,
   opts: {
     lastWorkerId?: string;
     hasLastWorkerSnapshot: boolean;
     hasMessageCheckpoint: boolean;
+    /** 消息已在分支里（曾重 roll / swipe） */
+    hasBranchVariants?: boolean;
   },
 ): boolean {
   if (!isRefreshableMessage(msg)) return false;
@@ -229,6 +231,7 @@ export function canAttemptRefresh(
     (typeof msg.actor === "string" && msg.actor.trim()) ||
     opts.lastWorkerId?.trim();
   if (!workerId) return false;
+  if (opts.hasBranchVariants) return true;
   return opts.hasMessageCheckpoint || opts.hasLastWorkerSnapshot;
 }
 

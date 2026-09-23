@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css?v=20260921-repeatable-split" />
+    <link rel="stylesheet" href="/styles.css?v=20260922-menu-unify" />
     <script>
       (function () {
         try {
@@ -91,6 +91,7 @@
               <div id="persona-picker-host" class="persona-picker-host" hidden></div>
               <a href="/modules.html">技能</a>
               <a href="/shells.html">呈现壳</a>
+              <a href="/libraries.html">库</a>
               <a href="/stats.html">Token</a>
               <a href="/settings.html">设置</a>
             </nav>
@@ -181,6 +182,7 @@
           </div>
 
           <footer class="composer" id="composer">
+            <div id="preference-review" class="preference-review" hidden></div>
             <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
             <div id="composer-main"></div>
           </footer>
@@ -263,7 +265,14 @@
         <button type="button" class="msg-peek-close" id="msg-peek-close" aria-label="关闭">×</button>
       </header>
       <div class="msg-peek-body" id="msg-peek-body"></div>
-      <div class="msg-peek-resize" data-peek-resize="se" title="拖动调整大小" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--n" data-peek-resize="n" title="拖动调整高度" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--s" data-peek-resize="s" title="拖动调整高度" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--e" data-peek-resize="e" title="拖动调整宽度" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--w" data-peek-resize="w" title="拖动调整宽度" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--nw" data-peek-resize="nw" title="等比缩放" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--ne" data-peek-resize="ne" title="等比缩放" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--sw" data-peek-resize="sw" title="等比缩放" aria-hidden="true"></div>
+      <div class="msg-peek-resize msg-peek-resize--se" data-peek-resize="se" title="等比缩放" aria-hidden="true"></div>
     </div>
 
     <menu id="flow-node-menu" class="context-menu" hidden>
@@ -328,6 +337,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260921-repeatable-split"></script>
+    <script type="module" src="/app.js?v=20260922-menu-unify"></script>
   </body>
 </html>
