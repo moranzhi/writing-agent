@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>库 · Writing Agent</title>
+    <link rel="stylesheet" href="/settings.css" />
+    <link rel="stylesheet" href="/libraries.css" />
+  </head>
+  <body class="settings-page libraries-page">
+    <header class="st-top">
+      <a class="st-brand" href="/">Writing Agent</a>
+      <nav class="st-nav" aria-label="主导航">
+        <a href="/">对话</a>
+        <a href="/modules.html">技能</a>
+        <a href="/shells.html">呈现壳</a>
+        <a href="/libraries.html" aria-current="page">库</a>
+        <a href="/stats.html">Token</a>
+        <a href="/settings.html">设置</a>
+      </nav>
+    </header>
+
+    <div class="st-shell lib-shell">
+      <aside class="st-rail" aria-label="库分类">
+        <p class="st-rail-label">全局库</p>
+        <button type="button" class="st-rail-item active" data-tab="style">文风库</button>
+        <button type="button" class="st-rail-item" data-tab="preferences">偏好库</button>
+        <p class="st-rail-note">
+          文风绑叙事指南；偏好绑「用户需求」。存
+          <code>~/.writing-agent/</code>
+        </p>
+      </aside>
+
+      <main class="st-main lib-main">
+        <header class="st-main-head">
+          <div>
+            <h1 id="panel-title">文风库</h1>
+            <p class="st-sub" id="panel-subtitle">跨卡「怎么写」；对话 + 样本提取</p>
+          </div>
+          <div class="st-main-actions">
+            <button type="button" class="btn-secondary" id="btn-new-entry">手写新建</button>
+          </div>
+        </header>
+
+        <div class="settings-toast" id="lib-toast" hidden></div>
+
+        <div class="lib-body">
+          <section class="lib-list-pane" aria-label="条目列表">
+            <div id="entry-list" class="card-list"></div>
+          </section>
+
+          <section class="lib-work-pane" aria-label="提取工作台">
+            <div class="lib-work-card" id="extract-panel">
+              <h3 id="extract-title">用 LLM 提取文风</h3>
+              <p class="settings-help" id="extract-help">
+                描述想要的写法，或贴样本；助手会整理成可入库草稿。点「入库」写入列表。
+              </p>
+              <label class="field lib-samples-field" id="samples-field">
+                样本（可选）
+                <textarea id="extract-samples" rows="4" placeholder="贴一段你想模仿的正文或对话…"></textarea>
+              </label>
+              <div class="lib-chat" id="extract-chat" aria-live="polite"></div>
+              <div class="lib-composer">
+                <textarea
+                  id="extract-input"
+                  rows="3"
+                  placeholder="说说文风要求，或回答助手的追问…"
+                ></textarea>
+                <div class="lib-composer-actions">
+                  <button type="button" class="btn-primary" id="btn-extract-send">发送</button>
+                  <button type="button" class="btn-secondary" id="btn-extract-reset">清空对话</button>
+                </div>
+              </div>
+              <div class="lib-draft" id="draft-panel" hidden>
+                <h4>草稿</h4>
+                <label class="field" id="draft-name-field">
+                  名称
+                  <input type="text" id="draft-name" />
+                </label>
+                <label class="field">
+                  正文
+                  <textarea id="draft-content" rows="8"></textarea>
+                </label>
+                <div id="pref-candidates" class="lib-candidates" hidden></div>
+                <div class="storage-actions">
+                  <button type="button" class="btn-primary" id="btn-save-draft" disabled>
+                    入库
+                  </button>
+                  <span class="lib-ready-hint" id="draft-ready-hint"></span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="entry-dialog" class="profile-dialog">
+      <form id="entry-form" method="dialog">
+        <h3 id="entry-dialog-title">新建</h3>
+        <label class="field" id="entry-name-wrap">
+          名称
+          <input type="text" name="name" id="entry-name" />
+        </label>
+        <label class="field">
+          正文
+          <textarea name="content" id="entry-content" rows="8" required></textarea>
+        </label>
+        <label class="check-label">
+          <input type="checkbox" name="archived" id="entry-archived" />
+          <span>归档（节点注入时跳过）</span>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="entry-cancel" class="btn-secondary">取消</button>
+          <button type="submit" class="btn-primary">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/libraries.js"></script>
+  </body>
+</html>
+

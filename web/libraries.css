@@ -1,0 +1,129 @@
+/* 库页：列表 + 提取工作台 */
+
+.lib-shell {
+  grid-template-columns: var(--st-rail-w) minmax(0, 1fr);
+}
+
+.lib-body {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 0 4px 24px;
+}
+
+.lib-list-pane,
+.lib-work-pane {
+  min-width: 0;
+}
+
+.lib-work-card {
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius);
+  padding: 16px 18px 20px;
+}
+
+.lib-work-card h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.lib-work-card h4 {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  color: var(--st-muted);
+  font-weight: 600;
+}
+
+.lib-chat {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--st-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fafafa;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.lib-chat-empty {
+  color: var(--st-faint);
+  margin: 0;
+}
+
+.lib-msg {
+  margin: 0 0 10px;
+}
+
+.lib-msg:last-child {
+  margin-bottom: 0;
+}
+
+.lib-msg-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--st-muted);
+  margin-bottom: 2px;
+}
+
+.lib-msg-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lib-composer textarea,
+.lib-draft textarea,
+.lib-samples-field textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--st-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.lib-composer-actions,
+.storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.lib-ready-hint {
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.lib-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.lib-candidate {
+  border: 1px solid var(--st-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fafafa;
+}
+
+.lib-candidate-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.lib-candidate.is-ready {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+@media (max-width: 900px) {
+  .lib-body {
+    grid-template-columns: 1fr;
+  }
+}
+

@@ -32,8 +32,10 @@ const panelSubtitleEl = document.getElementById("panel-subtitle");
 const panelActionsEl = document.getElementById("panel-actions");
 const sectionApiEl = document.getElementById("section-api");
 const sectionPersonaEl = document.getElementById("section-persona");
+const sectionPreferenceEl = document.getElementById("section-preference");
 const sectionPresetEl = document.getElementById("section-preset");
 const sectionStorageEl = document.getElementById("section-storage");
+const preferenceCollectEveryEl = document.getElementById("preference-collect-every");
 const activeSettingsBarEl = document.getElementById("active-settings-bar");
 const settingsToastEl = document.getElementById("settings-toast");
 const contextTraceKeepEl = document.getElementById("context-trace-keep");
@@ -125,6 +127,7 @@ function switchSection(section) {
   });
   sectionApiEl.classList.toggle("hidden", section !== "api");
   sectionPersonaEl?.classList.toggle("hidden", section !== "persona");
+  sectionPreferenceEl?.classList.toggle("hidden", section !== "preference");
   sectionPresetEl.classList.toggle("hidden", section !== "preset");
   sectionStorageEl?.classList.toggle("hidden", section !== "storage");
   renderPanelHeader();
@@ -151,6 +154,9 @@ function renderPanelHeader() {
     btn.textContent = "新增";
     btn.addEventListener("click", () => openPersonaDialog());
     panelActionsEl.appendChild(btn);
+  } else if (activeSection === "preference") {
+    panelTitleEl.textContent = "用户偏好";
+    panelSubtitleEl.textContent = "采集间隔；条目在「库 · 偏好库」管理";
   } else if (activeSection === "preset") {
     panelTitleEl.textContent = "预设";
     panelSubtitleEl.textContent =
@@ -554,6 +560,18 @@ async function loadAll() {
     state.personas = [];
     state.activePersonaId = null;
   }
+  try {
+    const prefData = await api("/api/preferences");
+    if (preferenceCollectEveryEl) {
+      preferenceCollectEveryEl.value = String(
+        prefData.preferenceCollectEveryTurns ??
+          state.settings.preferenceCollectEveryTurns ??
+          10,
+      );
+    }
+  } catch {
+    /* ignore */
+  }
   if (contextTraceKeepEl) {
     contextTraceKeepEl.value = String(
       state.settings.contextTraceKeepLatest ?? 5,
@@ -721,6 +739,27 @@ document.getElementById("profile-cancel").addEventListener("click", () => {
 
 document.getElementById("persona-cancel")?.addEventListener("click", () => {
   personaDialog?.close();
+});
+
+document.getElementById("btn-save-pref-every")?.addEventListener("click", async () => {
+  try {
+    const n = Number(preferenceCollectEveryEl?.value ?? 10);
+    const data = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ preferenceCollectEveryTurns: n }),
+    });
+    state.settings = data.settings;
+    if (preferenceCollectEveryEl) {
+      preferenceCollectEveryEl.value = String(
+        data.settings.preferenceCollectEveryTurns ?? 10,
+      );
+    }
+    showToast(
+      `已保存：每隔 ${data.settings.preferenceCollectEveryTurns} 回合采集偏好`,
+    );
+  } catch (err) {
+    showToast(err.message, true);
+  }
 });
 
 personaForm?.addEventListener("submit", async (e) => {

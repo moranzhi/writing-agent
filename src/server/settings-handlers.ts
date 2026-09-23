@@ -15,6 +15,7 @@ import {
   ensureActiveProfileDefault,
   loadAppSettings,
   normalizeContextTraceKeepLatest,
+  normalizePreferenceCollectEveryTurns,
   saveAppSettings,
   setActivePresetId,
   setActiveProfileId,
@@ -36,6 +37,7 @@ import {
 } from "../preset/store.js";
 import type { GenerationParameters } from "../types/preset.js";
 import {
+  createDefaultMainAgentLlm,
   createLlmForPreset,
   hasRealLlmConfig,
 } from "../runtime/llm-factory.js";
@@ -48,6 +50,24 @@ import {
   setActivePersonaId,
   updatePersona,
 } from "../persona/store.js";
+import {
+  createPreference,
+  deletePreference,
+  ensureStarterPreferences,
+  extractPreferenceTurn,
+  listPreferences,
+  updatePreference,
+  type PreferenceExtractCandidate,
+  type PreferenceExtractMessage,
+} from "../preference/index.js";
+import {
+  createStylePack,
+  deleteStylePack,
+  extractStylePackTurn,
+  listStylePacks,
+  updateStylePack,
+  type StyleExtractMessage,
+} from "../style-pack/index.js";
 import { listDirectiveCatalog } from "../directives/expand.js";
 import { sessionManager } from "./session-manager.js";
 
@@ -104,6 +124,7 @@ export async function handleSettingsApi(
       activeProfileId?: string | null;
       activePresetId?: string | null;
       contextTraceKeepLatest?: number;
+      preferenceCollectEveryTurns?: number;
     };
     const settings = loadAppSettings();
     if (body.activeProfileId !== undefined) {
@@ -115,6 +136,11 @@ export async function handleSettingsApi(
     if (body.contextTraceKeepLatest !== undefined) {
       settings.contextTraceKeepLatest = normalizeContextTraceKeepLatest(
         body.contextTraceKeepLatest,
+      );
+    }
+    if (body.preferenceCollectEveryTurns !== undefined) {
+      settings.preferenceCollectEveryTurns = normalizePreferenceCollectEveryTurns(
+        body.preferenceCollectEveryTurns,
       );
     }
     saveAppSettings(settings);
@@ -529,6 +555,183 @@ export async function handleSettingsApi(
         json(res, 200, {
           ...personasPayload({ ok: true }),
         });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+      }
+      return true;
+    }
+  }
+
+  if (pathname === "/api/preferences" && req.method === "GET") {
+    ensureStarterPreferences();
+    json(res, 200, {
+      preferences: listPreferences(),
+      preferenceCollectEveryTurns: normalizePreferenceCollectEveryTurns(
+        loadAppSettings().preferenceCollectEveryTurns,
+      ),
+    });
+    return true;
+  }
+
+  if (pathname === "/api/preferences" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req)) as {
+        content?: string;
+        status?: "active" | "archived";
+      };
+      const entry = createPreference({
+        content: body.content ?? "",
+        status: body.status,
+      });
+      json(res, 201, { preference: entry, preferences: listPreferences() });
+    } catch (e) {
+      json(res, 400, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    return true;
+  }
+
+  if (pathname === "/api/preferences/extract" && req.method === "POST") {
+    try {
+      if (!hasRealLlmConfig()) {
+        json(res, 400, { error: "未配置 API Key，无法提取偏好" });
+        return true;
+      }
+      const body = JSON.parse(await readBody(req)) as {
+        messages?: PreferenceExtractMessage[];
+        draftCandidates?: PreferenceExtractCandidate[];
+      };
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const draftCandidates = Array.isArray(body.draftCandidates)
+        ? body.draftCandidates
+        : [];
+      const llm = createDefaultMainAgentLlm();
+      const result = await extractPreferenceTurn({
+        llm,
+        messages,
+        draftCandidates,
+      });
+      json(res, 200, result);
+    } catch (e) {
+      json(res, 400, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    return true;
+  }
+
+  const prefMatch = pathname.match(/^\/api\/preferences\/([^/]+)$/);
+  if (prefMatch) {
+    const id = decodeURIComponent(prefMatch[1]);
+    if (req.method === "PUT") {
+      try {
+        const body = JSON.parse(await readBody(req)) as {
+          content?: string;
+          status?: "active" | "archived";
+        };
+        const preference = updatePreference(id, body);
+        json(res, 200, { preference, preferences: listPreferences() });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+      }
+      return true;
+    }
+    if (req.method === "DELETE") {
+      try {
+        deletePreference(id);
+        json(res, 200, { ok: true, preferences: listPreferences() });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+      }
+      return true;
+    }
+  }
+
+  if (pathname === "/api/style-packs" && req.method === "GET") {
+    json(res, 200, { stylePacks: listStylePacks() });
+    return true;
+  }
+
+  if (pathname === "/api/style-packs" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req)) as {
+        name?: string;
+        content?: string;
+        samples?: string;
+        status?: "active" | "archived";
+      };
+      const entry = createStylePack({
+        name: body.name ?? "",
+        content: body.content ?? "",
+        samples: body.samples,
+        status: body.status,
+      });
+      json(res, 201, { stylePack: entry, stylePacks: listStylePacks() });
+    } catch (e) {
+      json(res, 400, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    return true;
+  }
+
+  if (pathname === "/api/style-packs/extract" && req.method === "POST") {
+    try {
+      if (!hasRealLlmConfig()) {
+        json(res, 400, { error: "未配置 API Key，无法提取文风" });
+        return true;
+      }
+      const body = JSON.parse(await readBody(req)) as {
+        messages?: StyleExtractMessage[];
+        samples?: string;
+        draftName?: string;
+        draftContent?: string;
+      };
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const llm = createDefaultMainAgentLlm();
+      const result = await extractStylePackTurn({
+        llm,
+        messages,
+        samples: body.samples,
+        draftName: body.draftName,
+        draftContent: body.draftContent,
+      });
+      json(res, 200, result);
+    } catch (e) {
+      json(res, 400, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    return true;
+  }
+
+  const styleMatch = pathname.match(/^\/api\/style-packs\/([^/]+)$/);
+  if (styleMatch) {
+    const id = decodeURIComponent(styleMatch[1]);
+    if (req.method === "PUT") {
+      try {
+        const body = JSON.parse(await readBody(req)) as {
+          name?: string;
+          content?: string;
+          samples?: string | null;
+          status?: "active" | "archived";
+        };
+        const stylePack = updateStylePack(id, body);
+        json(res, 200, { stylePack, stylePacks: listStylePacks() });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        json(res, msg.includes("不存在") ? 404 : 400, { error: msg });
+      }
+      return true;
+    }
+    if (req.method === "DELETE") {
+      try {
+        deleteStylePack(id);
+        json(res, 200, { ok: true, stylePacks: listStylePacks() });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         json(res, msg.includes("不存在") ? 404 : 400, { error: msg });

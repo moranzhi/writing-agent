@@ -13,6 +13,7 @@
         <a href="/">对话</a>
         <a href="/modules.html">技能</a>
         <a href="/shells.html">呈现壳</a>
+        <a href="/libraries.html">库</a>
         <a href="/stats.html">Token</a>
         <a href="/settings.html" aria-current="page">设置</a>
       </nav>
@@ -23,6 +24,7 @@
         <p class="st-rail-label">设置</p>
         <button type="button" class="st-rail-item active" data-section="api">API</button>
         <button type="button" class="st-rail-item" data-section="persona">用户角色</button>
+        <button type="button" class="st-rail-item" data-section="preference">用户偏好</button>
         <button type="button" class="st-rail-item" data-section="preset">预设</button>
         <button type="button" class="st-rail-item" data-section="storage">上下文</button>
         <p class="st-rail-note">保存在本机 <code>~/.writing-agent/</code>，明文、不同步。</p>
@@ -56,6 +58,33 @@
               </p>
             </div>
             <div id="personas-list" class="card-list"></div>
+          </section>
+
+          <section class="settings-section hidden" id="section-preference">
+            <div class="settings-card storage-card">
+              <h3>用户偏好</h3>
+              <p class="settings-help">
+                跨局硬约束条目的增删与 LLM 提取已迁到顶栏
+                <a href="/libraries.html?tab=preferences">库 · 偏好库</a>。
+                创作期由「用户需求」节点从库选用写入本局，不再开玩时全量自动摊入。
+              </p>
+              <label class="field">
+                每隔多少游玩回合采集一次
+                <input
+                  type="number"
+                  id="preference-collect-every"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value="10"
+                />
+              </label>
+              <p class="settings-help muted">0 = 关闭自动采集。默认 10。候选经审核卡收下后写入偏好库。</p>
+              <div class="storage-actions">
+                <button type="button" class="btn-primary" id="btn-save-pref-every">保存间隔</button>
+                <a class="btn-secondary" href="/libraries.html?tab=preferences">打开偏好库</a>
+              </div>
+            </div>
           </section>
 
           <section class="settings-section hidden" id="section-preset">
@@ -205,6 +234,10 @@
           <button type="submit" class="btn-primary">保存并选用</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="preference-dialog" class="profile-dialog" hidden>
+      <!-- 偏好 CRUD 已迁至 /libraries.html -->
     </dialog>
 
     <input type="file" id="preset-file" accept=".json,application/json" hidden />

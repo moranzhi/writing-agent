@@ -13,10 +13,15 @@ export type AppSettings = {
    * 更早的消息仍保留，但去掉 contextTrace 正文。默认 5；0 表示不存痕迹。
    */
   contextTraceKeepLatest?: number;
+  /**
+   * 游玩期每隔多少个用户回合尝试采集偏好候选。默认 10；0 = 关闭。
+   */
+  preferenceCollectEveryTurns?: number;
 };
 
 const FILE_NAME = "settings.json";
 const DEFAULT_CONTEXT_TRACE_KEEP = 5;
+const DEFAULT_PREF_COLLECT_EVERY = 10;
 
 function settingsPath(): string {
   return path.join(getUserDataDir(), FILE_NAME);
@@ -28,6 +33,7 @@ function defaultSettings(): AppSettings {
     activeProfileId: null,
     activePresetId: null,
     contextTraceKeepLatest: DEFAULT_CONTEXT_TRACE_KEEP,
+    preferenceCollectEveryTurns: DEFAULT_PREF_COLLECT_EVERY,
   };
 }
 
@@ -35,6 +41,12 @@ export function normalizeContextTraceKeepLatest(raw: unknown): number {
   const n = typeof raw === "number" ? raw : Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_CONTEXT_TRACE_KEEP;
   return Math.min(50, Math.floor(n));
+}
+
+export function normalizePreferenceCollectEveryTurns(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_PREF_COLLECT_EVERY;
+  return Math.min(100, Math.floor(n));
 }
 
 export function loadAppSettings(): AppSettings {
@@ -49,6 +61,9 @@ export function loadAppSettings(): AppSettings {
       activePresetId: parsed.activePresetId ?? null,
       contextTraceKeepLatest: normalizeContextTraceKeepLatest(
         parsed.contextTraceKeepLatest ?? DEFAULT_CONTEXT_TRACE_KEEP,
+      ),
+      preferenceCollectEveryTurns: normalizePreferenceCollectEveryTurns(
+        parsed.preferenceCollectEveryTurns ?? DEFAULT_PREF_COLLECT_EVERY,
       ),
     };
   } catch {
