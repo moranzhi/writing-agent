@@ -4,7 +4,8 @@
 > 上游：游玩管线 `gm → perspective? → narrator → auditor`。  
 > 创作挂钩：`设计.正文组成`（怎么展示）/ `设计.监控栏`（每轮看什么，技能名「回复呈现」）；终稿 tag 通常 `输出.用户展示`。  
 > 各壳介绍与规格：`skills/dialogue/world-simulator/present-shells/`（正文组成执行时动态注入）。  
-> **创作定位：按回复呈现清单选壳并美化，可写 CSS/HTML/JS。**  
+> **创作定位：按回复呈现清单选壳并分区；正文语法见【正文安全子集】（程序动态装载）。**  
+> 日常折叠/表格走 Markdown 安全子集；一般不写本局任意 CSS/HTML/JS。  
 > 预览：`/shells.html`
 
 ## 1. 创作怎么做（权威口径）

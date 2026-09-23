@@ -1,4 +1,6 @@
-/** Optional Markdown display — escaped first, then a small safe subset. */
+/** Optional Markdown display — escaped first, then a small safe subset.
+ *  Feature list (prompt injection): skills/.../markdown-safe-subset/catalog.yaml
+ */
 
 const STORAGE_KEY = "wa-markdown-render";
 
@@ -36,7 +38,21 @@ function esc(s) {
     .replace(/>/g, "&gt;");
 }
 
-/** Safe subset: fences, inline code, headings, emphasis, links, lists, quotes, hr, breaks. */
+function isTableSeparator(line) {
+  const t = String(line ?? "").trim();
+  if (!t.includes("-")) return false;
+  // GFM: | --- | :---: | ---: |
+  return /^\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(t);
+}
+
+function splitTableRow(line) {
+  let s = String(line ?? "").trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+/** Safe subset: fences, details, tables, headings, emphasis, links, lists, quotes, hr. */
 export function renderMarkdownToHtml(raw) {
   const text = String(raw ?? "");
   if (!text) return "";
@@ -89,6 +105,65 @@ export function renderMarkdownToHtml(raw) {
       flushList();
       out.push(fences[Number(fenceMatch[1])] ?? "");
       i += 1;
+      continue;
+    }
+
+    const detailsStart = line.match(/^:::details(?:\s+(open))?\s+(.+?)\s*$/);
+    if (detailsStart) {
+      flushPara();
+      flushList();
+      const openAttr = detailsStart[1] ? " open" : "";
+      const summary = detailsStart[2];
+      const bodyLines = [];
+      i += 1;
+      while (i < lines.length && !/^:::\s*$/.test(lines[i])) {
+        bodyLines.push(lines[i]);
+        i += 1;
+      }
+      if (i < lines.length) i += 1;
+      const inner = renderMarkdownToHtml(bodyLines.join("\n"));
+      out.push(
+        `<details class="md-details"${openAttr}><summary class="md-summary">${inlineMarkdown(
+          summary,
+        )}</summary><div class="md-details-body">${inner || ""}</div></details>`,
+      );
+      continue;
+    }
+
+    if (
+      line.includes("|") &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      flushPara();
+      flushList();
+      const headers = splitTableRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        if (isTableSeparator(lines[i])) {
+          i += 1;
+          continue;
+        }
+        rows.push(splitTableRow(lines[i]));
+        i += 1;
+      }
+      const thead = `<thead><tr>${headers
+        .map((h) => `<th>${inlineMarkdown(h)}</th>`)
+        .join("")}</tr></thead>`;
+      const tbody = rows.length
+        ? `<tbody>${rows
+            .map(
+              (cells) =>
+                `<tr>${headers
+                  .map((_, idx) => `<td>${inlineMarkdown(cells[idx] ?? "")}</td>`)
+                  .join("")}</tr>`,
+            )
+            .join("")}</tbody>`
+        : "";
+      out.push(
+        `<div class="md-table-wrap"><table class="md-table">${thead}${tbody}</table></div>`,
+      );
       continue;
     }
 

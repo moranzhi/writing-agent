@@ -172,7 +172,7 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 能力 | id | 状态 |
 |------|-----|------|
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写**；前端 mosaic 视图 |
-| 主角设定 | `protagonist` | **已写**：有产物则挂在当前选用的用户角色卡下（不进全局列表）；关掉这局就不加载 |
+| 主角设定 | `protagonist` | **已写**：代入名片（名字/背景/特殊设定）；挂在当前选用的用户角色卡下；关掉这局就不加载 |
 | 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm`；**专用卡已接** |
 | 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况；**专用卡已接** |
 | 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；方向池优先、元素池仅封闭集合；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
@@ -183,10 +183,10 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 | 拓扑图谱 | `topology` | 必须生成且不适合走生成规则→实例时，用拓扑结构写出（升级路径、地图、人物关系等） |
 | 回复呈现 | `status-bar` | **已写**：每轮终稿看什么（正文/字数/日期/变量）；旧称设计监控栏 |
 | 随机范围整理 | `random-range` | **已写**：汇总检定/对抗等随机项与范围；正文组成之前；替代机遇裁定槽 |
-| 正文组成 | `reply-format` | **已写**：把回复呈现清单展示出来；选壳+美化，可写 CSS/HTML/JS；可接隐藏备用随机区 |
+| 正文组成 | `reply-format` | **已写**：选壳+分区；正文语法【正文安全子集】动态注入；可接隐藏备用随机区 |
 | 变量设计与更新规则 | `variable-design` | **已写**；专用/结构化卡 |
 | 变量控制上下文 | `variable-context` | **已写**：旁观汇总；mount 含 auditor；通用 fragment 卡 |
-| 开场白与开场变量 | `opening-setup` | **已写**：每条 = meta（初值/用户角色）+ present.v1 正文（壳跟正文组成）；**〔收口〕**选定后落库并保存定稿 |
+| 开场白与开场变量 | `opening-setup` | **已写**：每条 = meta（初值）+ present.v1 正文；用户角色优先主角设定；**〔收口〕**选定后落库并保存定稿 |
 
 共用收成（池内保留，按需）：
 

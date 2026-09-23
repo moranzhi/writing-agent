@@ -1,0 +1,49 @@
+# 正文 Markdown 安全子集（程序动态装载进「正文组成」）
+# 实现：web/markdown.js · 先转义再解析；禁止裸 HTML / 任意 CSS / JS
+version: 1
+intro: >
+  用户开启 Markdown 渲染时，游玩正文（及壳区域主读）只吃下列语法。
+  美化靠程序预制 class（.md-*），不要写本局任意 CSS/HTML/JS。
+  目录可增条目；技能 prompt 勿背死清单。
+features:
+  - id: paragraph
+    name: 段落与换行
+    syntax: 空行分段；段内换行保留
+  - id: heading
+    name: 标题
+    syntax: "# ～ ###### 标题"
+  - id: emphasis
+    name: 强调
+    syntax: "**粗** *斜* ~~删~~ `行内代码`"
+  - id: link
+    name: 链接
+    syntax: "[文案](https://…)（仅 http/https）"
+  - id: list
+    name: 列表
+    syntax: '- 项 / 1. 项'
+  - id: quote
+    name: 引用
+    syntax: '> 引用行'
+  - id: fence
+    name: 代码块
+    syntax: '三反引号围栏代码块'
+  - id: hr
+    name: 分隔线
+    syntax: '---'
+  - id: table
+    name: 表格
+    syntax: |
+      | 列甲 | 列乙 |
+      | --- | --- |
+      | 值1 | 值2 |
+  - id: details
+    name: 折叠
+    syntax: |
+      :::details 标题
+      折叠正文（可含上表其它语法）
+      :::
+      默认展开：:::details open 标题
+restrictions:
+  - 禁止裸 HTML 标签、事件属性、script
+  - 禁止本局任意 CSS / JS（壳微调 tone_chrome 等另走呈现壳）
+  - 链接协议仅 http / https
