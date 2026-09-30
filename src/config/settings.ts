@@ -113,6 +113,7 @@ export function resolveActiveProfile() {
       baseUrl: env.baseUrl,
       apiKey: env.apiKey,
       model: env.model,
+      models: [env.model],
       createdAt: "",
       updatedAt: "",
     };

@@ -1,12 +1,16 @@
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createApiProfile,
   deleteApiProfile,
   getApiProfile,
+  listApiGroups,
   listApiProfiles,
   probeAndSaveProfileCapabilities,
+  renameApiProfileGroup,
   updateApiProfile,
 } from "../config/api-profiles.js";
+import { discoverRemoteModels } from "../llm/list-models.js";
 import {
   deliveryModeLabel,
   resolveStructuredDeliveryMode,
@@ -94,6 +98,9 @@ function personasPayload(extra: Record<string, unknown> = {}) {
   };
 }
 
+/** 本次进程启动标记。重启后变化，浏览器据此丢掉嗅探缓存。 */
+const processBootId = randomUUID();
+
 export async function handleSettingsApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -115,7 +122,13 @@ export async function handleSettingsApi(
         importedAt: p.importedAt,
       };
     });
-    json(res, 200, { settings, profiles, presets });
+    json(res, 200, {
+      settings,
+      profiles,
+      groups: listApiGroups(),
+      presets,
+      bootId: processBootId,
+    });
     return true;
   }
 
@@ -164,6 +177,7 @@ export async function handleSettingsApi(
     ensureActiveProfileDefault();
     json(res, 200, {
       profiles: listApiProfiles(),
+      groups: listApiGroups(),
       activeProfileId: loadAppSettings().activeProfileId,
     });
     return true;
@@ -175,6 +189,7 @@ export async function handleSettingsApi(
       baseUrl?: string;
       apiKey?: string;
       model?: string;
+      models?: string[];
       reasoningEffort?: string;
     };
     const profile = createApiProfile({
@@ -189,16 +204,103 @@ export async function handleSettingsApi(
       setActiveProfileId(profile.id);
     }
     const reloadedSessions = activate ? sessionManager.reloadAllLlms() : 0;
-    json(res, 201, { profile, activeProfileId: activate ? profile.id : null, reloadedSessions });
+    json(res, 201, {
+      profile,
+      groups: listApiGroups(),
+      activeProfileId: activate ? profile.id : null,
+      reloadedSessions,
+    });
+    return true;
+  }
+
+  if (pathname === "/api/profiles/discover-models" && req.method === "POST") {
+    const body = JSON.parse(await readBody(req)) as {
+      baseUrl?: string;
+      apiKey?: string;
+      profileId?: string;
+    };
+    let baseUrl = body.baseUrl?.trim() ?? "";
+    let apiKey = body.apiKey?.trim() ?? "";
+    if (body.profileId?.trim()) {
+      const profile = getApiProfile(body.profileId.trim());
+      if (!profile) {
+        json(res, 404, { error: "配置不存在" });
+        return true;
+      }
+      if (!baseUrl) baseUrl = profile.baseUrl;
+      if (!apiKey) apiKey = profile.apiKey;
+    }
+    if (!baseUrl) {
+      json(res, 400, { error: "缺少 Base URL" });
+      return true;
+    }
+    if (!apiKey) {
+      json(res, 400, { error: "缺少 API Key" });
+      return true;
+    }
+    try {
+      const found = await discoverRemoteModels(baseUrl, apiKey);
+      json(res, 200, { models: found.models, url: found.url });
+    } catch (err) {
+      json(res, 400, {
+        error: err instanceof Error ? err.message : "嗅探失败",
+      });
+    }
+    return true;
+  }
+
+  const groupMatch = pathname.match(/^\/api\/profile-groups\/([^/]+)$/);
+  if (groupMatch && req.method === "PUT") {
+    const id = decodeURIComponent(groupMatch[1] ?? "");
+    const body = JSON.parse(await readBody(req)) as { name?: string };
+    try {
+      const group = renameApiProfileGroup(id, body.name ?? "");
+      json(res, 200, { group, groups: listApiGroups() });
+    } catch (err) {
+      json(res, 400, {
+        error: err instanceof Error ? err.message : "改组名失败",
+      });
+    }
     return true;
   }
 
   const profileMatch = pathname.match(
-    /^\/api\/profiles\/([^/]+)(\/probe-capabilities)?$/,
+    /^\/api\/profiles\/([^/]+)(\/(?:probe-capabilities|select-model))?$/,
   );
   if (profileMatch) {
     const id = decodeURIComponent(profileMatch[1]);
     const suffix = profileMatch[2];
+
+    if (suffix === "/select-model" && req.method === "POST") {
+      const body = JSON.parse(await readBody(req)) as {
+        model?: string;
+        activate?: boolean;
+      };
+      const model = body.model?.trim() ?? "";
+      if (!model) {
+        json(res, 400, { error: "缺少模型" });
+        return true;
+      }
+      try {
+        const profile = updateApiProfile(id, { model });
+        if (body.activate) setActiveProfileId(profile.id);
+        const settings = loadAppSettings();
+        const reloadedSessions =
+          settings.activeProfileId === profile.id
+            ? sessionManager.reloadAllLlms()
+            : 0;
+        json(res, 200, {
+          profile,
+          activeProfileId: loadAppSettings().activeProfileId,
+          reloadedSessions,
+        });
+      } catch (err) {
+        json(res, 400, {
+          error: err instanceof Error ? err.message : "切换模型失败",
+        });
+      }
+      return true;
+    }
 
     if (suffix === "/probe-capabilities" && req.method === "POST") {
       try {
@@ -240,16 +342,21 @@ export async function handleSettingsApi(
         baseUrl?: string;
         apiKey?: string;
         model?: string;
+        models?: string[];
         reasoningEffort?: string;
       };
       try {
         const profile = updateApiProfile(id, body);
         const settings = loadAppSettings();
         const reloadedSessions =
-          settings.activeProfileId === id
+          settings.activeProfileId === profile.id
             ? sessionManager.reloadAllLlms()
             : 0;
-        json(res, 200, { profile, reloadedSessions });
+        json(res, 200, {
+          profile,
+          groups: listApiGroups(),
+          reloadedSessions,
+        });
       } catch (err) {
         json(res, 404, {
           error: err instanceof Error ? err.message : "更新失败",
@@ -424,6 +531,13 @@ export async function handleSettingsApi(
       }
       return true;
     }
+  }
+
+  if (pathname === "/api/presets/deactivate" && req.method === "POST") {
+    setActivePresetId(null);
+    const reloadedSessions = sessionManager.reloadAllLlms();
+    json(res, 200, { activePresetId: null, reloadedSessions });
+    return true;
   }
 
   const presetMatch = pathname.match(/^\/api\/presets\/([^/]+)(\/activate)?$/);

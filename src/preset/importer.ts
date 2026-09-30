@@ -77,7 +77,6 @@ function readGeneration(raw: SillyTavernPreset): GenerationParameters {
     maxContextTokens: raw.openai_max_context,
     maxOutputTokens: raw.openai_max_tokens,
     stream: raw.stream_openai,
-    reasoningEffort: raw.reasoning_effort,
     verbosity: raw.verbosity,
     seed: raw.seed !== undefined && raw.seed >= 0 ? raw.seed : undefined,
     variants: raw.n,

@@ -131,14 +131,50 @@ export type LlmProvider = {
   ): Promise<CompleteWithToolsResult>;
 };
 
+const JSON_OBJECT_HINT = "请用 JSON 对象回复。";
+
+function messagesMentionJson(messages: ChatMessage[]): boolean {
+  for (const message of messages) {
+    if (typeof message.content === "string" && /json/i.test(message.content)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * OpenAI `response_format: json_object` 要求 messages 里出现 json，否则 400。
+ * 偏好/文风等提示不写这个词；预设夹心也可能丢掉带 JSON 的任务契约。
+ */
+export function ensureJsonObjectPrompt(messages: ChatMessage[]): ChatMessage[] {
+  if (messagesMentionJson(messages)) return messages;
+  const systemIndex = messages.findIndex((message) => message.role === "system");
+  if (systemIndex >= 0) {
+    const current = messages[systemIndex];
+    if (current?.role === "system") {
+      const next = messages.slice();
+      next[systemIndex] = {
+        role: "system",
+        content: `${current.content}\n\n${JSON_OBJECT_HINT}`,
+      };
+      return next;
+    }
+  }
+  return [{ role: "system", content: JSON_OBJECT_HINT }, ...messages];
+}
+
 export function buildRequestBody(
   config: LlmConfig,
   messages: ChatMessage[],
   options?: CompleteOptions & { tools?: ToolDefinition[]; stream?: boolean },
 ): Record<string, unknown> {
+  const requestMessages =
+    options?.responseFormat === "json_object"
+      ? ensureJsonObjectPrompt(messages)
+      : messages;
   const body: Record<string, unknown> = {
     model: config.model,
-    messages,
+    messages: requestMessages,
   };
 
   if (options?.tools?.length) {
@@ -150,7 +186,7 @@ export function buildRequestBody(
   applyOpenAiGeneration(body, options?.generation ?? {}, config.model, {
     reasoningEffort: config.reasoningEffort,
   });
-  // 对齐 imyai：带 tools 时按型号改写思考参数（非 GLM 强制 none）
+  // 带 tools 时按型号改写思考参数（Gemini 3 / GLM-5.3 保留合法档，其余强制 none）
   forceReasoningEffortNoneWhenTools(body, config.model);
 
   if (options?.responseFormat === "json_object") {
@@ -313,10 +349,8 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       usage?: unknown;
       choices?: Array<{ message?: Record<string, unknown> }>;
     };
+    // 空正文不抛错：游玩/Worker 会落「本轮场面未写完」等占位，仍可重 roll
     const parts = extractMessageParts(data.choices?.[0]?.message);
-    if (!parts.content && parts.toolCalls.length === 0) {
-      throw new Error("LLM returned empty content");
-    }
     return {
       content: parts.content ?? "",
       reasoning: parts.reasoning,
@@ -347,10 +381,8 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       throw new Error("LLM stream response has no body");
     }
 
+    // 空流不抛错：下游会落占位正文，消息正常渲染以便重 roll
     const parts = await consumeOpenAiToolStream(response.body, callbacks);
-    if (!parts.content && !parts.reasoning) {
-      throw new Error("LLM stream returned empty content");
-    }
     return {
       content: parts.content ?? parts.reasoning ?? "",
       reasoning: parts.reasoning || undefined,

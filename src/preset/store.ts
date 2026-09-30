@@ -4,6 +4,16 @@ import type { PresetPackage } from "../types/preset.js";
 import { ensureUserDataDirs, getPresetsDir } from "../config/user-data-dir.js";
 import { importSillyTavernPreset } from "./importer.js";
 
+/** 旧预设里的思考强度不再使用；读到就从文件里删掉。 */
+function withoutReasoningEffort(preset: PresetPackage, filePath: string): PresetPackage {
+  if (preset.generation?.reasoningEffort === undefined) return preset;
+  const generation = { ...preset.generation };
+  delete generation.reasoningEffort;
+  const next = { ...preset, generation };
+  writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
 function presetPath(id: string): string {
   return path.join(getPresetsDir(), `${id}.json`);
 }
@@ -20,8 +30,9 @@ export function listPresets(): PresetPackage[] {
   const presets: PresetPackage[] = [];
   for (const file of files) {
     try {
-      const raw = readFileSync(path.join(getPresetsDir(), file), "utf8");
-      presets.push(JSON.parse(raw) as PresetPackage);
+      const filePath = path.join(getPresetsDir(), file);
+      const raw = readFileSync(filePath, "utf8");
+      presets.push(withoutReasoningEffort(JSON.parse(raw) as PresetPackage, filePath));
     } catch {
       /* skip corrupt files */
     }
@@ -31,8 +42,9 @@ export function listPresets(): PresetPackage[] {
 
 export function getPreset(id: string): PresetPackage | null {
   try {
-    const raw = readFileSync(presetPath(id), "utf8");
-    return JSON.parse(raw) as PresetPackage;
+    const filePath = presetPath(id);
+    const raw = readFileSync(filePath, "utf8");
+    return withoutReasoningEffort(JSON.parse(raw) as PresetPackage, filePath);
   } catch {
     return null;
   }

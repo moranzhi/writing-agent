@@ -71,6 +71,7 @@ const server = createServer(async (req, res) => {
           "GET /api/settings",
           "GET /api/profiles",
           "POST /api/profiles",
+          "POST /api/profiles/discover-models",
           "GET /api/presets",
           "GET /api/books",
           "GET /api/skills",

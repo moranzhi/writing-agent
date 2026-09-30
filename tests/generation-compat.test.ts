@@ -6,7 +6,9 @@ import {
   classifyGlmThinking,
   fetchWithGenerationCompat,
   forceReasoningEffortNoneWhenTools,
+  isReasoningMandatoryError,
   isToolsReasoningEffortConflictError,
+  modelRejectsDisabledReasoning,
   parseRejectedGenerationField,
   sanitizeReasoningEffort,
   sanitizeVerbosity,
@@ -178,10 +180,56 @@ describe("forceReasoningEffortNoneWhenTools", () => {
     expect(body.thinking).toEqual({ type: "disabled" });
   });
 
+  it("keeps gemini 3.8 on low when tools would otherwise disable reasoning", () => {
+    const body: Record<string, unknown> = {
+      model: "google/gemini-3.8-flash",
+      tools: [{ type: "function", function: { name: "x" } }],
+    };
+    forceReasoningEffortNoneWhenTools(body, "google/gemini-3.8-flash");
+    expect(body.reasoning_effort).toBe("low");
+    expect(body.reasoning).toEqual({ effort: "low" });
+  });
+
+  it("maps gemini 3.8 max down to high and keeps medium", () => {
+    const maxBody: Record<string, unknown> = {
+      model: "google/gemini-3.8-flash",
+      tools: [{ type: "function", function: { name: "x" } }],
+      reasoning_effort: "max",
+    };
+    forceReasoningEffortNoneWhenTools(maxBody, "google/gemini-3.8-flash");
+    expect(maxBody.reasoning_effort).toBe("high");
+    expect(maxBody.reasoning).toEqual({ effort: "high" });
+
+    const midBody: Record<string, unknown> = { model: "google/gemini-3.8-flash" };
+    applyOpenAiGeneration(midBody, { reasoningEffort: "medium" }, "google/gemini-3.8-flash");
+    expect(midBody.reasoning_effort).toBe("medium");
+    expect(midBody.reasoning).toEqual({ effort: "medium" });
+  });
+
   it("leaves body alone without tools", () => {
     const body: Record<string, unknown> = { reasoning_effort: "high" };
     forceReasoningEffortNoneWhenTools(body);
     expect(body.reasoning_effort).toBe("high");
+  });
+});
+
+describe("isReasoningMandatoryError", () => {
+  it("detects the OpenRouter mandatory-reasoning payload", () => {
+    expect(modelRejectsDisabledReasoning("google/gemini-3.8-flash")).toBe(true);
+    expect(modelRejectsDisabledReasoning("gemini-2.5-flash")).toBe(false);
+    expect(
+      isReasoningMandatoryError(
+        JSON.stringify({
+          error: {
+            message:
+              "Reasoning is mandatory for this endpoint and cannot be disabled.",
+            code: 400,
+            metadata: { provider_name: null },
+          },
+        }),
+        400,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -329,6 +377,37 @@ describe("fetchWithGenerationCompat", () => {
     expect(sent[0].reasoning_effort).toBeUndefined();
     expect(sent[1].reasoning_effort).toBe("none");
   });
+
+  it("retries a mandatory-reasoning 400 by lifting none to low", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const response = await fetchWithGenerationCompat(async (body) => {
+      sent.push({ ...body });
+      if (body.reasoning_effort === "none") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message:
+                "Reasoning is mandatory for this endpoint and cannot be disabled.",
+              code: 400,
+              metadata: { provider_name: null },
+            },
+          }),
+          { status: 400 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, {
+      model: "google/gemini-3.8-flash",
+      tools: [{ type: "function", function: { name: "run" } }],
+      reasoning_effort: "none",
+      messages: [],
+    });
+
+    expect(response.ok).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[1].reasoning_effort).toBe("low");
+    expect(sent[1].reasoning).toEqual({ effort: "low" });
+  });
 });
 
 describe("buildRequestBody", () => {
@@ -387,6 +466,43 @@ describe("buildRequestBody", () => {
     expect(body.reasoning_effort).toBe("low");
   });
 
+  it("maps gemini 3.8 none and minimal to low", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "k",
+      model: "google/gemini-3.8-flash",
+      reasoningEffort: "none",
+    };
+    const body = buildRequestBody(config, messages, {});
+    expect(body.reasoning_effort).toBe("low");
+    expect(body.reasoning).toEqual({ effort: "low" });
+
+    const minimal = buildRequestBody(
+      { ...config, reasoningEffort: "minimal" },
+      messages,
+      {},
+    );
+    expect(minimal.reasoning_effort).toBe("low");
+  });
+
+  it("uses low for gemini 3.8 tool calls when effort is omitted", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "k",
+      model: "google/gemini-3.8-flash",
+    };
+    const body = buildRequestBody(config, messages, {
+      tools: [
+        {
+          type: "function",
+          function: { name: "run_worker", parameters: { type: "object" } },
+        },
+      ],
+    });
+    expect(body.reasoning_effort).toBe("low");
+    expect(body.reasoning).toEqual({ effort: "low" });
+  });
+
   it("forces reasoning_effort none when tools are attached on non-glm", () => {
     const config: LlmConfig = {
       baseUrl: "https://example.test/v1",
@@ -423,6 +539,62 @@ describe("buildRequestBody", () => {
     });
     expect(body.reasoning_effort).toBe("max");
     expect(body.thinking).toEqual({ type: "enabled" });
+  });
+
+  it("adds the word json when json_object prompts omit it", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      model: "gpt-4o",
+    };
+    const body = buildRequestBody(
+      config,
+      [{ role: "user", content: "只输出对象，列出候选。" }],
+      { responseFormat: "json_object" },
+    );
+    expect(body.response_format).toEqual({ type: "json_object" });
+    const sent = body.messages as Array<{ role: string; content: string }>;
+    expect(sent[0]).toEqual({
+      role: "system",
+      content: "请用 JSON 对象回复。",
+    });
+    expect(sent.some((message) => /json/i.test(message.content))).toBe(true);
+  });
+
+  it("appends the json hint to an existing system message", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      model: "gpt-4o",
+    };
+    const body = buildRequestBody(
+      config,
+      [
+        { role: "system", content: "你正在提取文风包。" },
+        { role: "user", content: "写得冷一点。" },
+      ],
+      { responseFormat: "json_object" },
+    );
+    const sent = body.messages as Array<{ role: string; content: string }>;
+    expect(sent[0]?.content).toContain("你正在提取文风包。");
+    expect(sent[0]?.content).toContain("请用 JSON 对象回复。");
+    expect(sent[1]?.content).toBe("写得冷一点。");
+  });
+
+  it("leaves a json_object prompt unchanged when it already says json", () => {
+    const config: LlmConfig = {
+      baseUrl: "https://example.test/v1",
+      apiKey: "k",
+      model: "gpt-4o",
+    };
+    const messages = [
+      { role: "system" as const, content: "输出一个 JSON 对象。" },
+      { role: "user" as const, content: "继续。" },
+    ];
+    const body = buildRequestBody(config, messages, {
+      responseFormat: "json_object",
+    });
+    expect(body.messages).toBe(messages);
   });
 
   it("does not forward top_k from an imported ST preset", () => {

@@ -7,8 +7,10 @@ import type { GenerationParameters } from "../types/preset.js";
  * - 推理模型去掉 temperature / top_p / penalty
  * - o 系列与 gpt-5 用 max_completion_tokens
  * - GLM：按型号映射 thinking / reasoning_effort（5.3 拒收 none；旧版拒收 effort）
- * - 带 tools 时：非 GLM 强制 reasoning_effort=none（gpt-5.6-luna 等）；GLM-5.3 保留合法档
- * - 仍 400 时按错误信息剥掉不支持字段再试；tools+reasoning 冲突则按型号改写再试
+ * - Gemini 3（如 gemini-3.8-flash）：思考不能关，none/minimal 抬到 low
+ * - 带 tools 时：非上述型号强制 reasoning_effort=none（gpt-5.6-luna 等）；始终开启的型号保留合法档
+ * - 仍 400 时按错误信息剥掉不支持字段再试；tools 冲突改 none，
+ *   “Reasoning is mandatory … cannot be disabled” 则抬到 low 再试
  */
 
 const REASONING_EFFORT_VALUES = [
@@ -60,6 +62,7 @@ export const STRIPPABLE_GENERATION_FIELDS = new Set([
   "stop",
   "response_format",
   "stream_options",
+  "reasoning",
 ]);
 
 export type ChatModelCompat = {
@@ -109,6 +112,42 @@ export function classifyGlmThinking(model: string): GlmThinkingKind {
   return "thinking_only";
 }
 
+/**
+ * Gemini 3：OpenRouter 拒绝关闭思考。
+ * 3.8 合法档只有 low / medium / high（minimal 也会 400）。
+ */
+export function modelRejectsDisabledReasoning(model: string): boolean {
+  const id = modelLeaf(model);
+  return /^gemini-3(?:[.\-]|$)/.test(id);
+}
+
+function isGemini38(model: string): boolean {
+  return /gemini-3\.8/.test(modelLeaf(model));
+}
+
+/** 落到 Gemini 思考档。未设置或 none 视为最低合法档 low。 */
+function mapGeminiEffort(
+  model: string,
+  effort: ReasoningEffort | undefined,
+): "minimal" | "low" | "medium" | "high" {
+  if (!effort || effort === "none") return "low";
+  if (effort === "minimal") return isGemini38(model) ? "low" : "minimal";
+  if (effort === "low") return "low";
+  if (effort === "medium") return "medium";
+  return "high";
+}
+
+function writeGeminiReasoning(
+  body: Record<string, unknown>,
+  model: string,
+  effort: ReasoningEffort | undefined,
+): void {
+  const mapped = mapGeminiEffort(model, effort);
+  body.reasoning_effort = mapped;
+  body.reasoning = { effort: mapped };
+  if (isThinkingDisabled(body.thinking)) delete body.thinking;
+}
+
 function mapGlm53Effort(
   effort: ReasoningEffort,
 ): "low" | "high" | "max" {
@@ -136,6 +175,10 @@ function applyReasoningToBody(
 
   const glm = classifyGlmThinking(model);
   if (glm === "none") {
+    if (modelRejectsDisabledReasoning(model)) {
+      writeGeminiReasoning(body, model, effort);
+      return;
+    }
     body.reasoning_effort = effort;
     return;
   }
@@ -240,7 +283,8 @@ export function applyOpenAiGeneration(
 
 /**
  * 带 function tools 时改写思考参数。
- * - 非 GLM（如 gpt-5.6-luna）：须显式 reasoning_effort=none
+ * - 非 GLM、且允许关闭思考（如 gpt-5.6-luna）：须显式 reasoning_effort=none
+ * - Gemini 3：不能 none/minimal，缺省或关闭档抬到 low
  * - GLM-5.3：不能 none，保留/压到合法档（默认 low）
  * - GLM-5.2 / 旧版：thinking disabled，去掉 effort
  */
@@ -260,6 +304,14 @@ export function forceReasoningEffortNoneWhenTools(
     const current = sanitizeReasoningEffort(body.reasoning_effort) ?? "low";
     body.thinking = { type: "enabled" };
     body.reasoning_effort = mapGlm53Effort(current);
+    return;
+  }
+  if (modelRejectsDisabledReasoning(modelId)) {
+    writeGeminiReasoning(
+      body,
+      modelId,
+      sanitizeReasoningEffort(body.reasoning_effort),
+    );
     return;
   }
   if (glm === "effort_full" || glm === "thinking_only") {
@@ -300,6 +352,79 @@ export function isToolsReasoningEffortConflictError(
     );
 
   return mentionsTools && mentionsReasoningEffort && conflict;
+}
+
+/** OpenRouter 等：该端点必须开思考，显式 none / disabled 会被 400。 */
+export function isReasoningMandatoryError(
+  errorText: string,
+  status?: number,
+): boolean {
+  if (status != null && status !== 400 && status !== 422) return false;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(errorText);
+  } catch {
+    parsed = undefined;
+  }
+  const message = `${readErrorMessage(parsed)}\n${errorText}`.toLowerCase();
+  return (
+    /reasoning is mandatory/.test(message) && /cannot be disabled/.test(message)
+  );
+}
+
+function isThinkingDisabled(thinking: unknown): boolean {
+  return (
+    !!thinking &&
+    typeof thinking === "object" &&
+    (thinking as { type?: unknown }).type === "disabled"
+  );
+}
+
+/**
+ * 把关闭思考的字段抬到合法最低档 low。
+ * 只改 none / minimal / disabled；已经是 low 及以上则不动，避免空转重试。
+ */
+export function applyMandatoryReasoningFloor(
+  body: Record<string, unknown>,
+  tried: Set<string>,
+): boolean {
+  if (tried.has("reasoning_mandatory_floor")) return false;
+
+  let changed = false;
+  if (isThinkingDisabled(body.thinking)) {
+    body.thinking = { type: "enabled" };
+    changed = true;
+  }
+
+  const effort = sanitizeReasoningEffort(body.reasoning_effort);
+  if (effort === "none" || effort === "minimal") {
+    body.reasoning_effort = "low";
+    body.reasoning = { effort: "low" };
+    changed = true;
+  }
+
+  if (body.reasoning && typeof body.reasoning === "object") {
+    const reasoning = { ...(body.reasoning as Record<string, unknown>) };
+    const effortValue =
+      typeof reasoning.effort === "string"
+        ? reasoning.effort.trim().toLowerCase()
+        : "";
+    if (
+      reasoning.enabled === false ||
+      effortValue === "none" ||
+      effortValue === "minimal"
+    ) {
+      delete reasoning.enabled;
+      reasoning.effort = "low";
+      body.reasoning = reasoning;
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+  tried.add("reasoning_mandatory_floor");
+  return true;
 }
 
 function readErrorMessage(raw: unknown): string {
@@ -449,6 +574,13 @@ export async function fetchWithGenerationCompat(
     if (last.ok || (last.status !== 400 && last.status !== 422)) return last;
     const text = await last.text();
     const next = { ...body };
+
+    if (isReasoningMandatoryError(text, last.status)) {
+      if (applyMandatoryReasoningFloor(next, tried)) {
+        body = next;
+        continue;
+      }
+    }
 
     if (isToolsReasoningEffortConflictError(text, last.status)) {
       if (applyToolsReasoningEffortNone(next, tried)) {

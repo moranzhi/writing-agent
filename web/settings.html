@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>设置 · Writing Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="/theme-init.js"></script>
     <link rel="stylesheet" href="/settings.css" />
   </head>
   <body class="settings-page">
@@ -44,6 +51,17 @@
 
         <div class="st-body">
           <section class="settings-section" id="section-api">
+            <div class="profiles-toolbar">
+              <label class="profiles-search">
+                <span class="visually-hidden">搜索 API 配置</span>
+                <input
+                  type="search"
+                  id="profile-search"
+                  placeholder="搜索组名、模型、URL…"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
             <div id="profiles-list" class="card-list"></div>
           </section>
 
@@ -181,16 +199,33 @@
         </label>
         <label>
           Base URL
-          <input name="baseUrl" required placeholder="https://api.deepseek.com" />
+          <input name="baseUrl" required placeholder="https://api.deepseek.com/v1" />
         </label>
         <label>
           API Key
           <input name="apiKey" type="password" placeholder="sk-…" autocomplete="off" />
         </label>
-        <label>
-          Model
-          <input name="model" required placeholder="deepseek-chat" />
-        </label>
+        <div id="profile-model-lock" class="model-lock" hidden>
+          <span class="model-field-label">型号</span>
+          <p id="profile-model-lock-value" class="model-lock-value"></p>
+          <span class="field-hint">型号是这一行的身份，探测跟着它走。要换型号，在组里点「添加型号」。</span>
+        </div>
+        <div id="profile-model-editor" class="model-field">
+          <label>
+            型号
+            <input name="model" placeholder="deepseek-chat" autocomplete="off" />
+          </label>
+          <span class="field-hint">保存的是这一格里的完整型号。下面的筛选只用来查找，点一条才会把完整名字填进来。</span>
+          <div class="model-field-row">
+            <input id="profile-model-filter" type="search" placeholder="筛选嗅探结果，如 gemini" autocomplete="off" aria-label="筛选嗅探结果" />
+            <button type="button" class="btn-secondary" id="profile-sniff">嗅探</button>
+          </div>
+          <p class="field-hint" id="profile-sniff-status" hidden></p>
+          <div id="profile-model-pick" class="model-pick">
+            <div id="profile-model-list" class="model-pick-list" role="listbox" aria-label="嗅探结果"></div>
+            <p class="model-pick-empty" id="profile-model-empty" hidden></p>
+          </div>
+        </div>
         <label>
           思考强度
           <select name="reasoningEffort">
@@ -201,12 +236,32 @@
             <option value="high">high · 增强</option>
             <option value="max">max · 深度</option>
           </select>
-          <span class="field-hint">写入请求的思考参数。GLM-5.3：仅 low/high/max（none 会映射为 low），并附带 thinking.enabled；旧 GLM 只用 thinking、不发 reasoning_effort。探测始终用 low。带 function tools 时：非 GLM 强制 none；GLM-5.3 保留合法档。</span>
+          <span class="field-hint">只在 API 配置里设置，预设不再带思考强度。GLM-5.3：仅 low/high/max（none 会映射为 low），并附带 thinking.enabled；旧 GLM 只用 thinking、不发 reasoning_effort。Gemini 3.8：仅 low/medium/high，none 与 minimal 都会映射为 low，并附带 reasoning.effort。探测始终用 low。带 function tools 时：多数型号强制 none；GLM-5.3 与 Gemini 3 保留合法档。</span>
         </label>
         <div class="dialog-actions">
           <button type="button" id="profile-cancel" class="btn-secondary">取消</button>
           <button type="button" id="profile-save" class="btn-secondary">仅保存</button>
           <button type="submit" class="btn-primary">保存并选用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="add-model-dialog" class="profile-dialog">
+      <form id="add-model-form" method="dialog">
+        <h3>添加型号</h3>
+        <p class="field-hint" id="add-model-group"></p>
+        <div class="model-field-row">
+          <input id="add-model-filter" type="search" placeholder="筛选嗅探结果，如 gemini" autocomplete="off" aria-label="筛选嗅探结果" />
+          <button type="button" class="btn-secondary" id="add-model-sniff">嗅探</button>
+        </div>
+        <p class="field-hint" id="add-model-status" hidden></p>
+        <div id="add-model-pick" class="model-pick">
+          <div id="add-model-list" class="model-pick-list" role="listbox" aria-label="嗅探结果"></div>
+          <p class="model-pick-empty" id="add-model-empty" hidden></p>
+        </div>
+        <span class="field-hint">点一条会新建一行并选用。组里已有同名型号时，直接选用那一行，不改写别的型号。</span>
+        <div class="dialog-actions">
+          <button type="button" id="add-model-cancel" class="btn-secondary">关闭</button>
         </div>
       </form>
     </dialog>

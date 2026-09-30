@@ -57,9 +57,6 @@ export function normalizeGeneration(
 
   if (typeof raw.stream === "boolean") out.stream = raw.stream;
 
-  const reasoningEffort = optionalString(raw.reasoningEffort);
-  if (reasoningEffort !== undefined) out.reasoningEffort = reasoningEffort;
-
   const verbosity = optionalString(raw.verbosity);
   if (verbosity !== undefined) out.verbosity = verbosity;
 

@@ -2,7 +2,7 @@ import { loadAppSettings } from "../config/settings.js";
 import type { PersonaDirective } from "../persona/store.js";
 import { frameMessagesWithPreset } from "../preset/play-frame.js";
 import { resolveActivePreset } from "../preset/store.js";
-import type { PresetPackage } from "../types/preset.js";
+import type { GenerationParameters, PresetPackage } from "../types/preset.js";
 import type {
   ChatMessage,
   CompleteOptions,
@@ -23,9 +23,20 @@ function readActivePreset(): PresetPackage | null {
   return resolveActivePreset(loadAppSettings().activePresetId);
 }
 
+/** 思考强度只跟 API 配置，不跟预设。 */
+function generationWithoutReasoningEffort(
+  generation: GenerationParameters | undefined,
+): GenerationParameters | undefined {
+  if (!generation || generation.reasoningEffort === undefined) return generation;
+  const next = { ...generation };
+  delete next.reasoningEffort;
+  return next;
+}
+
 /**
  * 统计在内、预设在外：痕迹里的 messages / generation 就是发给模型的那一份。
- * 有选用预设时：在此按 prompt_order 夹心包裹，并合并 generation。
+ * 有选用预设时：在此按 prompt_order 夹心包裹，并合并采样参数。
+ * 预设上的思考强度不带入，改由 API 配置决定。
  */
 export function wrapLlmForSession(
   inner: LlmProvider,
@@ -58,7 +69,9 @@ export class PresetLlmProvider implements LlmProvider {
       messages: frameMessagesWithPreset(preset, messages, persona),
       options: {
         ...options,
-        generation: options?.generation ?? preset.generation,
+        generation: generationWithoutReasoningEffort(
+          options?.generation ?? preset.generation,
+        ),
       },
     };
   }

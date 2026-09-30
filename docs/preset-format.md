@@ -133,7 +133,6 @@ type ImportedGenerationParameters = {
   openai_max_context?: number;
   openai_max_tokens?: number;
   stream_openai?: boolean;
-  reasoning_effort?: string;
   verbosity?: string;
   seed?: number;
   n?: number;
@@ -147,7 +146,8 @@ type ImportedGenerationParameters = {
   temperature、top_p、top_k、min_p、frequency_penalty、presence_penalty、repetition_penalty。
 
 请求容量与行为参数
-  openai_max_context、openai_max_tokens、stream_openai、reasoning_effort、verbosity、seed、n。
+  openai_max_context、openai_max_tokens、stream_openai、verbosity、seed、n。
+  思考强度不进预设，只在 API 配置里设置。
 ```
 
 不同供应商不一定支持全部字段。导入后应先保存原始字段，再由 LLM adapter 决定哪些字段可以发送。
@@ -200,7 +200,6 @@ type GenerationParameters = {
   maxContextTokens?: number;
   maxOutputTokens?: number;
   stream?: boolean;
-  reasoningEffort?: string;
   verbosity?: string;
   seed?: number;
   variants?: number;

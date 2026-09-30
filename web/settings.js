@@ -1,6 +1,19 @@
+import {
+  apiProfileUsageRank,
+  filterUsedApiProfiles,
+  forgetApiProfileUsage,
+  loadApiProfileUsage,
+  pruneApiProfileUsage,
+  recordApiProfileUsage,
+  seedApiProfileUsage,
+  sortByApiProfileUsage,
+} from "./api-profile-usage.js";
+import { readSniffModels, writeSniffModels } from "./model-sniff-cache.js";
+
 let state = {
   settings: { activeProfileId: null, activePresetId: null },
   profiles: [],
+  groups: [],
   presets: [],
   personas: [],
   activePersonaId: null,
@@ -8,6 +21,15 @@ let state = {
 };
 
 let editingProfileId = null;
+/** 当前编辑框里嗅探到的型号，仅用于按 Model 输入筛选 */
+let dialogKnownModels = [];
+let dialogSniffBase = "";
+/** 本次服务进程的启动标记；对不上就不读嗅探缓存 */
+let sniffBootId = "";
+let sniffRestoreSeq = 0;
+/** 组 id → 是否展开显示该组全部配置（默认只显示曾选用）；有搜索词时按匹配显示 */
+const showAllProfilesByGroup = new Set();
+let profileSearchQuery = "";
 let editingPersonaId = null;
 let activeSection = "api";
 let lastImportedPresetId = null;
@@ -17,6 +39,7 @@ const expandedPresetEntries = new Map();
 const openPresetEntryId = new Map();
 
 const profilesListEl = document.getElementById("profiles-list");
+const profileSearchEl = document.getElementById("profile-search");
 const personasListEl = document.getElementById("personas-list");
 const presetsListEl = document.getElementById("presets-list");
 const importReportEl = document.getElementById("import-report");
@@ -137,7 +160,8 @@ function renderPanelHeader() {
   panelActionsEl.innerHTML = "";
   if (activeSection === "api") {
     panelTitleEl.textContent = "API";
-    panelSubtitleEl.textContent = "保存后点「选用」才会用于对话";
+    panelSubtitleEl.textContent =
+      "一组一张卡，一行一个型号。添加型号不会改掉已有行，探测也留在原行";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-primary";
@@ -160,7 +184,7 @@ function renderPanelHeader() {
   } else if (activeSection === "preset") {
     panelTitleEl.textContent = "预设";
     panelSubtitleEl.textContent =
-      "导入后可启用/编辑条目；选用后注入全部 LLM 请求";
+      "导入后可启用/编辑条目；选用后注入全部 LLM 请求。再点「使用中」即不使用任何预设";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn-primary";
@@ -173,7 +197,10 @@ function renderPanelHeader() {
   }
 }
 
-function activateButtonHtml(active, id, action) {
+function activateButtonHtml(active, id, action, { toggleOff = false } = {}) {
+  if (active && toggleOff) {
+    return `<button type="button" class="btn-active-label is-toggle" data-action="${action}" data-id="${id}" title="再点一次即不使用预设">✓ 使用中</button>`;
+  }
   if (active) {
     return `<button type="button" class="btn-active-label" disabled>✓ 使用中</button>`;
   }
@@ -205,6 +232,88 @@ function capabilityBadge(caps) {
   </div>`;
 }
 
+function escapeAttr(text) {
+  return escapeHtml(text).replace(/"/g, "&quot;");
+}
+
+function profileMatchesQuery(profile, group, query) {
+  if (!query) return true;
+  const hay = [
+    group?.name,
+    group?.baseUrl,
+    profile.name,
+    profile.model,
+    profile.baseUrl,
+    profile.reasoningEffort,
+  ]
+    .map((part) => String(part || "").toLowerCase())
+    .join("\n");
+  return hay.includes(query);
+}
+
+function capabilityLine(caps) {
+  if (!caps || !caps.testedAt) {
+    return `<span class="cap-unknown">能力未探测</span>`;
+  }
+  const mode =
+    caps.jsonSchema === "ok"
+      ? "JSON Schema"
+      : caps.forcedTool === "ok"
+        ? "强制 Tool"
+        : caps.jsonObject === "ok"
+          ? "JSON Object"
+          : "纯文本";
+  return `投递 ${escapeHtml(mode)}`;
+}
+
+function renderModelRow(p) {
+  const active = p.id === state.settings.activeProfileId;
+  const used = Boolean(loadApiProfileUsage()[p.id]);
+  const row = document.createElement("div");
+  row.className = `profile-model-row${active ? " is-active" : ""}`;
+  const metaParts = [
+    p.name && p.name !== p.model ? p.name : "",
+    p.reasoningEffort ? `思考 ${p.reasoningEffort}` : "",
+  ].filter(Boolean);
+  const forget = !active && used
+    ? `<button type="button" data-action="forget-usage" data-id="${escapeAttr(p.id)}" title="移出曾用记录，配置仍保留">移出曾用</button>`
+    : "";
+  row.innerHTML = `
+    <div class="profile-model-row-main">
+      <div class="profile-model-row-title">
+        <span>${escapeHtml(p.model || p.name || "未命名")}</span>
+        ${active ? '<span class="badge">当前</span>' : ""}
+      </div>
+      <div class="profile-model-row-meta">
+        ${metaParts.length ? `${escapeHtml(metaParts.join(" · "))} · ` : ""}
+        ${capabilityLine(p.capabilities)}
+      </div>
+      <div class="test-result" id="test-${escapeAttr(p.id)}"></div>
+    </div>
+    <div class="profile-model-row-actions">
+      ${activateButtonHtml(active, p.id, "activate-profile")}
+      <button type="button" data-action="edit-profile" data-id="${escapeAttr(p.id)}">编辑</button>
+      <button type="button" data-action="probe-capabilities" data-id="${escapeAttr(p.id)}">探测</button>
+      ${forget}
+      <button type="button" class="btn-danger" data-action="delete-profile" data-id="${escapeAttr(p.id)}">删除</button>
+    </div>`;
+  return row;
+}
+
+function visibleGroupMembers(members, group, usage, activeId) {
+  const query = profileSearchQuery.trim().toLowerCase();
+  const showAll = showAllProfilesByGroup.has(group.id) || Boolean(query);
+  let list = showAll
+    ? sortByApiProfileUsage(members, (profile) =>
+        apiProfileUsageRank(profile.id, usage),
+      )
+    : filterUsedApiProfiles(members, usage, activeId);
+  if (query) {
+    list = list.filter((profile) => profileMatchesQuery(profile, group, query));
+  }
+  return { list, showAll, query };
+}
+
 function renderProfiles() {
   profilesListEl.innerHTML = "";
   if (!state.profiles.length) {
@@ -213,35 +322,131 @@ function renderProfiles() {
     return;
   }
 
-  for (const p of state.profiles) {
-    const active = p.id === state.settings.activeProfileId;
-    const card = document.createElement("div");
-    card.className = `config-card${active ? " active" : ""}`;
+  const usage = loadApiProfileUsage();
+  const activeId = state.settings.activeProfileId;
+  const query = profileSearchQuery.trim().toLowerCase();
+  const groups = state.groups.length
+    ? state.groups
+    : [{ id: "", name: "未分组", baseUrl: "" }];
+  const seen = new Set();
+  let shownGroups = 0;
+
+  for (const group of groups) {
+    const members = state.profiles.filter((p) => (p.groupId || "") === group.id);
+    if (!members.length) continue;
+    for (const member of members) seen.add(member.id);
+
+    const { list: visible, showAll } = visibleGroupMembers(
+      members,
+      group,
+      usage,
+      activeId,
+    );
+    if (query && !visible.length) continue;
+
+    const hasActive = members.some((p) => p.id === activeId);
+    const sample = members[0];
+    const hidden = members.length - visible.length;
+    const countLabel = query
+      ? `匹配 ${visible.length} / ${members.length}`
+      : showAll
+        ? `${members.length} 个模型`
+        : hidden > 0
+          ? `曾用 ${visible.length} / 共 ${members.length}`
+          : `${members.length} 个模型`;
+    const toggle =
+      !query && members.length > 1
+        ? `<button
+            type="button"
+            class="profile-group-toggle"
+            data-action="toggle-group-all"
+            data-id="${escapeAttr(group.id)}"
+          >${showAll ? "只看曾用" : "显示全部"}</button>`
+        : "";
+
+    const card = document.createElement("section");
+    card.className = `config-card profile-group-card${hasActive ? " active" : ""}`;
     card.innerHTML = `
-      <div class="config-card-head">
-        <div class="config-card-icon api">${escapeHtml(p.name.charAt(0).toUpperCase())}</div>
-        <div class="config-card-info">
-          <div class="config-card-title">
-            ${escapeHtml(p.name)}
-            ${active ? '<span class="badge">当前</span>' : ""}
+      <div class="profile-group-card-head">
+        <div class="config-card-icon api">${escapeHtml(
+          (group.name || "G").charAt(0).toUpperCase(),
+        )}</div>
+        <div class="profile-group-card-info">
+          <div class="profile-group-card-title-row">
+            <label class="profile-group-name">
+              <span class="visually-hidden">组名</span>
+              <input
+                type="text"
+                data-action="rename-group"
+                data-id="${escapeAttr(group.id)}"
+                value="${escapeAttr(group.name)}"
+                aria-label="组名"
+                ${group.id ? "" : "disabled"}
+              />
+            </label>
+            ${hasActive ? '<span class="badge">当前组</span>' : ""}
+            <span class="profile-group-count">${escapeHtml(countLabel)}</span>
+            ${toggle}
+            ${
+              group.id
+                ? `<button type="button" class="profile-group-toggle" data-action="add-model" data-id="${escapeAttr(group.id)}">添加型号</button>`
+                : ""
+            }
           </div>
-          <div class="config-card-meta">${escapeHtml(p.model)} · ${escapeHtml(p.baseUrl)}</div>
-          <div class="config-card-meta">Key: ${escapeHtml(maskKey(p.apiKey))}${
-            p.reasoningEffort
-              ? ` · 思考: ${escapeHtml(p.reasoningEffort)}`
-              : ""
-          }</div>
-          ${capabilityBadge(p.capabilities)}
+          <div class="profile-group-meta">
+            ${escapeHtml(group.baseUrl || sample?.baseUrl || "")}
+            ${sample ? ` · Key: ${escapeHtml(maskKey(sample.apiKey))}` : ""}
+          </div>
         </div>
-      </div>
-      <div class="config-card-actions">
-        ${activateButtonHtml(active, p.id, "activate-profile")}
-        <button type="button" data-action="edit-profile" data-id="${p.id}">编辑</button>
-        <button type="button" data-action="probe-capabilities" data-id="${p.id}">探测</button>
-        <button type="button" class="btn-danger" data-action="delete-profile" data-id="${p.id}">删除</button>
-      </div>
-      <div class="test-result" id="test-${p.id}"></div>`;
+      </div>`;
+
+    if (!visible.length) {
+      const empty = document.createElement("p");
+      empty.className = "profile-group-empty";
+      empty.textContent = query
+        ? "没有匹配的模型"
+        : "本组还没有曾选用过的型号。点「显示全部」，或「添加型号」。";
+      card.appendChild(empty);
+    } else {
+      const rows = document.createElement("div");
+      rows.className = "profile-model-rows";
+      for (const p of visible) rows.appendChild(renderModelRow(p));
+      card.appendChild(rows);
+    }
+
     profilesListEl.appendChild(card);
+    shownGroups += 1;
+  }
+
+  const loose = state.profiles.filter((p) => !seen.has(p.id));
+  const looseVisible = query
+    ? loose.filter((p) => profileMatchesQuery(p, { name: "未分组" }, query))
+    : loose;
+  if (looseVisible.length) {
+    const card = document.createElement("section");
+    card.className = "config-card profile-group-card";
+    card.innerHTML = `
+      <div class="profile-group-card-head">
+        <div class="config-card-icon api">?</div>
+        <div class="profile-group-card-info">
+          <div class="profile-group-card-title-row">
+            <strong>未分组</strong>
+            <span class="profile-group-count">${looseVisible.length} 个模型</span>
+          </div>
+        </div>
+      </div>`;
+    const rows = document.createElement("div");
+    rows.className = "profile-model-rows";
+    for (const p of looseVisible) rows.appendChild(renderModelRow(p));
+    card.appendChild(rows);
+    profilesListEl.appendChild(card);
+    shownGroups += 1;
+  }
+
+  if (!shownGroups) {
+    profilesListEl.innerHTML = query
+      ? `<p class="empty-hint">没有匹配「${escapeHtml(profileSearchQuery.trim())}」的配置。</p>`
+      : '<p class="empty-hint">暂无配置，点击右上角「新增配置」。</p>';
   }
 }
 
@@ -274,7 +479,7 @@ function renderPresets() {
         </div>
       </div>
       <div class="config-card-actions">
-        ${activateButtonHtml(active, p.id, "activate-preset")}
+        ${activateButtonHtml(active, p.id, "activate-preset", { toggleOff: true })}
         <button type="button" data-action="probe-preset" data-id="${p.id}">试跑</button>
         <button type="button" data-action="toggle-preset-entries" data-id="${p.id}">
           ${expanded ? "收起条目" : "编辑条目"}
@@ -364,16 +569,6 @@ function renderGenerationForm(gen) {
       <div class="preset-gen-grid">
         ${numberFields}
         <label class="entry-field gen-field">
-          reasoning effort
-          <input
-            type="text"
-            class="entry-name-input"
-            data-gen-field="reasoningEffort"
-            placeholder="如 low / medium / high"
-            value="${escapeHtml(generationFieldValue(g, "reasoningEffort"))}"
-          />
-        </label>
-        <label class="entry-field gen-field">
           verbosity
           <input
             type="text"
@@ -409,7 +604,7 @@ function collectGenerationFromPanel(panel) {
     }
     const raw = input.value.trim();
     if (!raw) continue;
-    if (key === "reasoningEffort" || key === "verbosity") {
+    if (key === "verbosity") {
       generation[key] = raw;
     } else {
       const n = Number(raw);
@@ -550,7 +745,11 @@ async function loadAll() {
   const data = await api("/api/settings");
   state.settings = data.settings;
   state.profiles = data.profiles;
+  state.groups = data.groups || [];
+  pruneApiProfileUsage(new Set(state.profiles.map((p) => p.id)));
+  seedApiProfileUsage(state.settings.activeProfileId);
   state.presets = data.presets;
+  sniffBootId = typeof data.bootId === "string" ? data.bootId : "";
   try {
     const personasData = await api("/api/personas");
     state.personas = personasData.personas ?? [];
@@ -662,25 +861,252 @@ async function savePersona() {
   showToast("用户角色已保存");
 }
 
+const profileModelLockEl = document.getElementById("profile-model-lock");
+const profileModelLockValueEl = document.getElementById("profile-model-lock-value");
+const profileModelEditorEl = document.getElementById("profile-model-editor");
+const profileModelFilterEl = document.getElementById("profile-model-filter");
+const addModelDialog = document.getElementById("add-model-dialog");
+const addModelGroupEl = document.getElementById("add-model-group");
+const addModelFilterEl = document.getElementById("add-model-filter");
+const addModelStatusEl = document.getElementById("add-model-status");
+const addModelListEl = document.getElementById("add-model-list");
+const addModelEmptyEl = document.getElementById("add-model-empty");
+const addModelSniffBtn = document.getElementById("add-model-sniff");
+let addModelSource = null;
+let addKnownModels = [];
+let addSniffBase = "";
+let addSniffSeq = 0;
+const profileSniffStatusEl = document.getElementById("profile-sniff-status");
+const profileModelPickEl = document.getElementById("profile-model-pick");
+const profileModelListEl = document.getElementById("profile-model-list");
+const profileModelEmptyEl = document.getElementById("profile-model-empty");
+const profileSniffBtn = document.getElementById("profile-sniff");
+const MODEL_MATCH_LIMIT = 48;
+
+function setSniffStatus(el, message, isError = false) {
+  if (!el) return;
+  el.hidden = !message;
+  el.textContent = message || "";
+  el.classList.toggle("is-error", Boolean(isError));
+}
+
+function uniqueModelIds(ids) {
+  const list = [];
+  const seen = new Set();
+  for (const raw of ids) {
+    const id = String(raw ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    list.push(id);
+  }
+  return list;
+}
+
+function normalizeBaseUrlKey(url) {
+  return String(url || "")
+    .trim()
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+/** 同一 Base URL + 同一 Key 共用一份缓存。Key 只存指纹，不存原文。 */
+async function sniffCacheKeyFor({ baseUrl, apiKey, profileId, groupId }) {
+  const base = normalizeBaseUrlKey(baseUrl);
+  if (!base) return "";
+  const typed = String(apiKey || "").trim();
+  if (typed) return `${base}\nkey:${await apiKeyFingerprint(typed)}`;
+  const ident = groupId || profileId || "";
+  return ident ? `${base}\ngroup:${ident}` : "";
+}
+
+function createSniffContext() {
+  const profile = state.profiles.find((item) => item.id === editingProfileId);
+  return {
+    baseUrl: profileForm.baseUrl.value,
+    apiKey: profileForm.apiKey.value,
+    profileId: editingProfileId || "",
+    groupId: profile?.groupId || "",
+  };
+}
+
+function addSniffContext() {
+  return {
+    baseUrl: addModelSource?.baseUrl || "",
+    apiKey: addModelSource?.apiKey || "",
+    profileId: addModelSource?.id || "",
+    groupId: addModelSource?.groupId || "",
+  };
+}
+
+function modelsForBase(baseUrl) {
+  const base = normalizeBaseUrlKey(baseUrl);
+  return uniqueModelIds(
+    state.profiles
+      .filter((profile) => normalizeBaseUrlKey(profile.baseUrl) === base)
+      .map((profile) => profile.model),
+  );
+}
+
+function renderModelCatalog(listEl, emptyEl, { query, chosen, catalog, existing, sniffed = 0, idleEmpty = "先嗅探。输入关键词后，点一条填入完整型号。" }) {
+  if (!listEl || !emptyEl) return;
+  const text = query.trim();
+  const needle = text.toLowerCase();
+  if (!needle) {
+    listEl.hidden = true;
+    listEl.innerHTML = "";
+    emptyEl.hidden = false;
+    emptyEl.textContent = sniffed
+      ? `已有 ${sniffed} 个嗅探结果。输入关键词筛选，例如 gemini。`
+      : idleEmpty;
+    return;
+  }
+  const matched = catalog.filter((model) => model.toLowerCase().includes(needle));
+  const more = Math.max(0, matched.length - MODEL_MATCH_LIMIT);
+  const shown = matched.slice(0, MODEL_MATCH_LIMIT);
+  listEl.hidden = shown.length === 0;
+  listEl.innerHTML = shown
+    .map((model) => {
+      const on = model === chosen;
+      const owned = existing?.has(model) ? " · 已有" : "";
+      return `<button
+        type="button"
+        class="model-pick-item${on ? " is-current" : ""}"
+        data-pick-model="${escapeAttr(model)}"
+        role="option"
+        aria-selected="${on ? "true" : "false"}"
+      >${escapeHtml(model)}${owned}</button>`;
+    })
+    .join("");
+  emptyEl.hidden = shown.length > 0 && more === 0;
+  if (!shown.length) {
+    emptyEl.textContent = catalog.length
+      ? `没有名称包含「${text}」的型号`
+      : "还没有可筛选的型号。先嗅探，再输入关键词。";
+  } else if (more) {
+    emptyEl.textContent = `还有 ${more} 个，继续输入以缩小`;
+  }
+}
+
+function renderCreateModelChoices() {
+  const base = normalizeBaseUrlKey(profileForm.baseUrl.value);
+  const catalog =
+    dialogSniffBase === base
+      ? uniqueModelIds([...modelsForBase(base), ...dialogKnownModels])
+      : modelsForBase(base);
+  renderModelCatalog(profileModelListEl, profileModelEmptyEl, {
+    query: profileModelFilterEl?.value || "",
+    chosen: profileForm.model.value.trim(),
+    catalog,
+    sniffed: dialogSniffBase === base ? dialogKnownModels.length : 0,
+  });
+}
+
+function renderAddModelChoices() {
+  const base = normalizeBaseUrlKey(addModelSource?.baseUrl || "");
+  const catalog =
+    addSniffBase === base
+      ? uniqueModelIds([...modelsForBase(base), ...addKnownModels])
+      : modelsForBase(base);
+  renderModelCatalog(addModelListEl, addModelEmptyEl, {
+    query: addModelFilterEl?.value || "",
+    chosen: "",
+    catalog,
+    sniffed: addSniffBase === base ? addKnownModels.length : 0,
+    idleEmpty: "先嗅探。输入关键词后，点一条就会新开一行并选用。",
+    existing: new Set(
+      state.profiles
+        .filter((profile) => (profile.groupId || "") === (addModelSource?.groupId || ""))
+        .map((profile) => profile.model),
+    ),
+  });
+}
+
+async function restoreCreateSniffCache() {
+  const seq = ++sniffRestoreSeq;
+  const ctx = createSniffContext();
+  const base = normalizeBaseUrlKey(ctx.baseUrl);
+  const cacheKey = await sniffCacheKeyFor(ctx);
+  if (seq !== sniffRestoreSeq) return;
+  const models = uniqueModelIds(readSniffModels(sniffBootId, cacheKey));
+  dialogSniffBase = models.length ? base : "";
+  dialogKnownModels = models;
+  setSniffStatus(
+    profileSniffStatusEl,
+    models.length
+      ? `沿用本次启动的嗅探结果（${models.length} 个），重启程序后会清空。`
+      : "",
+  );
+  renderCreateModelChoices();
+}
+
+async function restoreAddSniffCache() {
+  const seq = ++addSniffSeq;
+  const ctx = addSniffContext();
+  const base = normalizeBaseUrlKey(ctx.baseUrl);
+  const cacheKey = await sniffCacheKeyFor(ctx);
+  if (seq !== addSniffSeq) return;
+  const models = uniqueModelIds(readSniffModels(sniffBootId, cacheKey));
+  addSniffBase = models.length ? base : "";
+  addKnownModels = models;
+  setSniffStatus(
+    addModelStatusEl,
+    models.length
+      ? `沿用本次启动的嗅探结果（${models.length} 个），重启程序后会清空。`
+      : "",
+  );
+  renderAddModelChoices();
+}
+
+function setProfileModelMode(profile) {
+  const editing = Boolean(profile);
+  if (profileModelLockEl) profileModelLockEl.hidden = !editing;
+  if (profileModelEditorEl) profileModelEditorEl.hidden = editing;
+  if (profileModelLockValueEl) {
+    profileModelLockValueEl.textContent = profile?.model || "";
+  }
+  if (profileForm.model) profileForm.model.disabled = editing;
+}
+
 function openProfileDialog(profile = null) {
   editingProfileId = profile?.id ?? null;
-  profileDialogTitle.textContent = profile ? "编辑 API 配置" : "新增 API 配置";
+  profileDialogTitle.textContent = profile ? "编辑这一行" : "新增 API";
   profileForm.name.value = profile?.name ?? "";
-  profileForm.baseUrl.value = profile?.baseUrl ?? "https://api.deepseek.com";
+  profileForm.baseUrl.value = profile?.baseUrl ?? "https://api.deepseek.com/v1";
   profileForm.apiKey.value = profile?.apiKey ?? "";
-  profileForm.model.value = profile?.model ?? "deepseek-v4-pro";
+  profileForm.model.value = profile ? profile.model : "";
   profileForm.reasoningEffort.value = profile?.reasoningEffort ?? "";
+  if (profileModelFilterEl) profileModelFilterEl.value = "";
+  dialogKnownModels = [];
+  dialogSniffBase = "";
+  setSniffStatus(profileSniffStatusEl, "");
+  setProfileModelMode(profile);
+  renderCreateModelChoices();
   profileDialog.showModal();
+  if (!profile) void restoreCreateSniffCache();
+}
+
+async function apiKeyFingerprint(apiKey) {
+  const data = new TextEncoder().encode(apiKey.trim());
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(buf)]
+    .slice(0, 8)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function saveProfile(activate) {
+  const model = profileForm.model.value.trim();
+  if (!editingProfileId && !model) {
+    showToast("先填写完整型号，或从筛选结果里点一条", true);
+    return;
+  }
   const payload = {
     name: profileForm.name.value,
     baseUrl: profileForm.baseUrl.value,
-    model: profileForm.model.value,
     reasoningEffort: profileForm.reasoningEffort.value,
     activate,
   };
+  if (!editingProfileId) payload.model = model;
   const apiKey = profileForm.apiKey.value.trim();
   if (apiKey || !editingProfileId) {
     payload.apiKey = apiKey;
@@ -692,10 +1118,12 @@ async function saveProfile(activate) {
       method: "PUT",
       body: JSON.stringify(payload),
     });
+    const savedId = result.profile?.id || editingProfileId;
     if (activate) {
-      result = await api(`/api/profiles/${editingProfileId}/activate`, {
+      const activated = await api(`/api/profiles/${encodeURIComponent(savedId)}/activate`, {
         method: "POST",
       });
+      result = { ...result, ...activated, profile: result.profile };
     }
   } else {
     result = await api("/api/profiles", {
@@ -705,6 +1133,8 @@ async function saveProfile(activate) {
   }
 
   profileDialog.close();
+  const savedId = result.profile?.id || editingProfileId || result.activeProfileId;
+  if (activate && savedId) recordApiProfileUsage(savedId);
   await loadAll();
 
   if (activate) {
@@ -717,6 +1147,7 @@ async function saveProfile(activate) {
 
 async function activateProfile(id) {
   const result = await api(`/api/profiles/${id}/activate`, { method: "POST" });
+  recordApiProfileUsage(id);
   await loadAll();
   const n = result.reloadedSessions ?? 0;
   showToast(`API 配置已生效${n > 0 ? `（${n} 个会话已更新）` : ""}`);
@@ -727,6 +1158,13 @@ async function activatePreset(id) {
   await loadAll();
   const n = result.reloadedSessions ?? 0;
   showToast(`预设已生效${n > 0 ? `（${n} 个会话已更新）` : ""}`);
+}
+
+async function deactivatePreset() {
+  const result = await api("/api/presets/deactivate", { method: "POST" });
+  await loadAll();
+  const n = result.reloadedSessions ?? 0;
+  showToast(`已不使用预设${n > 0 ? `（${n} 个会话已更新）` : ""}`);
 }
 
 document.querySelectorAll(".st-rail-item").forEach((btn) => {
@@ -818,6 +1256,212 @@ document.getElementById("profile-save").addEventListener("click", () => {
   saveProfile(false).catch((err) => showToast(err.message, true));
 });
 
+profileForm.baseUrl.addEventListener("input", () => {
+  if (editingProfileId) return;
+  void restoreCreateSniffCache();
+});
+
+profileForm.apiKey.addEventListener("input", () => {
+  if (editingProfileId) return;
+  void restoreCreateSniffCache();
+});
+
+profileForm.model.addEventListener("input", () => {
+  renderCreateModelChoices();
+});
+
+profileModelFilterEl?.addEventListener("input", () => {
+  renderCreateModelChoices();
+});
+
+profileModelFilterEl?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") e.preventDefault();
+});
+
+async function sniffIntoCatalog({
+  baseUrl,
+  apiKey,
+  profileId,
+  cacheKey,
+  seq,
+  seqNow,
+  baseStill,
+  onFound,
+  statusEl,
+  button,
+}) {
+  button.disabled = true;
+  const prevLabel = button.textContent;
+  button.textContent = "嗅探中…";
+  setSniffStatus(statusEl, "正在请求 /models…");
+  try {
+    const body = { baseUrl };
+    if (apiKey) body.apiKey = apiKey;
+    else if (profileId) body.profileId = profileId;
+    const data = await api("/api/profiles/discover-models", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const found = uniqueModelIds(Array.isArray(data.models) ? data.models : []);
+    writeSniffModels(sniffBootId, cacheKey, found);
+    if (seq !== seqNow()) return;
+    if (!baseStill()) return;
+    onFound(found);
+    const host = data.url ? data.url.replace(/^https?:\/\//, "") : "/models";
+    setSniffStatus(
+      statusEl,
+      found.length
+        ? `找到 ${found.length} 个模型（${host}）。在筛选框输入关键词，例如 gemini。`
+        : `没有返回模型（${host}）`,
+      !found.length,
+    );
+  } catch (err) {
+    setSniffStatus(statusEl, err.message || "嗅探失败", true);
+  } finally {
+    button.disabled = false;
+    button.textContent = prevLabel || "嗅探";
+  }
+}
+
+profileSniffBtn?.addEventListener("click", async () => {
+  const baseUrl = profileForm.baseUrl.value.trim();
+  const apiKey = profileForm.apiKey.value.trim();
+  if (!baseUrl) {
+    setSniffStatus(profileSniffStatusEl, "先填写 Base URL", true);
+    return;
+  }
+  if (!apiKey && !editingProfileId) {
+    setSniffStatus(profileSniffStatusEl, "先填写 API Key", true);
+    return;
+  }
+  const seq = ++sniffRestoreSeq;
+  const cacheKey = await sniffCacheKeyFor(createSniffContext());
+  const baseKey = normalizeBaseUrlKey(baseUrl);
+  await sniffIntoCatalog({
+    baseUrl,
+    apiKey,
+    profileId: editingProfileId,
+    cacheKey,
+    seq,
+    seqNow: () => sniffRestoreSeq,
+    baseStill: () => normalizeBaseUrlKey(profileForm.baseUrl.value) === baseKey,
+    statusEl: profileSniffStatusEl,
+    button: profileSniffBtn,
+    onFound(found) {
+      dialogSniffBase = baseKey;
+      dialogKnownModels = found;
+      renderCreateModelChoices();
+    },
+  });
+});
+
+profileModelListEl?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-pick-model]");
+  if (!btn) return;
+  profileForm.model.value = btn.getAttribute("data-pick-model") || "";
+  renderCreateModelChoices();
+});
+
+function openAddModelDialog(groupId) {
+  const source = state.profiles.find((profile) => (profile.groupId || "") === groupId);
+  if (!source) {
+    showToast("这一组还没有可复制的地址和 Key", true);
+    return;
+  }
+  const group = state.groups.find((item) => item.id === groupId);
+  addModelSource = source;
+  if (addModelGroupEl) {
+    addModelGroupEl.textContent = `${group?.name || "这一组"} · ${source.baseUrl}`;
+  }
+  if (addModelFilterEl) addModelFilterEl.value = "";
+  addKnownModels = [];
+  addSniffBase = "";
+  setSniffStatus(addModelStatusEl, "");
+  renderAddModelChoices();
+  addModelDialog?.showModal();
+  void restoreAddSniffCache();
+}
+
+async function adoptModel(model) {
+  const source = addModelSource;
+  if (!source || !model) return;
+  const existing = state.profiles.find(
+    (profile) =>
+      (profile.groupId || "") === (source.groupId || "") &&
+      profile.model === model,
+  );
+  if (existing) {
+    addModelDialog?.close();
+    await activateProfile(existing.id);
+    return;
+  }
+  const result = await api("/api/profiles", {
+    method: "POST",
+    body: JSON.stringify({
+      name: model,
+      baseUrl: source.baseUrl,
+      apiKey: source.apiKey,
+      model,
+      reasoningEffort: source.reasoningEffort || "",
+      activate: true,
+    }),
+  });
+  addModelDialog?.close();
+  const savedId = result.profile?.id || result.activeProfileId;
+  if (savedId) recordApiProfileUsage(savedId);
+  await loadAll();
+  const n = result.reloadedSessions ?? 0;
+  showToast(`已添加并选用 ${model}${n > 0 ? `，已更新 ${n} 个活跃会话` : ""}`);
+}
+
+document.getElementById("add-model-cancel")?.addEventListener("click", () => {
+  addModelDialog?.close();
+});
+
+addModelFilterEl?.addEventListener("input", () => {
+  renderAddModelChoices();
+});
+
+addModelFilterEl?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") e.preventDefault();
+});
+
+document.getElementById("add-model-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+});
+
+addModelSniffBtn?.addEventListener("click", async () => {
+  const source = addModelSource;
+  if (!source?.baseUrl) return;
+  const seq = ++addSniffSeq;
+  const cacheKey = await sniffCacheKeyFor(addSniffContext());
+  const baseKey = normalizeBaseUrlKey(source.baseUrl);
+  await sniffIntoCatalog({
+    baseUrl: source.baseUrl,
+    apiKey: source.apiKey,
+    profileId: source.id,
+    cacheKey,
+    seq,
+    seqNow: () => addSniffSeq,
+    baseStill: () => normalizeBaseUrlKey(addModelSource?.baseUrl || "") === baseKey,
+    statusEl: addModelStatusEl,
+    button: addModelSniffBtn,
+    onFound(found) {
+      addSniffBase = baseKey;
+      addKnownModels = found;
+      renderAddModelChoices();
+    },
+  });
+});
+
+addModelListEl?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-pick-model]");
+  if (!btn) return;
+  adoptModel(btn.getAttribute("data-pick-model") || "").catch((err) =>
+    showToast(err.message, true),
+  );
+});
+
 profileForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
@@ -827,6 +1471,32 @@ profileForm.addEventListener("submit", async (e) => {
   }
 });
 
+profilesListEl.addEventListener("change", async (e) => {
+  const input = e.target.closest("[data-action='rename-group']");
+  if (!input) return;
+  const id = input.dataset.id;
+  const name = input.value.trim();
+  if (!id || !name) return;
+  const current = state.groups.find((group) => group.id === id);
+  if (current && current.name === name) return;
+  try {
+    const data = await api(`/api/profile-groups/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    });
+    state.groups = data.groups || state.groups;
+    showToast(`组名已改为 ${name}`);
+  } catch (err) {
+    showToast(err.message, true);
+    await loadAll();
+  }
+});
+
+profileSearchEl?.addEventListener("input", () => {
+  profileSearchQuery = profileSearchEl.value || "";
+  renderProfiles();
+});
+
 profilesListEl.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
@@ -834,6 +1504,16 @@ profilesListEl.addEventListener("click", async (e) => {
   const action = btn.dataset.action;
 
   try {
+    if (action === "toggle-group-all") {
+      if (showAllProfilesByGroup.has(id)) showAllProfilesByGroup.delete(id);
+      else showAllProfilesByGroup.add(id);
+      renderProfiles();
+      return;
+    }
+    if (action === "add-model") {
+      openAddModelDialog(id);
+      return;
+    }
     if (action === "activate-profile") {
       await activateProfile(id);
     } else if (action === "edit-profile") {
@@ -859,6 +1539,10 @@ profilesListEl.addEventListener("click", async (e) => {
         refreshed.className = `test-result ${chatOk ? "ok" : "fail"}`;
       }
       showToast(note, !chatOk);
+    } else if (action === "forget-usage") {
+      if (!forgetApiProfileUsage(id)) return;
+      renderProfiles();
+      showToast("已移出曾用。配置还在，可在「显示全部」里再选用。");
     } else if (action === "delete-profile") {
       if (!confirm("确定删除此 API 配置？")) return;
       await api(`/api/profiles/${id}`, { method: "DELETE" });
@@ -894,7 +1578,8 @@ presetsListEl.addEventListener("click", async (e) => {
 
   try {
     if (action === "activate-preset") {
-      await activatePreset(id);
+      if (state.settings.activePresetId === id) await deactivatePreset();
+      else await activatePreset(id);
     } else if (action === "probe-preset") {
       openProbeDialog(id);
     } else if (action === "toggle-preset-entries") {

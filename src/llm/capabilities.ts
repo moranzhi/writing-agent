@@ -4,9 +4,12 @@
  */
 
 import {
+  applyMandatoryReasoningFloor,
   applyRejectedGenerationField,
   forceReasoningEffortNoneWhenTools,
+  isReasoningMandatoryError,
   isToolsReasoningEffortConflictError,
+  modelRejectsDisabledReasoning,
   parseRejectedGenerationField,
 } from "./generation-compat.js";
 
@@ -170,7 +173,8 @@ async function postOnce(
 
 /**
  * 探测请求始终带 reasoning_effort=low。
- * 若供应商拒收该字段，剥掉后再试；tools 冲突则改 none 再试。
+ * Gemini 3 同时写 reasoning.effort。拒收字段则剥掉再试；
+ * 必须开思考则抬到 low；tools 冲突则改 none 再试。
  */
 async function postChat(
   config: ProbeConfig,
@@ -180,11 +184,21 @@ async function postChat(
     ...body,
     reasoning_effort: CAPABILITY_PROBE_REASONING_EFFORT,
   };
+  if (modelRejectsDisabledReasoning(config.model)) {
+    withEffort.reasoning = { effort: CAPABILITY_PROBE_REASONING_EFFORT };
+  }
   const first = await postOnce(config, withEffort);
   if (first.ok || (first.status !== 400 && first.status !== 422)) return first;
 
   const retryBody = { ...withEffort };
   const tried = new Set<string>();
+
+  if (isReasoningMandatoryError(first.text, first.status)) {
+    if (applyMandatoryReasoningFloor(retryBody, tried)) {
+      return postOnce(config, retryBody);
+    }
+    return first;
+  }
 
   if (isToolsReasoningEffortConflictError(first.text, first.status)) {
     forceReasoningEffortNoneWhenTools(retryBody, config.model);

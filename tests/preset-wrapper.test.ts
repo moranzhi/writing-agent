@@ -24,7 +24,7 @@ const samplePreset: PresetPackage = {
     },
   ],
   promptOrder: [{ promptId: "sys", enabled: true, orderIndex: 0 }],
-  generation: { temperature: 0.91, maxOutputTokens: 1234 },
+  generation: { temperature: 0.91, maxOutputTokens: 1234, reasoningEffort: "max" },
   unsupported: [],
   importedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -72,6 +72,7 @@ describe("wrapLlmForSession", () => {
       temperature: 0.91,
       maxOutputTokens: 1234,
     });
+    expect(received[0].generation).not.toHaveProperty("reasoningEffort");
     expect(ctx.pendingContextTrace?.messages).toEqual(received[0].messages);
     expect(ctx.pendingContextTrace?.generation).toMatchObject({
       temperature: 0.91,

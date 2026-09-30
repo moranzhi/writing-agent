@@ -190,7 +190,6 @@ describe("normalizeGeneration / applyPresetGeneration", () => {
     ).toEqual({
       temperature: 0.9,
       maxOutputTokens: 4096,
-      reasoningEffort: "high",
       stream: true,
     });
   });
