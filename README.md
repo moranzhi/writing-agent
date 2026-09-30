@@ -1,84 +1,88 @@
-# Writing Agent 使用说明
+# Writing Agent
 
-解压或下载完成后，按下面的顺序即可：双击启动、打开浏览器、写一张最简单的卡，然后游玩一句。
+本地运行的多 Agent 文本创作与游玩平台：先为一部作品搭好可复用的运行规格，再进入游玩——你说一句，它按规格写一轮。适合交互式角色扮演、短局/长文、仿写扩写等场景。
 
-需要先安装 [Node.js](https://nodejs.org/)（勾选安装时附带的 npm）。第一次启动会自动安装依赖，请等黑窗口跑完。
+数据默认落在本机用户目录（`~/.writing-agent`），通过浏览器或 Electron 桌面窗口使用；模型走你自己配置的 API。
 
-## 1. 双击 `start.bat`
+## 它能做什么
 
-在文件夹里双击 `start.bat`。会弹出一个黑窗口，并自动打开浏览器。地址是：
+- **创作**：为新作品选进料方式（工序编排 / 对话落盘）与配方，由编排器调度技能，落成可复用的运行规格与开场
+- **游玩**：在钉住的规格下回合推进；可切换呈现壳，保存游玩进度
+- **技能包**：能力以磁盘上的技能包装载（当前主包为「世界模拟器」相关配方与模块）
+- **预设与库**：兼容 SillyTavern 风格的提示词预设；文风库 / 偏好库可注入创作节点，种子可从仓库恢复
+- **多接口**：分组管理 API、嗅探型号、切换同一接口下的模型
+- **本机优先**：Web（`localhost:23337`）或 `start-app.bat` 桌面壳；运维可用 `console.bat`
 
-http://localhost:23337
+## 快速开始
 
-窗口不要关。关窗口或按 `Ctrl+C` 就是停止软件。
+1. 安装 [Node.js](https://nodejs.org/)（含 npm）
+2. 双击 `start.bat`（桌面窗口则用 `start-app.bat`），浏览器打开 http://localhost:23337
+3. 在 **设置** 里新增模型接口（Base URL、API Key、型号）；根目录已有 `.env` 时可跳过
+4. **新建作品** → 对话写出一张简单可玩卡 → **保存定稿** → 左侧菜单选 **游玩**
 
-![启动后的黑窗口](docs/guide/01-start.png)
+完整图文步骤（含截图与示例提示词）见 **[从启动到开玩](docs/guide/getting-started.md)**。
 
-想用桌面窗口而不是浏览器，改双击 `start-app.bat`。后面的操作一样。
-
-## 2. 第一次要填模型接口
-
-点右上角 **设置**，再点 **新增**。填上这四项后点 **保存并选用**：
-
-- 名称：自己认得就行，例如 DeepSeek
-- Base URL：接口地址，例如 `https://api.deepseek.com/v1`
-- API Key：你的密钥
-- 型号：这一行要用的模型名，例如 `deepseek-chat`
-
-填完型号后也可以点 **嗅探**，从列表里点一个型号。
-
-![新增 API](docs/guide/03-api.png)
-
-项目根目录如果已经有填好的 `.env`，启动时会自动带上，这一步可以跳过。
-
-## 3. 新建作品
-
-还没有任何作品时，打开页面就会弹出 **新建作品**。输入名称，点 **创建**。以后再开新的，点左侧 **+**。
-
-![填写作品名](docs/guide/04-new-book.png)
-
-这里用「雨天小书店」做例子。
-
-## 4. 写一张最简单的卡
-
-在底部输入框里原样贴上这段，点发送（或按 Enter）：
+## 核心回路
 
 ```text
-请写一张最简单的可玩卡，写完就停。
-
-题材：雨天小书店。玩家是进来躲雨的客人，店员是一只戴蓝色围巾的猫。
-只要短对话。不要数值、地图、复杂世界观。
-开场只要两三句：雨还在下，猫店员抬起头。
+新建作品 → 选进料方式与配方
+        → 创作（编排技能 / 对话落盘）→ 运行规格 + 开场
+        → 保存定稿
+        → 游玩（执行单元按规格上场）→ 保存游玩
 ```
 
-![把这段话放进输入框](docs/guide/05-prompt.png)
+术语以 [`docs/ui-glossary.md`](docs/ui-glossary.md) 为准（进料方式、配方、编排器、技能、运行规格、执行单元）。
 
-等它写完。中间的回复会说明卡已经好了，右侧 **已持久化** 是落下来的几张卡片。
+## 仓库一览
 
-![写好的卡](docs/guide/06-card.png)
+| 路径 | 用途 |
+|------|------|
+| `src/` | 运行时、会话、技能装载、Book/预设/库、HTTP API |
+| `web/` | 前端静态页 |
+| `skills/` | 技能包（见 `skills/README.md`） |
+| `examples/presets/` | 示例预设 |
+| `seeds/libraries/` | 文风/偏好库种子 |
+| `electron/` | 桌面壳 |
+| `docs/` | 架构与契约文档 |
+| `tests/` | Vitest |
 
-写完它如果还追问，回复「都不用再加，写完开场就可以开玩」。
+用户数据目录可用环境变量 `WRITING_AGENT_DATA_DIR` 覆盖；默认 `~/.writing-agent`（Windows 多为 `%USERPROFILE%\.writing-agent`）。
 
-## 5. 保存并开玩
+## 维护者
 
-右上角出现 **保存定稿** 时，点它，给这份稿起个名字。没有这个按钮时，点输入框右侧的保存图标，效果相同。
+开发与排障常用命令：
 
-然后点左侧的作品名，在弹出的菜单里选 **游玩**。
-
-会先看到开场白：
-
-![进入游玩后的开场](docs/guide/07-play.png)
-
-在底部写你要做的事，再发送。例如：
-
-```text
-我收起伞，问店员今天适合躲雨看的书。
+```bash
+npm install
+npm run web          # 启动 HTTP 服务（不监视文件）
+npm run web:watch    # 开发时监视 src/ 与 skills/
+npm test             # Vitest
+npm run libraries:restore   # 从 seeds 恢复库
+npm run libraries:export    # 导出库到 seeds
 ```
 
-它会接下去写这一轮：
+Windows 运维脚本：`console.bat`（查询 / 启停 / 日志）。入口实现：`src/server/web-server.ts` → `session-manager.ts` → `src/runtime/` + `src/main-agent/` + `skills/`。
 
-![说完一句之后](docs/guide/08-play-reply.png)
+**安全注意**：本地 HTTP 控制面默认无鉴权，且会监听本机端口；请勿把服务暴露到不可信网络。API Key 以明文保存在用户数据目录的配置里。
 
-之后就一直这样：你说一句，它写一轮。右上角 **保存游玩** 可以把进度存下来。
+### 文档索引
 
-想换你在故事里的名字，到 **设置 → 用户角色** 里新增一个角色并选用。创作时如果希望开场先写占位，把角色名写成 `@玩家`。
+| 文档 | 内容 |
+|------|------|
+| [architecture.md](docs/architecture.md) | 系统架构与模块边界 |
+| [ui-glossary.md](docs/ui-glossary.md) | 用户可见术语 |
+| [implementation-guide.md](docs/implementation-guide.md) | 文档地图与实现约定 |
+| [runtime-state-machine.md](docs/runtime-state-machine.md) | 相位机 |
+| [tool-contracts.md](docs/tool-contracts.md) | Tool 契约 |
+| [run-snapshot.md](docs/run-snapshot.md) | 存档 / 快照（以代码现状为准） |
+| [play-presentation-shells.md](docs/play-presentation-shells.md) | 游玩呈现壳 |
+| [preset-format.md](docs/preset-format.md) | 预设格式 |
+| [skill-format.md](docs/skill-format.md) 等 | 技能 / 编排器 / Worker 格式 |
+| [px-roadmap.md](docs/px-roadmap.md) | 产品路线图 |
+| [skills/README.md](skills/README.md) | 技能包目录说明 |
+
+`docs/book-storage.md` 描述的是目标存储模型，**不是**当前磁盘布局；当前以 Book JSON + session + run-snapshots 为准。
+
+## 许可与第三方
+
+见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。项目版本见 `package.json`（当前 `0.1.0`，`private`）。
