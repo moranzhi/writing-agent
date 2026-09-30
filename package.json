@@ -13,7 +13,9 @@
     "phase-script": "tsx src/cli/phase-demo.ts --script --auto",
     "web": "tsx src/server/web-server.ts",
     "web:watch": "tsx watch --clear-screen=false --include \"./src/**/*.ts\" --include \"./skills/**\" src/server/web-server.ts",
-    "electron": "electron ."
+    "electron": "electron .",
+    "libraries:restore": "tsx src/cli/restore-library-seeds.ts",
+    "libraries:export": "tsx src/cli/restore-library-seeds.ts --export"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

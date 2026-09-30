@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "starter-no-user-ntr-victim",
+      "content": "用户代入角色不做被 NTR 的一方（恋人/伴侣与第三者发生性或背叛性感情，用户角色受害或被欺瞒）。用户角色 NTR 别人不受此限。",
+      "status": "active",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "starter-default-male-hetero-yuri-ok",
+      "content": "禁止对男同性恋内容的直接描写，减少或忽略间接描写。默认用户角色为男性，情爱与性吸引朝向女性；女同性恋内容可写。",
+      "status": "active",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}
