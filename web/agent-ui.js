@@ -17,6 +17,15 @@ import {
   renderPresentShellHtml,
   stripPresentSourceFences,
 } from "./present-shells.js";
+import {
+  PRESENT_BYTE_LIMIT,
+  isFrontendBundle,
+  presentFrameSlotHtml,
+  presentSourceBytes,
+  previewPacket,
+  queuePresentFrame,
+  watchPresentFrames,
+} from "./present-frame.js";
 
 const HIDE_KINDS = new Set(["worker_stub"]);
 
@@ -4113,6 +4122,9 @@ function renderObjectSectionsHtml(obj, depth) {
       .map(([k, v]) => {
         if (k === "自评") return renderSelfScoreHtml(v);
         if (k === "追问") return renderProbeHtml(v);
+        if (k === "frontend" && isFrontendBundle(v)) {
+          return renderFrontendPreviewBlock(v, obj["示例灌数"]);
+        }
         return `<section class="ws-section"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, depth + 1)}</section>`;
       })
       .join("");
@@ -4219,6 +4231,9 @@ function renderObjectKvHtml(obj, depth) {
 
   const rows = entries
     .map(([k, v]) => {
+      if (k === "frontend" && isFrontendBundle(v)) {
+        return renderFrontendPreviewBlock(v, obj["示例灌数"]);
+      }
       const isComplex = v != null && typeof v === "object";
       if (isComplex && isDiagnosticNode(v)) {
         return renderDiagnosticDimHtml(k, v);
@@ -6394,6 +6409,40 @@ export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
   renderAgentPanel(view, loading);
 }
 
+/** 正文组成的 frontend：同一位置渲染隔离预览，源码收在后面 */
+function renderFrontendPreviewBlock(bundle, sample) {
+  const source = renderFrontendSourceDetails(bundle);
+  if (presentSourceBytes(bundle) > PRESENT_BYTE_LIMIT) {
+    return `<section class="af-section present-preview">
+      <h4 class="af-section-title">frontend</h4>
+      <p class="present-preview-status">前端超过 60 KB，这里不执行。</p>
+      ${source}
+    </section>`;
+  }
+  const id = queuePresentFrame(bundle, previewPacket(sample));
+  const note = sample ? "按示例灌数渲染，不是正史正文" : "骨架预览，还没有示例灌数";
+  return `<section class="af-section present-preview">
+    <h4 class="af-section-title">frontend</h4>
+    <p class="present-preview-note">${esc(note)}</p>
+    ${presentFrameSlotHtml(id)}
+    <p class="present-preview-status" hidden></p>
+    <div class="present-preview-fallback" hidden></div>
+    ${source}
+  </section>`;
+}
+
+function renderFrontendSourceDetails(bundle) {
+  const parts = ["html", "css", "js"]
+    .filter((key) => typeof bundle[key] === "string" && bundle[key].trim())
+    .map(
+      (key) =>
+        `<div class="af-def"><div class="af-def-k">${esc(key)}</div><div class="af-def-v">${renderProseHtml(bundle[key])}</div></div>`,
+    )
+    .join("");
+  if (!parts) return "";
+  return `<details class="skill-example present-preview-source"><summary>源码</summary><div class="af-def-list">${parts}</div></details>`;
+}
+
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#msg-action-menu")) hideMsgMenu();
   if (!e.target.closest("#dictate-product-menu")) hideDictateProductMenu();
@@ -6425,3 +6474,5 @@ document.addEventListener("scroll", (e) => {
   hideDictateProductMenu();
   hideFlowNodeMenu();
 }, true);
+
+watchPresentFrames();
