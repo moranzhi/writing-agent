@@ -11,9 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
-  collectLibraryIdsFromModules,
-  formatBoundLibrariesForPrompt,
-} from "../libraries/index.js";
+  buildRepeatableProductTag,
+  dictateProductSlot,
+} from "../dictate/repeatable-tags.js";
 import { tryParseJsonDoc } from "../parse/json-doc.js";
 
 export const CREATION_FLOW_TAG = "设计.创作流程";
@@ -179,6 +179,10 @@ export type ModuleCatalogEntry = {
   declaration: string;
   /** 执行期产物 tag（流程 JSON 不写；程序映射） */
   artifact: string;
+  /** 默认产物层；生成规则可在运行时按 lifecycle_intent 覆盖 */
+  layer?: "intermediate" | "final";
+  /** 默认游玩挂载目标；具体字段仍由投影器裁剪 */
+  mount?: string[];
   /**
    * 可选：默认可反复编排进流程（如生成规则、具体实例）。
    * 程序不硬拦；给编排与校验提示。
@@ -286,6 +290,16 @@ export type RecipeDetail = {
   brief?: string;
   /** 适用什么体验/任务 */
   when?: string;
+  /** 对话落盘案例：可识别的用户信号 */
+  signals?: string[];
+  /** 对话落盘案例：可混合、可改写的方法，不表示步骤顺序 */
+  method?: string[];
+  /** 对话落盘案例：能力档位的默认倾向，不覆盖本局判断 */
+  tierTendencies?: Array<{
+    module_id: string;
+    tier: "必须" | "有必要" | "有一定效果" | "没有意义";
+    why: string;
+  }>;
   /** 整套设计方法的核心思路与最终目标 */
   core?: string;
   /** 设计流程：如何增量选型、何时收成（字符串或条目列表） */
@@ -961,6 +975,11 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
     const params = parseModuleParamSpecs(m.params);
     const intake = parseModuleIntake(m.intake);
     const libraries = parseModuleLibraries(m.libraries);
+    const layer =
+      m.layer === "intermediate" || m.layer === "final"
+        ? m.layer
+        : undefined;
+    const mount = parseModuleLibraries(m.mount);
     modules.push({
       id,
       name,
@@ -974,6 +993,8 @@ export function parseModuleCatalog(raw: string): ModuleCatalog | null {
       ...(params ? { params } : {}),
       ...(intake ? { intake } : {}),
       ...(libraries ? { libraries } : {}),
+      ...(layer ? { layer } : {}),
+      ...(mount ? { mount } : {}),
     });
   }
   if (modules.length === 0) return null;
@@ -1027,6 +1048,7 @@ export const MODULE_SECTION_IDS = [
   "principles",
   "probe",
   "output",
+  "score",
   "checklist",
   "examples",
 ] as const;
@@ -1158,6 +1180,7 @@ export function formatModulePromptForLlm(promptMd: string): string {
     "principles",
     "probe",
     "output",
+    "score",
     "checklist",
     "examples",
   ];
@@ -1303,18 +1326,25 @@ function slugFromName(name: string): string {
     具体实例: "concrete-instances",
     拓扑图谱: "topology",
     回复呈现: "status-bar",
+    "0层回复呈现": "zero-layer-status",
     设计状态栏: "status-bar",
     设计监控栏: "status-bar",
     变量设计与更新规则: "variable-design",
+    信息可见范围: "variable-context",
     变量控制上下文: "variable-context",
     设计回复格式: "reply-format",
     正文组成: "reply-format",
+    "0层正文组成": "zero-layer-reply-format",
     随机范围整理: "random-range",
+    游玩执行方式: "worker-spec",
     游玩拓扑: "worker-spec",
     "Worker 规格": "worker-spec", // 旧称，等同游玩拓扑
+    上下文排序: "context-order",
+    运行配置组装: "refine",
     细化终稿: "refine",
     开场白与开场变量: "opening-setup",
     开场白: "opening-setup",
+    "0层开场白与初态": "zero-layer-opening-setup",
   };
   return map[name] ?? name;
 }
@@ -1387,6 +1417,7 @@ export function formatModuleCatalogForAgent(catalog: ModuleCatalog): string {
 
 /** 对话落盘不经 DAG：这些能力由落档/开玩程序处理，创作对话一般不 insert */
 const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
+  "variable-context",
   "worker-spec",
   "context-order",
   "refine",
@@ -1420,19 +1451,17 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
   });
   const head = [
     "【能力 · 何时落盘】",
-    "对照下方「何时用 / 何时不用 / 边界」与已有产物判定：条件成立才 insert（或 declare_*）；含糊或未到时机 → 本轮不落该能力，改为短确认或问挡住的 1 点。",
-    "同轮可多次落盘：凡本轮材料已够且「何时用」成立的能力，都可 insert / declare_*（可并行）；每个 insert 各回 reply_module，可见回复分段附带。",
-    "不抢跑：条件未成立的下游本轮不落，放进「建议下一刀」。",
+    "对照下方「何时用 / 何时不用 / 边界」与已有产物：用户这句已经说清、条件也成立的能力才 insert（或 declare_*），一轮通常 2～3 个。说清指用户已经给出要写的内容，不是能从题材推演出来。",
+    "「必须」和「有必要」里用户还没提到的：本轮不落盘，按已有材料给 2～3 个选项询问，选定后再写。含糊或未到时机的下游同样先问，不先写。",
+    "同轮写入的每份产物各回 reply_module，可见回复综合成一次。",
     "标〔落档程序〕的：创作对话一般不 insert，开玩/落档时由程序处理。",
-    "标〔收口〕的开场白：美学与必要上游齐后再写；未齐则先补上游。",
-    "标〔可反复〕的（生成规则/具体实例等）：每条增殖用「基名#唯一id」拆分落盘（如 设计.具体实例#lei-ying）；禁止反复 insert 基名覆盖旧条。改某一条则 insert 同一完整 tag。",
+    "标〔收口〕的开场：写开场前，列出仍未落的「必须」和「有必要」，问用户这些还没设计要补哪几项或明确不要。用户这句已经说清的再写入。普通模式使用回复呈现/正文组成，0 层模式使用对应 0 层节点，不得混用。用户确认可以收口后，程序依次编译信息可见范围、游玩执行方式、上下文排序与运行配置，再写所选模式的开场产物。",
+    "标〔可反复〕的（生成规则、具体实例、开场白、拓扑等）：每条单独落盘，用「基名#唯一id」（生成规则用规则名，具体实例用名称，开场白用场景短码）。同完整 tag 才覆盖，禁止反复写基名盖掉别的条。开场全部保留；游玩时左右切换，选中的一条作为 0 层。",
     "能力执行全文不进聊天；规格只走 toolcall。insert 成功后按返回的 reply_module 写可见回复（见系统提示「对用户可见回复」）。",
     lines.join("\n"),
   ].join("\n");
 
-  const libIds = collectLibraryIdsFromModules(dictateModules);
-  const libBlock = formatBoundLibrariesForPrompt(libIds).trim();
-  return libBlock ? `${head}\n\n${libBlock}` : head;
+  return head;
 }
 
 function dictateLandHint(m: ModuleCatalogEntry): string {
@@ -1443,17 +1472,20 @@ function dictateLandHint(m: ModuleCatalogEntry): string {
     return "declare_variable / declare_map；长文规则可另 insert 「设计.变量设计与更新规则」";
   }
   if (m.id === "opening-setup") {
-    return "insert 「设计.开场白」（对话落盘简化 tag；初值与开场同真相）";
+    return "insert 「设计.开场白#场景短码」——可增殖：每条开场各占一 tag；同完整 tag 才覆盖。游玩时左右切换，选中的一条作为 0 层";
+  }
+  if (m.id === "zero-layer-opening-setup") {
+    return "insert 「设计.0层开场白与初态#场景短码」——可增殖：每条开场各占一 tag；同完整 tag 才覆盖。游玩时左右切换，选中的一条作为 0 层";
   }
   if (m.artifact?.trim() && m.repeatable) {
     const art = m.artifact.trim();
     const slotHint =
       m.id === "generation-rules"
-        ? "rule_id"
+        ? "规则名"
         : m.id === "concrete-instances"
-          ? "batch_id或姓名"
+          ? "名称"
           : "唯一id";
-    return `insert 「${art}#${slotHint}」——可增殖：每条对象/批次各占一 tag；同完整 tag 才覆盖改写，禁止反复写基名「${art}」覆盖`;
+    return `insert 「${art}#${slotHint}」——每条单独落盘；同完整 tag 才覆盖，禁止反复写基名「${art}」盖掉别的条`;
   }
   if (m.artifact?.trim()) {
     return `insert 「${m.artifact.trim()}」`;
@@ -1555,6 +1587,9 @@ export function parseRecipeYaml(
   const core = coerceYamlTextField(row.core);
   const process = normalizeRecipeListOrText(row.process);
   const principles = normalizeRecipeListOrText(row.principles);
+  const signals = normalizeStringList(row.signals);
+  const method = normalizeStringList(row.method);
+  const tierTendencies = parseRecipeTierTendencies(row.tier_tendencies);
   const hint =
     typeof row.hint === "string" && row.hint.trim()
       ? row.hint.trim()
@@ -1581,6 +1616,9 @@ export function parseRecipeYaml(
     declaration: meta.declaration,
     ...(brief ? { brief } : {}),
     when,
+    ...(signals ? { signals } : {}),
+    ...(method ? { method } : {}),
+    ...(tierTendencies ? { tierTendencies } : {}),
     ...(core ? { core } : {}),
     ...(process ? { process } : {}),
     ...(principles ? { principles } : {}),
@@ -1601,6 +1639,37 @@ function normalizeRecipeListOrText(
     return items.length ? items : undefined;
   }
   return undefined;
+}
+
+function normalizeStringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const items = raw
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+  return items.length ? items : undefined;
+}
+
+function parseRecipeTierTendencies(
+  raw: unknown,
+): RecipeDetail["tierTendencies"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const tiers = new Set(["必须", "有必要", "有一定效果", "没有意义"]);
+  const out: NonNullable<RecipeDetail["tierTendencies"]> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const moduleId =
+      typeof row.module_id === "string" ? row.module_id.trim() : "";
+    const tier = typeof row.tier === "string" ? row.tier.trim() : "";
+    const why = typeof row.why === "string" ? row.why.trim() : "";
+    if (!moduleId || !tiers.has(tier) || !why) continue;
+    out.push({
+      module_id: moduleId,
+      tier: tier as NonNullable<RecipeDetail["tierTendencies"]>[number]["tier"],
+      why,
+    });
+  }
+  return out.length ? out : undefined;
 }
 
 export async function loadRecipeDetail(
@@ -1717,6 +1786,42 @@ export function formatDictateRecipeBrief(detail: RecipeDetail): string {
     lines.push(detail.hint.trim());
   }
   return lines.join("\n").trim();
+}
+
+/** 本局创作方案使用的旧配方案例目录：只给识别信号、方法与档位倾向，不提供固定流程。 */
+export function formatRecipeExamplesForCreationPlan(
+  details: readonly RecipeDetail[],
+): string {
+  return details
+    .filter(
+      (detail) =>
+        detail.signals?.length ||
+        detail.method?.length ||
+        detail.tierTendencies?.length,
+    )
+    .map((detail) => {
+      const lines = [
+        `- ${detail.id}（${detail.name}）：${detail.brief ?? detail.declaration}`,
+      ];
+      if (detail.signals?.length) {
+        lines.push(`  适用信号：${detail.signals.join("；")}`);
+      }
+      if (detail.method?.length) {
+        lines.push(`  方法：${detail.method.join("；")}`);
+      }
+      if (detail.tierTendencies?.length) {
+        lines.push(
+          `  档位倾向：${detail.tierTendencies
+            .map(
+              (item) =>
+                `${item.module_id}=${item.tier}（${item.why}）`,
+            )
+            .join("；")}`,
+        );
+      }
+      return lines.join("\n");
+    })
+    .join("\n");
 }
 
 /** 注入 design-flow：用户已选配方（方法论 + 开局起点） */
@@ -1915,6 +2020,7 @@ export function formatFlowProgressForAgent(params: {
   const closerPending =
     catalog && flow
       ? flow.steps.filter((step) => {
+          if (isPrototypeStep(step)) return false;
           const mod = catalog.modules.find((m) => m.name === step.name);
           return Boolean(mod?.closer) && !isStepAccepted(step, accepted);
         })
@@ -2146,6 +2252,39 @@ export function artifactTagForStep(
   return catalog?.modules.find((m) => m.name === name)?.artifact ?? null;
 }
 
+/**
+ * 可增殖实例的落盘 tag。生成规则、具体实例、开场白、拓扑各自占一条，
+ * 不写基名，避免后写的实例盖掉先写的。
+ * 槽位优先用步骤 id 的 #后缀（稳定），否则用规则名 / 这一条。
+ */
+export function repeatableInstanceProductTag(input: {
+  module: Pick<ModuleCatalogEntry, "id" | "name" | "artifact" | "repeatable">;
+  step: Pick<CreationFlowStep, "id" | "role" | "params">;
+}): string | null {
+  if (input.step.role === "prototype") return null;
+  const repeatable =
+    input.module.repeatable === true ||
+    input.module.id === "opening-setup" ||
+    input.module.id === "zero-layer-opening-setup";
+  if (!repeatable) return null;
+  const family =
+    input.module.id === "opening-setup"
+      ? "设计.开场白"
+      : input.module.id === "zero-layer-opening-setup"
+        ? "设计.0层开场白与初态"
+        : input.module.artifact?.trim() || "";
+  if (!family) return null;
+  const slot =
+    dictateProductSlot(input.step.id) ||
+    flowParamText(input.step.params, "rule_id") ||
+    flowParamText(input.step.params, "batch_goal") ||
+    (input.step.id.trim() && input.step.id.trim() !== input.module.name
+      ? input.step.id.trim()
+      : "");
+  if (!slot) return null;
+  return buildRepeatableProductTag(family, slot);
+}
+
 export function finalizeCreationFlow(
   flow: CreationFlow,
   catalog: ModuleCatalog | null | undefined,
@@ -2239,6 +2378,9 @@ function titleFromAcceptedContent(content: unknown): string | undefined {
   const row = asTitleRecord(content);
   if (!row) return undefined;
   const body = asTitleRecord(row.正文) ?? row;
+  if (typeof body.名称 === "string" && body.名称.trim()) {
+    return clampFlowTitle(body.名称);
+  }
   const pinned = asTitleRecord(body.本步参数);
   if (typeof pinned?.target === "string" && pinned.target.trim()) {
     return clampFlowTitle(pinned.target);
@@ -2252,6 +2394,9 @@ function titleFromAcceptedContent(content: unknown): string | undefined {
     const rec = asTitleRecord(item);
     if (typeof rec?.对象 === "string" && rec.对象.trim()) {
       return clampFlowTitle(rec.对象);
+    }
+    if (typeof rec?.名称 === "string" && rec.名称.trim()) {
+      return clampFlowTitle(rec.名称);
     }
   }
   if (typeof row.brief === "string" && row.brief.trim() && row.brief.trim().length <= FLOW_TITLE_MAX) {
@@ -2674,7 +2819,7 @@ export function listRepeatableSpawns(
   acceptedStepIds: readonly string[],
 ): CreationFlowSpawnView[] {
   return catalogModulesForIntake(catalog, "recipe")
-    .filter((m) => m.repeatable === true && !m.closer)
+    .filter((m) => m.repeatable === true)
     .filter(
       (m) => !flow.steps.some((s) => s.name === m.name && isPrototypeStep(s)),
     )
@@ -2776,7 +2921,8 @@ export function spawnInstanceFromPrototype(params: {
     { ...params.flow, steps },
     params.catalog,
   );
-  if (closerAt >= 0) {
+  // 开场自身是可增殖收口：新实例跟在原型后面，不要写回原型的 depends_on
+  if (closerAt >= 0 && steps[closerAt]!.id !== prototype.id) {
     const closer = steps[closerAt]!;
     if (!closer.depends_on.includes(id)) {
       steps[closerAt] = {
@@ -2958,8 +3104,11 @@ export function spawnRepeatableCreationStep(params: {
 
   const mod = findModuleByName(params.catalog, name);
   if (!mod) return { error: `未知能力：${name}` };
-  if (mod.repeatable !== true) return { error: `「${name}」不能反复新开` };
-  if (isCloserModule(mod, name)) return { error: `「${name}」是收口，不能增殖` };
+  if (mod.repeatable !== true) {
+    return isCloserModule(mod, name)
+      ? { error: `「${name}」是收口，不能增殖` }
+      : { error: `「${name}」不能反复新开` };
+  }
   const blocked = repeatableSpawnBlockedReason(
     params.flow,
     params.catalog,
@@ -3065,10 +3214,14 @@ export function dependencyArtifactTags(
   if (!catalog) return [];
   const tags: string[] = [];
   for (const dep of step.depends_on) {
-    const depName = flow
-      ? findStepByRef(flow, dep)?.name ?? dep
-      : dep;
-    const art = artifactTagForStep(depName, catalog);
+    const depStep = flow ? findStepByRef(flow, dep) : undefined;
+    const depName = depStep?.name ?? dep;
+    const mod = findModuleByName(catalog, depName);
+    const slotted =
+      depStep && mod
+        ? repeatableInstanceProductTag({ module: mod, step: depStep })
+        : null;
+    const art = slotted || artifactTagForStep(depName, catalog);
     if (art) tags.push(art);
   }
   return [...new Set(tags)];
@@ -3130,7 +3283,9 @@ export async function resolveDesignStepBinding(params: {
 
   const inherit =
     Boolean(params.inheritExisting) || isReviseStep(step);
-  const inheritTag = inherit ? module.artifact : null;
+  const inheritTag = inherit
+    ? repeatableInstanceProductTag({ module, step }) ?? module.artifact ?? null
+    : null;
   const opening =
     inherit || module.auto
       ? null

@@ -15,6 +15,7 @@ import {
   type ContextOrderProjection,
   type ContextOrderSlot,
 } from "../skills/context-order.js";
+import { parseContextFragment } from "../skills/context-fragment.js";
 import {
   WORKER_SET_DRAFT_TAG,
   WORKER_SET_FINAL_TAG,
@@ -22,7 +23,6 @@ import {
 import {
   defaultPlaySlots,
   enabledPlaySlotIds,
-  parsePlaySlots,
   refForSlot,
   type PlaySlotsConfig,
 } from "../skills/play-slots.js";
@@ -49,6 +49,7 @@ import {
 const SKIP_BIND_TAGS = new Set([
   "设计.开场白",
   "设计.开场白与开场变量",
+  "设计.0层开场白与初态",
   "设计.worker集",
   "设计.worker集.草稿",
   CONTEXT_ORDER_TAG,
@@ -71,7 +72,7 @@ function shouldSkipBindTag(tag: string): boolean {
 
 /** 偏文风/呈现/硬约束：有叙事转述时挂转述；否则仍挂主世界层 */
 const STYLE_TAG_RE =
-  /叙事指南|故事推进|文风|美学|纲领|禁忌|用户约束|用户需求|示例|模仿|正文组成|回复格式|监控栏|篇幅|结构/;
+  /叙事指南|故事推进|文风|美学|纲领|禁忌|用户约束|用户需求|示例|模仿|正文组成|回复呈现|回复格式|监控栏|篇幅|结构/;
 
 /** 这些配方开玩时刚需叙事转述（主世界出内容、转述出文风） */
 const RECIPES_REQUIRE_NARRATOR = new Set(["文本生成器"]);
@@ -85,6 +86,11 @@ export type DictatePlayBindResult = {
 
 function isStyleProductTag(tag: string): boolean {
   return STYLE_TAG_RE.test(tag);
+}
+
+function isFrequentlyChangingProduct(product: DictateProduct): boolean {
+  const stability = parseContextFragment(product.content)?.稳变;
+  return stability === "semi" || stability === "volatile";
 }
 
 /** 从黑板收集对话落盘产物（有正文的 用户.* / 设计.*） */
@@ -157,20 +163,34 @@ function buildGmInserts(params: {
     insert(0, WORKER_PERSONA_REF, "fixed", "槽位人设"),
   ];
   let o = 1;
-  for (const p of params.products) {
-    if (!params.includeStyle && isStyleProductTag(p.tag)) continue;
+  const included = params.products.filter(
+    (p) => params.includeStyle || !isStyleProductTag(p.tag),
+  );
+  const stable = included.filter((p) => !isFrequentlyChangingProduct(p));
+  const changing = included.filter(isFrequentlyChangingProduct);
+  for (const p of stable) {
     inserts.push(
       insert(
         o++,
         p.tag,
         "full",
-        `对话落盘固定产物〔order=${effectiveDictateOrder(p)}〕`,
+        `稳定产物；同频率按重要性序〔order=${effectiveDictateOrder(p)}〕`,
       ),
     );
   }
   inserts.push(
     insert(o++, DIALOGUE_HISTORY_TAG, "summary", "对话历史（按投影裁剪）"),
   );
+  for (const p of changing) {
+    inserts.push(
+      insert(
+        o++,
+        p.tag,
+        "full",
+        `较常变化产物；置于历史后〔order=${effectiveDictateOrder(p)}〕`,
+      ),
+    );
+  }
   for (const tag of params.runtimeTags) {
     inserts.push(
       insert(
@@ -280,7 +300,8 @@ export function buildDictateContextOrder(params: {
 
   return renumberContextOrder({
     schema: CONTEXT_ORDER_SCHEMA,
-    brief: "对话落盘落档自动挂载：固定产物 → 对话.历史 → 已有真值/投影 → 本轮输入",
+    brief:
+      "程序按变化频率分组，并在同组内按重要性排列：稳定产物 → 对话.历史 → 较常变化产物与当前状态 → 本轮输入",
     play_slots: params.playSlots,
     slots,
   });

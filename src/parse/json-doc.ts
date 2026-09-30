@@ -136,11 +136,63 @@ export function looksLikeProductJson(value: unknown): boolean {
   return PRODUCT_HINT_KEYS.some((k) => k in row);
 }
 
+/**
+ * 根对象被提前写成 `} , "下一键"` 时丢掉这个 `}`。
+ * 只在 JSON.parse 失败后使用；合法对象不会出现这种根级衔接。
+ */
+export function repairPrematureRootClose(s: string): string {
+  const text = String(s || "");
+  let out = "";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (inString) {
+      out += c;
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      continue;
+    }
+    if (c === "{") {
+      depth += 1;
+      out += c;
+      continue;
+    }
+    if (c === "}") {
+      if (depth === 1 && continuesAsSiblingKey(text, i + 1)) continue;
+      if (depth > 0) depth -= 1;
+      out += c;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+function continuesAsSiblingKey(text: string, from: number): boolean {
+  let j = from;
+  while (j < text.length && /\s/.test(text[j]!)) j += 1;
+  if (text[j] !== ",") return false;
+  j += 1;
+  while (j < text.length && /\s/.test(text[j]!)) j += 1;
+  return text[j] === '"';
+}
+
 function parseSlice(slice: string): unknown {
+  const repaired = repairPrematureRootClose(slice);
   return (
     tryParse(slice) ??
     tryParse(softenJsonText(slice)) ??
     tryParse(softenJsonText(convertStructuralSmartQuotes(slice))) ??
+    tryParse(repaired) ??
+    tryParse(softenJsonText(repaired)) ??
     tryParse(repairTruncatedJsonObject(slice)) ??
     tryParse(softenJsonText(repairTruncatedJsonObject(slice)))
   );
@@ -223,4 +275,17 @@ export function selectJsonPayload(content: string, reasoning?: string): string {
   if (bodyOk) return body;
   if (thinkOk) return think;
   return body || think;
+}
+
+/** insert 的 content 若是 JSON 文本，抽成规范对象再落盘。散文原样保留。 */
+export function canonicalizeInsertedContent(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return content;
+  const parsed = tryParseJsonDoc(trimmed);
+  if (!parsed || typeof parsed !== "object") return content;
+  if (!Array.isArray(parsed)) {
+    const row = parsed as Record<string, unknown>;
+    if (row.schema === "context-fragment-v1") row.schema = "context-fragment.v1";
+  }
+  return JSON.stringify(parsed, null, 2);
 }

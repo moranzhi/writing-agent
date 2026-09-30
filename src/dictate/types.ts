@@ -5,11 +5,25 @@ export const DICTATE_MODE_VALUE = "dictate";
 
 /** 产物相对序写在黑板 item.metadata 里 */
 export const DICTATE_ORDER_META_KEY = "dictateOrder";
+export const DICTATE_LAYER_META_KEY = "dictateLayer";
+export const DICTATE_SELF_SCORE_META_KEY = "dictateSelfScore";
+
+export type DictateSelfScore = {
+  dims: Array<{
+    name: string;
+    score: number;
+    gap?: string;
+    options?: string[];
+  }>;
+};
 
 export type DictateProduct = {
   tag: string;
   content: string;
-  /** 相对顺序：负数靠前，正数靠后；缺省时按 tag 启发式 */
+  /** 产物用途层；目录默认值可被具体产物生命周期覆盖 */
+  layer?: "intermediate" | "final";
+  selfScore?: DictateSelfScore;
+  /** 同一变化频率组内的重要性顺序：负数靠前，正数更靠近实际使用位置 */
   order?: number;
 };
 
@@ -31,13 +45,15 @@ export function isAllowedProductTag(tag: string): boolean {
 }
 
 /**
- * 未显式给 order 时的默认相对序。
- * 越稳定/重要越靠前（更负）；越常改越靠后（更正）。
+ * 未显式给 order 时的默认重要性序。
+ * 变化频率由产物的「稳变」另行分组；同组内基础材料在前，
+ * 越接近本轮生成合同的内容越靠后（更正）。
  * 可增殖拆分 tag（基名#槽）按基名归类。
  */
 export function defaultDictateOrder(tag: string): number {
   const t = tag.trim();
   const family = t.includes("#") ? t.slice(0, t.indexOf("#")).trim() : t;
+  if (family === "设计.本局创作方案") return -50;
   if (family === "用户.需求" || t === "用户.需求") return -40;
   if (family === "设计.变量目录" || family === "设计.变量映射") return -25;
   if (family === "设计.模仿范例" || family === "设计.模仿要点") return -28;

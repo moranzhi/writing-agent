@@ -22,7 +22,7 @@ export const DICTATE_INSERT_TAG_ALIASES: Readonly<Record<string, string>> = {
 
 /** 多模块同轮：写进每条 insert tool result 的 reply_hint */
 export const DICTATE_MULTI_MODULE_REPLY_HINT =
-  "本轮带回了多个 reply_module。末尾可见回复：每个模块各写一块 markdown，标题用 ## 模块 · {名称}（与该 reply_module 一致）；块间空一行；每块只写该模块的确认 / 薄弱点 / 追问。全部模块写完后，可另起一段写 1 条「建议下一刀」（条件须已接近成立）。缺某一块则补上后再结束本轮。";
+  "本轮写入了多个产物。末尾用一段自然回复综合说明本轮变化、共同强项与关键缺口；不要逐模块套标题或重复模板。只有缺口确需用户决定时才提问。";
 
 const MAX_PROBE_CHARS = 1200;
 const MAX_PRINCIPLES_CHARS = 900;
@@ -73,6 +73,15 @@ export function extractSelfScoreDimensionNames(outputFence: string): string[] {
   return names.slice(0, 8);
 }
 
+function extractScoreFenceDimensionNames(scoreFence: string): string[] {
+  const names: string[] = [];
+  for (const match of scoreFence.matchAll(/^([^#\-\s][^：\n]{0,30})：\s*$/gm)) {
+    const name = match[1]?.trim();
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names.slice(0, 8);
+}
+
 function clip(text: string, max: number): string {
   const t = text.trim();
   if (t.length <= max) return t;
@@ -91,7 +100,12 @@ export function formatDictateUserFacingBrief(params: {
   const probe = getModuleSection(sections, "probe");
   const principles = getModuleSection(sections, "principles");
   const output = getModuleSection(sections, "output");
-  const dims = output ? extractSelfScoreDimensionNames(output) : [];
+  const score = getModuleSection(sections, "score");
+  const dims = score
+    ? extractScoreFenceDimensionNames(score)
+    : output
+      ? extractSelfScoreDimensionNames(output)
+      : [];
 
   if (!probe && !principles && dims.length === 0) return "";
 
@@ -101,19 +115,19 @@ export function formatDictateUserFacingBrief(params: {
   if (dims.length) includes.push(`自评关注（${dims.join("、")}）`);
 
   const parts: string[] = [
-    `# 模块 · ${params.module.name}`,
+    `# 本轮关注 · ${params.module.name}`,
     "",
-    `回答时请附带本模块（落盘 tag：\`${params.tag}\`）。`,
+    `用于组织写入 \`${params.tag}\` 后的自然回复，不要求固定标题或独立模块段。`,
     "",
     "本模块内容包括：",
     ...includes.map((x) => `- ${x}`),
     "",
     "## 写入用户回复时做什么",
-    `1. 用二级标题 \`## 模块 · ${params.module.name}\` 开一段（多模块时本段只写本模块）。`,
-    "2. 确认：2～4 句复述本模块已落要点，让用户能判断对不对。",
-    "3. 薄弱点：对照下方「自评关注」口头点 1 处不够硬的地方（不必交打分表或 JSON）。",
-    "4. 追问：1～2 点；每点给建议选项或短场景，用户可直接采用或改写。材料已够则追问可空，改写「建议下一刀」。",
-    "5. 不粘贴产物全文；不复述 tool JSON。",
+    "1. 自然回应用户本轮值得保留、需要纠正或存在矛盾的内容。",
+    "2. 简要说明形成或改写了什么；完整 JSON 由产物卡展示。",
+    "3. 结合 self_score 说明最强处与关键缺口，不复述整张评分表。",
+    "4. 只有低分缺口确需用户决定时才提问，并给具体选项或短场景。",
+    "5. 同轮多个产物时合并回应，不逐模块套模板；不粘贴产物全文或 tool JSON。",
   ];
 
   if (probe) {

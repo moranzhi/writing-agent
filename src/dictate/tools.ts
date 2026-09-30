@@ -7,6 +7,70 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "read_module",
+      description:
+        "读取一个内容能力当前版本的任务、原则、产物规格、评分规则、绑定库目录与程序约束。写该能力产物前必须先读取当前版本。",
+      parameters: {
+        type: "object",
+        properties: {
+          module_id: {
+            type: "string",
+            description: "能力 id 或中文名",
+          },
+          reason: {
+            type: "string",
+            description: "本轮为何读取（一句话，可选）",
+          },
+        },
+        required: ["module_id"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_library_entry",
+      description:
+        "读取当前能力绑定库中本轮选中的条目。默认 1～2；叙事指南等多文风确需第三项时须提供 reason 并说明适用场合。",
+      parameters: {
+        type: "object",
+        properties: {
+          library_id: {
+            type: "string",
+            description: "当前能力绑定的库 id",
+          },
+          entry_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "本轮选中的条目 id，默认最多两个",
+          },
+          reason: {
+            type: "string",
+            description: "读取超过两个条目时必填",
+          },
+        },
+        required: ["library_id", "entry_ids"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "prepare_opening",
+      description:
+        "用户该填的内容均已完成后、生成开场白之前单独调用。程序依次编译信息可见范围、游玩执行方式、上下文排序和运行配置；返回成功后再在下一步生成并 insert 开场白。",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "insert",
       description:
         "写入或覆盖固定产物。同 position 再调用即整份改写。可增殖（生成规则/具体实例）须用 基名#唯一id 拆分，禁止反复写基名覆盖。成功时可能返回 reply_module：末尾可见回复须附带该模块；同轮多个则每个模块各写一块 ## 模块 · 名称。确认与追问写在普通回复，不写进本工具。order 标相对先后。",
@@ -26,7 +90,33 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
           order: {
             type: "number",
             description:
-              "相对顺序（可负）。越小越靠前。越常改越大。省略则沿用原序或默认。",
+              "同一变化频率组内的重要性顺序（可负）。基础材料用较小值，越接近生成时使用的合同越大；省略则沿用原序或默认。",
+          },
+          self_score: {
+            type: "object",
+            description:
+              "能力已有 score 规则时必填；维度名须完全一致，1～5 分，分数不高于 3 时必须写 gap。",
+            properties: {
+              dims: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    score: { type: "number" },
+                    gap: { type: "string" },
+                    options: {
+                      type: "array",
+                      items: { type: "string" },
+                    },
+                  },
+                  required: ["name", "score"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["dims"],
+            additionalProperties: false,
           },
         },
         required: ["position", "content"],

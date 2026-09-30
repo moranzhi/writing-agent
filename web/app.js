@@ -10,7 +10,7 @@ import {
 } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
-import { displayCreationModeLabel, displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
+import { displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
 import {
   clearQuestionCardState,
   collectQuestionAnswers,
@@ -34,6 +34,16 @@ import {
   initMarkdownRender,
   isMarkdownRenderEnabled,
 } from "./markdown.js";
+import {
+  filterUsedApiProfiles,
+  forgetApiProfileUsage,
+  loadApiProfileUsage,
+  membersUsageRank,
+  pruneApiProfileUsage,
+  recordApiProfileUsage,
+  seedApiProfileUsage,
+  sortByApiProfileUsage,
+} from "./api-profile-usage.js";
 import { wireDirectiveAutocomplete } from "./directive-autocomplete.js";
 import {
   refreshDirectiveHighlight,
@@ -79,17 +89,60 @@ let livePollFailCount = 0;
 let inflightSeq = 0;
 /** 底栏菜单：只切当前 API，不编辑 */
 let apiProfileList = [];
+let apiProfileGroups = [];
 let activeApiProfileId = null;
 /** idle | loading | ready | error */
 let apiProfileMenuStatus = "idle";
 let apiProfileMenuError = "";
 let apiProfileSwitchingId = null;
+let apiProfileSwitchingLabel = "";
 
 const LIVE_POLL_MS = 280;
+const WORKSPACE_SESSION_KEY = "wa-workspace-session-v1";
 
 const $ = (id) => document.getElementById(id);
 
 const PHASE = { idle: "待命", running: "执行中", waiting_user: "等待你", done: "已完成", error: "出错" };
+
+function readWorkspaceSession() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(WORKSPACE_SESSION_KEY) || "null");
+    if (!value || typeof value !== "object" || typeof value.bookId !== "string") {
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function rememberWorkspaceSession() {
+  if (!activeBookId || !sessionId || lastView?.bookId !== activeBookId) return;
+  try {
+    const mode = isPlayView(lastView) ? "play" : "design";
+    sessionStorage.setItem(
+      WORKSPACE_SESSION_KEY,
+      JSON.stringify({
+        bookId: activeBookId,
+        sessionId,
+        mode,
+        playSaveId:
+          mode === "play" ? activePlaySaveId || "play-working" : null,
+        navLevel: sidebarNav.level === "book" ? "book" : "root",
+      }),
+    );
+  } catch {
+    /* sessionStorage 不可用时维持无记忆模式 */
+  }
+}
+
+function forgetWorkspaceSession() {
+  try {
+    sessionStorage.removeItem(WORKSPACE_SESSION_KEY);
+  } catch {
+    /* sessionStorage 不可用 */
+  }
+}
 
 /** 用户任务三态（表层）；底层 waitingReason 映射进来 */
 const USER_TASK = {
@@ -158,7 +211,8 @@ function resolveUserTask(view, loading) {
   if (canOfferSaveProduct(view)) {
     return {
       id: "speak",
-      label: "可保存",
+      label: USER_TASK.speak.label,
+      hideChip: true,
       title: "落档产物",
       hint: view.hasProduct
         ? "可再保存一份新定稿，或用已有产物开玩。"
@@ -298,6 +352,10 @@ async function api(path, options = {}) {
 
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function attr(s) {
+  return esc(s).replace(/"/g, "&quot;");
 }
 
 function proposedOutputCopy(proposed) {
@@ -585,8 +643,10 @@ function resolveComposer(view, loading) {
 
 function composerModeChip(spec) {
   const id = spec.task?.id;
+  if (spec.task?.hideChip) return "";
   if (id !== "speak" && id !== "answer" && id !== "review" && id !== "busy") return "";
   const label = spec.task.label || "";
+  if (!label) return "";
   const tip = [spec.taskTitle, spec.taskHint].filter(Boolean).join(" — ");
   const tone = spec.acceptAction?.tone ? ` data-tone="${esc(spec.acceptAction.tone)}"` : "";
   return `<span class="composer-mode-chip" data-task="${esc(id)}"${tone} title="${esc(tip)}">${esc(label)}</span>`;
@@ -888,6 +948,7 @@ function summarizeApiProfile(profile) {
     id: profile.id,
     name: profile.name || "未命名",
     model: profile.model || "",
+    groupId: profile.groupId || "",
     hasKey: Boolean(String(profile.apiKey ?? "").trim()),
   };
 }
@@ -903,8 +964,7 @@ function composerMoreMenuTitle() {
 
 function composerApiSubmenuMeta() {
   if (apiProfileSwitchingId) {
-    const p = apiProfileList.find((x) => x.id === apiProfileSwitchingId);
-    return { desc: p ? `切换到 ${p.name}…` : "切换中…", title: "API" };
+    return { desc: apiProfileSwitchingLabel || "切换中…", title: "API" };
   }
   if (apiProfileMenuStatus === "loading" || apiProfileMenuStatus === "idle") {
     return { desc: "加载中…", title: "API" };
@@ -916,10 +976,45 @@ function composerApiSubmenuMeta() {
     return { desc: "未配置", title: "API" };
   }
   const active = activeApiProfile();
+  const group = apiProfileGroups.find((item) => item.id === active?.groupId);
+  const groupName = group?.name ? `${group.name} · ` : "";
+  const model = active?.model ? ` · ${active.model}` : "";
   return {
-    desc: active?.name || "选择配置",
-    title: active ? `API · ${active.name}` : "API",
+    desc: active ? `${groupName}${active.name}${model}` : "选择配置",
+    title: active ? `API · ${active.name}${model}` : "API",
   };
+}
+
+function composerProfileButtonHtml(profile, switching) {
+  const active = profile.id === activeApiProfileId;
+  const disabled = !profile.hasKey || switching;
+  const model = profile.model || profile.name || "未指定模型";
+  const nameNote =
+    profile.name && profile.name !== profile.model ? profile.name : "";
+  const desc = !profile.hasKey ? "未设置 Key" : nameNote;
+  const forget =
+    !active && profile.id
+      ? `<button type="button" class="more-profile-forget" data-forget-profile="${attr(profile.id)}" title="移出曾用记录，配置仍保留">移出</button>`
+      : "";
+  return `<div class="more-profile-row">
+      <button
+        type="button"
+        class="more-menu-item more-theme-item more-profile-item${active ? " is-active" : ""}"
+        data-activate-profile="${attr(profile.id)}"
+        role="menuitemradio"
+        aria-checked="${active ? "true" : "false"}"
+        ${disabled ? "disabled" : ""}
+        ${profile.id === apiProfileSwitchingId ? "aria-busy=\"true\"" : ""}
+        title="${attr(model)}"
+      >
+        <span class="more-theme-copy">
+          <span class="more-theme-name">${esc(model)}</span>
+          ${desc ? `<span class="more-theme-desc">${esc(desc)}</span>` : ""}
+        </span>
+        <span class="more-toggle-mark" aria-hidden="true"></span>
+      </button>
+      ${forget}
+    </div>`;
 }
 
 function composerApiProfileItemsHtml() {
@@ -933,50 +1028,60 @@ function composerApiProfileItemsHtml() {
     return `<p class="more-menu-empty">还没有 API 配置。<a href="/settings.html">去设置添加</a></p>`;
   }
   const switching = Boolean(apiProfileSwitchingId);
-  return apiProfileList
-    .map((p) => {
-      const active = p.id === activeApiProfileId;
-      const disabled = !p.hasKey || switching;
-      const desc = !p.hasKey ? "未设置 Key" : p.model || "未指定模型";
-      return `<button
-        type="button"
-        class="more-menu-item more-theme-item more-profile-item${active ? " is-active" : ""}"
-        data-activate-profile="${esc(p.id)}"
-        role="menuitemradio"
-        aria-checked="${active ? "true" : "false"}"
-        ${disabled ? "disabled" : ""}
-        ${p.id === apiProfileSwitchingId ? "aria-busy=\"true\"" : ""}
-        title="${esc(p.name)}${p.model ? ` · ${esc(p.model)}` : ""}"
-      >
-        <span class="more-theme-copy">
-          <span class="more-theme-name">${esc(p.name)}</span>
-          <span class="more-theme-desc">${esc(desc)}</span>
-        </span>
-        <span class="more-toggle-mark" aria-hidden="true"></span>
-      </button>`;
+  const usage = loadApiProfileUsage();
+  const buckets = new Map();
+  for (const profile of apiProfileList) {
+    const key = profile.groupId || "";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(profile);
+  }
+  for (const [key, members] of buckets) {
+    buckets.set(key, filterUsedApiProfiles(members, usage, activeApiProfileId));
+  }
+  const ordered = [
+    ...apiProfileGroups.filter((group) => buckets.has(group.id)),
+    ...[...buckets.keys()]
+      .filter((id) => id && !apiProfileGroups.some((group) => group.id === id))
+      .map((id) => ({ id, name: "未命名组" })),
+  ];
+  if (buckets.has("")) ordered.push({ id: "", name: "未分组" });
+  const sortedGroups = sortByApiProfileUsage(ordered, (group) =>
+    membersUsageRank(buckets.get(group.id) || [], usage),
+  );
+  return sortedGroups
+    .map((group) => {
+      const members = buckets.get(group.id) || [];
+      if (!members.length) return "";
+      if (members.length === 1) {
+        return composerProfileButtonHtml(members[0], switching);
+      }
+      const containsActive = members.some((profile) => profile.id === activeApiProfileId);
+      const existing = document.querySelector(
+        `#composer-api-menu [data-api-group="${CSS.escape(group.id)}"]`,
+      );
+      const open = existing ? existing.hasAttribute("open") : containsActive;
+      const activeModel = members.find((profile) => profile.id === activeApiProfileId)?.model;
+      const desc = activeModel || `${members.length} 个曾用`;
+      return `<details class="api-fold" data-api-group="${attr(group.id)}"${open ? " open" : ""}>
+        <summary class="more-menu-item more-theme-item api-fold-sum${containsActive ? " is-active" : ""}">
+          <span class="more-theme-copy">
+            <span class="more-theme-name">${esc(group.name)}</span>
+            <span class="more-theme-desc">${esc(desc)}</span>
+          </span>
+          <span class="api-fold-chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="api-fold-list" role="group" aria-label="${attr(group.name)}">
+          ${members.map((profile) => composerProfileButtonHtml(profile, switching)).join("")}
+        </div>
+      </details>`;
     })
     .join("");
 }
 
-function composerApiSubmenuHtml() {
+function composerApiSectionHtml() {
   const meta = composerApiSubmenuMeta();
-  const wasSubOpen = $("composer-api-submenu")?.hasAttribute("open");
-  return `<details class="more-submenu" id="composer-api-submenu"${wasSubOpen ? " open" : ""}>
-    <summary
-      class="more-menu-item more-theme-item more-submenu-sum"
-      title="${esc(meta.title)}"
-      aria-label="${esc(meta.title)}"
-    >
-      <span class="more-theme-copy">
-        <span class="more-theme-name">API</span>
-        <span class="more-theme-desc" id="composer-api-submenu-desc">${esc(meta.desc)}</span>
-      </span>
-      <span class="more-submenu-chevron" aria-hidden="true"></span>
-    </summary>
-    <div class="more-submenu-panel" id="composer-api-menu" role="menu">
-      ${composerApiProfileItemsHtml()}
-    </div>
-  </details>`;
+  return `<div class="more-menu-label" id="composer-api-label" title="${attr(meta.title)}">API</div>
+    <div id="composer-api-menu" role="group" aria-label="API 配置">${composerApiProfileItemsHtml()}</div>`;
 }
 
 function composerMoreMenuHtml() {
@@ -1006,7 +1111,7 @@ function composerMoreMenuHtml() {
       <span class="hamburger-icon" aria-hidden="true"></span>
     </summary>
     <div class="more-menu-panel composer-more-panel" role="menu">
-      ${composerApiSubmenuHtml()}
+      ${composerApiSectionHtml()}
       <div class="more-menu-sep" role="separator"></div>
       <div class="more-menu-label">显示</div>
       <button
@@ -1059,13 +1164,8 @@ function syncApiProfileMenuUi() {
   const host = $("composer-api-menu");
   if (host) host.innerHTML = composerApiProfileItemsHtml();
   const meta = composerApiSubmenuMeta();
-  const desc = $("composer-api-submenu-desc");
-  if (desc) desc.textContent = meta.desc;
-  const subSum = document.querySelector("#composer-api-submenu > summary");
-  if (subSum) {
-    subSum.title = meta.title;
-    subSum.setAttribute("aria-label", meta.title);
-  }
+  const label = $("composer-api-label");
+  if (label) label.title = meta.title;
   const sum = document.querySelector("#composer-more-menu .more-menu-sum");
   if (sum) {
     const title = composerMoreMenuTitle();
@@ -1081,7 +1181,10 @@ async function loadApiProfiles() {
   try {
     const data = await api("/api/profiles");
     apiProfileList = (data.profiles || []).map(summarizeApiProfile);
+    apiProfileGroups = data.groups || [];
     activeApiProfileId = data.activeProfileId ?? apiProfileList[0]?.id ?? null;
+    pruneApiProfileUsage(new Set(apiProfileList.map((p) => p.id)));
+    seedApiProfileUsage(activeApiProfileId);
     apiProfileMenuStatus = "ready";
     syncApiProfileMenuUi();
   } catch (err) {
@@ -1093,7 +1196,6 @@ async function loadApiProfiles() {
 
 function closeComposerMoreMenu(menu) {
   menu?.removeAttribute("open");
-  menu?.querySelector("#composer-api-submenu")?.removeAttribute("open");
 }
 
 async function activateApiProfileFromMenu(id, menu) {
@@ -1104,17 +1206,21 @@ async function activateApiProfileFromMenu(id, menu) {
   const profile = apiProfileList.find((p) => p.id === id);
   if (!profile?.hasKey) return;
   apiProfileSwitchingId = id;
+  apiProfileSwitchingLabel = profile ? `切换到 ${profile.name}…` : "切换中…";
   syncApiProfileMenuUi();
   try {
     const result = await api(`/api/profiles/${encodeURIComponent(id)}/activate`, {
       method: "POST",
     });
     activeApiProfileId = result.activeProfileId || id;
+    recordApiProfileUsage(activeApiProfileId);
     apiProfileSwitchingId = null;
+    apiProfileSwitchingLabel = "";
     syncApiProfileMenuUi();
     closeComposerMoreMenu(menu);
   } catch (err) {
     apiProfileSwitchingId = null;
+    apiProfileSwitchingLabel = "";
     syncApiProfileMenuUi();
     alert(err.message || "切换失败");
   }
@@ -2104,6 +2210,7 @@ function showCatalog({ closeSession = true } = {}) {
   selectedBookIds = new Set();
   renderPathBar();
   renderBookList();
+  if (!closeSession) rememberWorkspaceSession();
 }
 
 function renderExplorerRow({
@@ -2230,15 +2337,15 @@ function renderSpecChildren(book, product, list) {
   }
 }
 
-function appendNewPlayRow(book, list, instanceId, { child = false } = {}) {
-  list.appendChild(
-    renderExplorerRow({
-      name: "+ 新开一局",
-      actionClass: "explorer-action",
-      child,
-      onClick: () => void startNewPlayForBook(book.id, instanceId),
-    }),
-  );
+function appendNewPlayFromSnapshot(book, list, instanceId) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "explorer-add child";
+  btn.textContent = "+";
+  btn.title = "从这份创作快照新开一局";
+  btn.setAttribute("aria-label", "新开一局");
+  btn.addEventListener("click", () => void startNewPlayForBook(book.id, instanceId));
+  list.appendChild(btn);
 }
 
 function appendCurrentDesignRow(book, list) {
@@ -2250,7 +2357,7 @@ function appendCurrentDesignRow(book, list) {
       meta: live ? "进行中" : "继续",
       active: live,
       actionClass: "explorer-design",
-      title: "打开创作会话；定稿会出现在下方",
+      title: "继续创作；定稿会出现在下方",
       onClick: () => void resumeDesignSession(book.id),
     }),
   );
@@ -2275,13 +2382,11 @@ function renderBookContents(book, list) {
   if (!products.length) {
     const hint = document.createElement("p");
     hint.className = "explorer-hint";
-    hint.textContent = bookPlayReady(book.id) ? "还没有规格" : "定稿后会出现在这里";
+    hint.textContent = bookPlayReady(book.id) ? "还没有创作快照" : "定稿后会出现在这里";
     list.appendChild(hint);
-    if (bookPlayReady(book.id)) appendNewPlayRow(book, list);
     return;
   }
 
-  let anyExpanded = false;
   for (const product of products) {
     const expanded = specIsExpanded(book.id, product.id);
     const bits = [];
@@ -2290,7 +2395,7 @@ function renderBookContents(book, list) {
       renderExplorerRow({
         name: product.label,
         meta: bits.join(" · "),
-        title: "展开或收起；双击改名；右键编辑产物",
+        title: "已保存的创作快照；展开可看游玩",
         actionClass: "explorer-spec",
         twistie: true,
         expanded,
@@ -2303,14 +2408,8 @@ function renderBookContents(book, list) {
           showSaveMenu(book.id, product.id, product.label, e.clientX, e.clientY),
       }),
     );
-    if (expanded) {
-      anyExpanded = true;
-      renderSpecChildren(book, product, list);
-      appendNewPlayRow(book, list, product.id, { child: true });
-    }
-  }
-  if (!anyExpanded) {
-    appendNewPlayRow(book, list, playingInstanceId || products[0]?.id);
+    if (expanded) renderSpecChildren(book, product, list);
+    appendNewPlayFromSnapshot(book, list, product.id);
   }
 }
 
@@ -2524,7 +2623,7 @@ function setupBookBoxSelect() {
   });
 }
 
-async function loadPlaySave(bookId, saveId) {
+async function loadPlaySave(bookId, saveId, { silent = false } = {}) {
   try {
     const products = productInstancesForBook(bookId);
     const run = playRunsForBook(bookId).find((r) => r.id === saveId);
@@ -2538,9 +2637,11 @@ async function loadPlaySave(bookId, saveId) {
     );
     activePlaySaveId = saveId === "play-working" ? null : saveId;
     renderSession(data.session, false);
+    return true;
   } catch (err) {
     if (lastView) renderSession(lastView, false);
-    alert(err.message);
+    if (!silent) alert(err.message);
+    return false;
   }
 }
 
@@ -2697,6 +2798,7 @@ function renderHeader(view, loading) {
 function closeWorkspace({ emptyCopy = "" } = {}) {
   hideEnterPicker();
   stopLivePoll();
+  forgetWorkspaceSession();
   sessionId = null;
   lastView = null;
   activeBookId = null;
@@ -3003,6 +3105,7 @@ function renderSession(view, loading = false) {
     },
   });
   renderComposer(view, loading);
+  rememberWorkspaceSession();
   if (loading) startLivePoll();
   else stopLivePoll();
 }
@@ -3386,130 +3489,20 @@ async function loadBooks() {
 
 function openNewBookDialog() {
   $("input-book-title").value = "";
-  void populateDirectorSelect();
   $("dialog-new-book").showModal();
   $("input-book-title").focus();
 }
 
-async function populateDirectorSelect() {
-  const sel = $("select-director");
-  const desc = $("director-desc");
-  const modeSel = $("select-creation-mode");
-  const modeDesc = $("creation-mode-desc");
-  const fieldDirector = $("field-director");
-  let recipeDirectors = [];
-  let dictateDirectors = [];
-
-  const fillOptions = (list) => {
-    if (!sel) return;
-    sel.innerHTML = "";
-    if (!list.length) {
-      sel.innerHTML = `<option value="">暂无配方</option>`;
-      sel.required = false;
-      return;
-    }
-    for (const d of list) {
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.name || d.id;
-      if (d.declaration) opt.dataset.declaration = d.declaration;
-      sel.appendChild(opt);
-    }
-    sel.value = list[0].id;
-    sel.required = true;
-  };
-
-  const syncDesc = () => {
-    if (!sel || !desc) return;
-    if (!modeSel?.value) {
-      desc.hidden = true;
-      desc.textContent = "";
-      return;
-    }
-    const list =
-      modeSel.value === "dictate" ? dictateDirectors : recipeDirectors;
-    const cur = list.find((d) => d.id === sel.value);
-    const text = (cur?.declaration ?? "").trim();
-    desc.hidden = !text;
-    desc.textContent = text;
-  };
-
-  const syncMode = () => {
-    const mode = modeSel?.value?.trim() || "";
-    if (!mode) {
-      if (fieldDirector) fieldDirector.hidden = true;
-      if (modeDesc) modeDesc.hidden = true;
-      if (desc) desc.hidden = true;
-      if (sel) {
-        sel.innerHTML = `<option value="">请先选择进料方式</option>`;
-        sel.required = false;
-      }
-      return;
-    }
-    const dictate = mode === "dictate";
-    if (fieldDirector) fieldDirector.hidden = false;
-    fillOptions(dictate ? dictateDirectors : recipeDirectors);
-    if (modeDesc) {
-      modeDesc.hidden = false;
-      modeDesc.textContent = dictate
-        ? `${displayCreationModeLabel("dictate")}：对话写入产物；变量/映射用工具钉死；下方为对应配方。`
-        : `${displayCreationModeLabel("recipe")}：按工作流计划逐步验收技能；下方为对应配方。`;
-    }
-    syncDesc();
-  };
-
-  if (modeSel && !modeSel.dataset.bound) {
-    modeSel.dataset.bound = "1";
-    modeSel.addEventListener("change", syncMode);
-  }
-  if (sel && !sel.dataset.boundDesc) {
-    sel.dataset.boundDesc = "1";
-    sel.addEventListener("change", syncDesc);
-  }
-  if (!sel) return;
-  try {
-    const data = await api("/api/directors");
-    recipeDirectors = data.recipeDirectors ?? data.directors ?? [];
-    dictateDirectors = data.dictateDirectors ?? [];
-    // 打开对话框时重置为「先选进料」
-    if (modeSel) {
-      modeSel.value = "";
-      const placeholder = [...modeSel.options].find((o) => !o.value);
-      if (placeholder) placeholder.selected = true;
-    }
-    syncMode();
-  } catch (err) {
-    sel.innerHTML = `<option value="">加载失败</option>`;
-    if (desc) {
-      desc.hidden = false;
-      desc.textContent = err.message;
-    }
-  }
-}
-
 async function createBook() {
   const title = $("input-book-title").value.trim() || "未命名作品";
-  const creationMode = $("select-creation-mode")?.value?.trim() || "";
-  const recipeId = $("select-director")?.value?.trim();
-  if (creationMode !== "recipe" && creationMode !== "dictate") {
-    alert("请先选择进料方式");
-    return;
-  }
-  if (!recipeId) {
-    alert("请选择配方");
-    return;
-  }
   $("btn-create-book").disabled = true;
   try {
-    const directorsMeta = await api("/api/directors").catch(() => null);
-    const orchestratorId = directorsMeta?.skillPackId || "world-simulator";
     const data = await api("/api/books", {
       method: "POST",
       body: JSON.stringify({
         title,
-        orchestratorId,
-        creationMode,
-        recipeId,
+        orchestratorId: "world-simulator",
+        creationMode: "dictate",
       }),
     });
     $("dialog-new-book").close();
@@ -3747,8 +3740,12 @@ async function openModelComparePicker(messageId) {
       <label class="compare-profile-item">
         <input type="checkbox" name="compare-profile" value="${esc(p.id)}" ${i < 2 ? "checked" : ""} />
         <span>
-          <strong>${esc(p.name)}</strong>
-          <div class="muted">${esc(p.model)}</div>
+          <strong>${esc(p.model || p.name)}</strong>
+          <div class="muted">${esc(
+            [p.name && p.name !== p.model ? p.name : "", p.baseUrl || ""]
+              .filter(Boolean)
+              .join(" · "),
+          )}</div>
         </span>
       </label>`,
       )
@@ -4133,6 +4130,16 @@ $("composer")?.addEventListener("click", (e) => {
     void loadApiProfiles();
     return;
   }
+  const forgetBtn = e.target.closest("[data-forget-profile]");
+  if (forgetBtn && menu.contains(forgetBtn)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = forgetBtn.getAttribute("data-forget-profile");
+    if (id && id !== activeApiProfileId && forgetApiProfileUsage(id)) {
+      syncApiProfileMenuUi();
+    }
+    return;
+  }
   const profileBtn = e.target.closest("[data-activate-profile]");
   if (profileBtn && menu.contains(profileBtn)) {
     e.preventDefault();
@@ -4155,12 +4162,82 @@ document.addEventListener("click", (e) => {
   document.querySelectorAll("details.more-menu[open]").forEach((d) => {
     if (!d.contains(e.target)) {
       d.removeAttribute("open");
-      d.querySelectorAll("details.more-submenu[open]").forEach((sub) => {
+      d.querySelectorAll("details.more-submenu[open], details.api-fold[open]").forEach((sub) => {
         sub.removeAttribute("open");
       });
     }
   });
 });
+
+/** API 组二级菜单：同时只展开一个 */
+document.addEventListener("toggle", (e) => {
+  const fold = e.target;
+  if (!(fold instanceof HTMLDetailsElement) || !fold.classList.contains("api-fold") || !fold.open) {
+    return;
+  }
+  const root = fold.closest("#composer-api-menu");
+  if (!root) return;
+  root.querySelectorAll("details.api-fold[open]").forEach((other) => {
+    if (other !== fold) other.removeAttribute("open");
+  });
+}, true);
+
+async function restoreWorkspaceSession() {
+  const saved = readWorkspaceSession();
+  if (!saved || !books.some((book) => book.id === saved.bookId)) {
+    forgetWorkspaceSession();
+    return false;
+  }
+
+  const bookId = saved.bookId;
+  activeBookId = bookId;
+  activePlaySaveId =
+    saved.playSaveId && saved.playSaveId !== "play-working"
+      ? saved.playSaveId
+      : null;
+  if (saved.navLevel === "book") {
+    navigateToBook(bookId);
+  } else {
+    sidebarNav = { level: "root" };
+    document.body.dataset.navLevel = "root";
+    renderPathBar();
+    renderBookList();
+  }
+
+  if (saved.sessionId) {
+    try {
+      const view = await api(
+        `/api/sessions/${encodeURIComponent(saved.sessionId)}`,
+      );
+      if (view?.bookId === bookId) {
+        renderSession(view, false);
+        void fetchPlaySavesForBook(bookId);
+        return true;
+      }
+    } catch {
+      /* 服务端会话已失效时，从作品与存档恢复 */
+    }
+  }
+
+  try {
+    if (saved.mode === "play") {
+      await fetchPlaySavesForBook(bookId, true);
+      const restored = saved.playSaveId
+        ? await loadPlaySave(bookId, saved.playSaveId, { silent: true })
+        : false;
+      if (!restored) await openCurrentPlay(bookId);
+    } else {
+      await openBookDesign(bookId);
+    }
+    if (saved.navLevel !== "book") {
+      showCatalog({ closeSession: false });
+    }
+    return Boolean(sessionId && activeBookId === bookId);
+  } catch {
+    forgetWorkspaceSession();
+    return false;
+  }
+}
 
 async function init() {
   initColorTheme();
@@ -4168,10 +4245,10 @@ async function init() {
   initMarkdownRender();
   syncThemeMenuUi();
   try {
-    void populateDirectorSelect();
     await Promise.all([loadBooks(), loadPersonas(), loadApiProfiles()]);
     if (books.length) {
-      showCatalog();
+      const restored = await restoreWorkspaceSession();
+      if (!restored) showCatalog();
     } else {
       renderEmpty();
       openNewBookDialog();

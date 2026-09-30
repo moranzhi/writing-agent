@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css?v=20260922-menu-unify" />
+    <link rel="stylesheet" href="/styles.css?v=20260928-shell-order" />
     <script>
       (function () {
         try {
@@ -32,7 +32,64 @@
   </head>
   <body data-lifecycle="design" data-nav-level="root">
     <div class="layout">
-      <aside class="panel panel-rail" id="panel-books">
+      <div class="main-chrome" id="main-chrome">
+        <header class="main-head" id="main-head">
+          <div class="main-head-left" aria-hidden="true"></div>
+          <nav class="main-app-nav" aria-label="应用">
+            <div id="persona-picker-host" class="persona-picker-host" hidden></div>
+            <a href="/modules.html">技能</a>
+            <a href="/shells.html">呈现壳</a>
+            <a href="/libraries.html">库</a>
+            <a href="/stats.html">Token</a>
+            <a href="/settings.html">设置</a>
+          </nav>
+          <div class="main-head-right">
+            <button type="button" class="btn-sm main-head-action" id="btn-save-instance" hidden>
+              保存定稿
+            </button>
+            <button type="button" class="btn-sm main-head-action" id="btn-save-play" hidden>
+              保存游玩
+            </button>
+            <button type="button" class="btn-sm main-head-action" id="btn-export" disabled>
+              导出
+            </button>
+            <details class="more-menu theme-menu" id="theme-menu">
+              <summary class="btn-sm more-menu-sum" id="theme-menu-sum" title="主题">
+                <span class="hamburger-icon" aria-hidden="true"></span>
+              </summary>
+              <div class="more-menu-panel" role="menu">
+                <div class="more-menu-label">主题</div>
+                <button type="button" class="more-menu-item more-theme-item" data-color-theme="paper" role="menuitem">
+                  <span class="more-theme-icon" aria-hidden="true">📖</span>
+                  <span class="more-theme-copy"><span class="more-theme-name">仿纸暖黄</span><span class="more-theme-desc">经典护眼</span></span>
+                </button>
+                <button type="button" class="more-menu-item more-theme-item" data-color-theme="modern" role="menuitem">
+                  <span class="more-theme-icon" aria-hidden="true">✨</span>
+                  <span class="more-theme-copy"><span class="more-theme-name">现代清爽</span><span class="more-theme-desc">干净明快</span></span>
+                </button>
+                <button type="button" class="more-menu-item more-theme-item" data-color-theme="dark" role="menuitem">
+                  <span class="more-theme-icon" aria-hidden="true">🌙</span>
+                  <span class="more-theme-copy"><span class="more-theme-name">夜间暗色</span><span class="more-theme-desc">黑底灰字</span></span>
+                </button>
+                <button type="button" class="more-menu-item more-theme-item" data-color-theme="green" role="menuitem">
+                  <span class="more-theme-icon" aria-hidden="true">🍃</span>
+                  <span class="more-theme-copy"><span class="more-theme-name">豆沙绿</span><span class="more-theme-desc">自然疗愈</span></span>
+                </button>
+                <div class="more-menu-sep" role="separator"></div>
+                <div class="more-menu-label">字号</div>
+                <div class="more-font-scale" role="group" aria-label="字号">
+                  <button type="button" class="more-font-btn" data-font-scale-bump="-1" title="缩小" aria-label="缩小">−</button>
+                  <span class="more-font-value" id="theme-font-scale-value">100</span>
+                  <button type="button" class="more-font-btn" data-font-scale-bump="1" title="放大" aria-label="放大">+</button>
+                </div>
+              </div>
+            </details>
+          </div>
+        </header>
+      </div>
+
+      <div class="workspace-shell">
+        <aside class="panel panel-rail" id="panel-books">
         <button
           type="button"
           class="rail-expand"
@@ -81,65 +138,10 @@
             </div>
           </div>
         </div>
-      </aside>
+        </aside>
 
-      <main class="panel panel-main">
-        <div class="main-chrome" id="main-chrome">
-          <header class="main-head" id="main-head">
-            <div class="main-head-left" aria-hidden="true"></div>
-            <nav class="main-app-nav" aria-label="应用">
-              <div id="persona-picker-host" class="persona-picker-host" hidden></div>
-              <a href="/modules.html">技能</a>
-              <a href="/shells.html">呈现壳</a>
-              <a href="/libraries.html">库</a>
-              <a href="/stats.html">Token</a>
-              <a href="/settings.html">设置</a>
-            </nav>
-            <div class="main-head-right">
-              <button type="button" class="btn-sm main-head-action" id="btn-save-instance" hidden>
-                保存定稿
-              </button>
-              <button type="button" class="btn-sm main-head-action" id="btn-save-play" hidden>
-                保存游玩
-              </button>
-              <button type="button" class="btn-sm main-head-action" id="btn-export" disabled>
-                导出
-              </button>
-              <details class="more-menu theme-menu" id="theme-menu">
-                <summary class="btn-sm more-menu-sum" id="theme-menu-sum" title="主题">
-                  <span class="hamburger-icon" aria-hidden="true"></span>
-                </summary>
-                <div class="more-menu-panel" role="menu">
-                  <div class="more-menu-label">主题</div>
-                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="paper" role="menuitem">
-                    <span class="more-theme-icon" aria-hidden="true">📖</span>
-                    <span class="more-theme-copy"><span class="more-theme-name">仿纸暖黄</span><span class="more-theme-desc">经典护眼</span></span>
-                  </button>
-                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="modern" role="menuitem">
-                    <span class="more-theme-icon" aria-hidden="true">✨</span>
-                    <span class="more-theme-copy"><span class="more-theme-name">现代清爽</span><span class="more-theme-desc">干净明快</span></span>
-                  </button>
-                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="dark" role="menuitem">
-                    <span class="more-theme-icon" aria-hidden="true">🌙</span>
-                    <span class="more-theme-copy"><span class="more-theme-name">夜间暗色</span><span class="more-theme-desc">黑底灰字</span></span>
-                  </button>
-                  <button type="button" class="more-menu-item more-theme-item" data-color-theme="green" role="menuitem">
-                    <span class="more-theme-icon" aria-hidden="true">🍃</span>
-                    <span class="more-theme-copy"><span class="more-theme-name">豆沙绿</span><span class="more-theme-desc">自然疗愈</span></span>
-                  </button>
-                  <div class="more-menu-sep" role="separator"></div>
-                  <div class="more-menu-label">字号</div>
-                  <div class="more-font-scale" role="group" aria-label="字号">
-                    <button type="button" class="more-font-btn" data-font-scale-bump="-1" title="缩小" aria-label="缩小">−</button>
-                    <span class="more-font-value" id="theme-font-scale-value">100</span>
-                    <button type="button" class="more-font-btn" data-font-scale-bump="1" title="放大" aria-label="放大">+</button>
-                  </div>
-                </div>
-              </details>
-            </div>
-          </header>
-        </div>
-        <div class="main-stack">
+        <main class="panel panel-main">
+          <div class="main-stack">
           <div class="main-body">
             <section class="panel-feed" id="panel-feed">
               <div id="skill-picker" class="skill-picker" hidden></div>
@@ -186,30 +188,15 @@
             <span class="status" id="status-pill"><span class="status-dot" id="status-dot"></span><span id="status-text">—</span></span>
             <div id="composer-main"></div>
           </footer>
-        </div>
-      </main>
+          </div>
+        </main>
+      </div>
     </div>
 
     <dialog id="dialog-new-book" class="dialog">
       <form method="dialog" id="form-new-book">
         <h2>新建作品</h2>
-        <p class="dialog-desc">先选进料方式，再选对应配方（两套目录互不共享）。</p>
-        <label class="field">
-          进料方式
-          <select id="select-creation-mode" required>
-            <option value="" selected disabled>请选择…</option>
-            <option value="recipe">工序编排</option>
-            <option value="dictate">对话落盘</option>
-          </select>
-        </label>
-        <p class="dialog-desc" id="creation-mode-desc" hidden></p>
-        <label class="field" id="field-director" hidden>
-          配方
-          <select id="select-director">
-            <option value="">请先选择进料方式</option>
-          </select>
-        </label>
-        <p class="dialog-desc" id="director-desc" hidden></p>
+        <p class="dialog-desc">创建后直接说你想写什么；助手会在对话中判断合适的创作路径。</p>
         <label class="field">
           名称
           <input id="input-book-title" type="text" placeholder="未命名作品" maxlength="80" autofocus />
@@ -337,6 +324,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260922-menu-unify"></script>
+    <script type="module" src="/app.js?v=20260928-session-restore"></script>
   </body>
 </html>

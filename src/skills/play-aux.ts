@@ -18,6 +18,7 @@ import {
   OPENING_PERSONA_CHOICE_TAG,
   OPENING_PRODUCT_FAMILY,
   OPENING_SETUP_ARTIFACT_TAG,
+  ZERO_LAYER_OPENING_FAMILY,
   SLOT_OPENING_SELECTED_INDEX,
   parseOpeningSealPayload,
   splitOpeningDocument,
@@ -95,7 +96,13 @@ export function collectOpenings(board: Blackboard): PlayAuxOpening[] {
     order: number;
   }> = [];
   for (const e of board.listTagIndex()) {
-    if (dictateProductFamily(e.tag) !== OPENING_PRODUCT_FAMILY) continue;
+    const family = dictateProductFamily(e.tag);
+    if (
+      family !== OPENING_PRODUCT_FAMILY &&
+      family !== ZERO_LAYER_OPENING_FAMILY
+    ) {
+      continue;
+    }
     const item = board.getLatestByTag(e.tag);
     const content = item?.content?.trim() ?? "";
     if (!content) continue;

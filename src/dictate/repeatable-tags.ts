@@ -1,7 +1,7 @@
 /**
  * 对话落盘 · 可增殖产物 tag 拆分
  *
- * catalog 标 repeatable 的能力（生成规则 / 具体实例）共用同一 artifact 基名。
+ * catalog 标 repeatable 的能力（生成规则 / 具体实例 / 拓扑图谱等）共用同一 artifact 基名。
  * 对话里若反复 insert 基 tag，后写会整份覆盖先写。
  * 约定：基名#槽位（如 设计.具体实例#lei-ying），每条增殖各占一 tag。
  */
@@ -48,6 +48,85 @@ export function buildRepeatableProductTag(
   return s ? `${base}${REPEATABLE_TAG_SEP}${s}` : base;
 }
 
+function nameFromRecord(row: unknown): string | undefined {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return undefined;
+  const record = row as Record<string, unknown>;
+  return (
+    asString(record.姓名) ??
+    asString(record.名称) ??
+    asString(record.名字) ??
+    asString(record.name) ??
+    asString(record.id)
+  );
+}
+
+function concreteInstanceName(body: Record<string, unknown>): string | undefined {
+  const direct =
+    asString(body.名称) ??
+    asString(body.实例名) ??
+    asString(body.batch_id) ??
+    asString(body.批次id) ??
+    asString(body.id);
+  if (direct) return direct;
+  const fromRecord = nameFromRecord(body.记录);
+  if (fromRecord) return fromRecord;
+  const rows = Array.isArray(body.records)
+    ? body.records
+    : Array.isArray(body.记录)
+      ? body.记录
+      : [];
+  for (const row of rows) {
+    const name = nameFromRecord(row);
+    if (name) return name;
+  }
+  return undefined;
+}
+
+function concreteRecordRows(body: Record<string, unknown>): unknown[] | null {
+  if (Array.isArray(body.records) && body.records.length > 1) return body.records;
+  if (Array.isArray(body.记录) && body.记录.length > 1) return body.记录;
+  return null;
+}
+
+/** 一条具体实例正文里若含多条记录，拆成每条一份。不足两条时原样返回。 */
+export function splitConcreteInstanceContents(content: string): string[] {
+  const parsed = tryParseJsonDoc(content);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return [content];
+  }
+  const doc = parsed as Record<string, unknown>;
+  const bodyRaw = doc.正文;
+  if (!bodyRaw || typeof bodyRaw !== "object" || Array.isArray(bodyRaw)) {
+    return [content];
+  }
+  const body = bodyRaw as Record<string, unknown>;
+  const rows = concreteRecordRows(body);
+  if (!rows) return [content];
+
+  const rule =
+    asString(body.规则) ?? asString(body.规则名) ?? asString(body.rule_id);
+  const used = new Set<string>();
+  return rows.map((row, index) => {
+    const base = nameFromRecord(row) ?? `第${index + 1}条`;
+    let name = base;
+    let n = 2;
+    while (used.has(name)) {
+      name = `${base}-${n}`;
+      n += 1;
+    }
+    used.add(name);
+    const nextBody: Record<string, unknown> = {
+      ...(rule ? { 规则: rule } : {}),
+      名称: name,
+      记录: row && typeof row === "object" && !Array.isArray(row) ? row : { 内容: String(row) },
+    };
+    if (Array.isArray(body.批次条件) && body.批次条件.length) {
+      nextBody.批次条件 = body.批次条件;
+    }
+    return JSON.stringify({ ...doc, brief: name, 正文: nextBody }, null, 2);
+  });
+}
+
 function asString(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
@@ -65,7 +144,7 @@ function bodyOfFragment(content: string): Record<string, unknown> | null {
 }
 
 /**
- * 从正文抽出建议槽位：生成规则 → rule_id；具体实例 → batch_id / 首条姓名。
+ * 从正文抽出建议槽位：生成规则 → 规则名；具体实例 → 名称 / 记录里的姓名。
  */
 export function extractRepeatableSlotFromContent(
   family: string,
@@ -77,7 +156,11 @@ export function extractRepeatableSlotFromContent(
 
   if (base === "设计.生成规则" || /生成规则$/.test(base)) {
     const top =
-      asString(body.rule_id) ?? asString(body.id) ?? asString(body.规则id);
+      asString(body.规则名) ??
+      asString(body.rule_id) ??
+      asString(body.id) ??
+      asString(body.规则id) ??
+      asString(body.名称);
     if (top) return sanitizeRepeatableSlot(top) || undefined;
     const rules = body.rules;
     if (Array.isArray(rules)) {
@@ -85,7 +168,10 @@ export function extractRepeatableSlotFromContent(
         if (!row || typeof row !== "object" || Array.isArray(row)) continue;
         const r = row as Record<string, unknown>;
         const id =
-          asString(r.rule_id) ?? asString(r.id) ?? asString(r.规则id);
+          asString(r.规则名) ??
+          asString(r.rule_id) ??
+          asString(r.id) ??
+          asString(r.规则id);
         if (id) return sanitizeRepeatableSlot(id) || undefined;
       }
     }
@@ -95,27 +181,12 @@ export function extractRepeatableSlotFromContent(
   }
 
   if (base === "设计.具体实例" || /具体实例$/.test(base)) {
-    const batch =
-      asString(body.batch_id) ??
-      asString(body.批次id) ??
-      asString(body.id);
-    if (batch) return sanitizeRepeatableSlot(batch) || undefined;
-    const records = body.records;
-    if (Array.isArray(records)) {
-      for (const row of records) {
-        if (!row || typeof row !== "object" || Array.isArray(row)) continue;
-        const r = row as Record<string, unknown>;
-        const name =
-          asString(r.姓名) ??
-          asString(r.name) ??
-          asString(r.名称) ??
-          asString(r.id);
-        if (name) return sanitizeRepeatableSlot(name) || undefined;
-      }
-    }
-    const ruleId = asString(body.rule_id);
+    const named = concreteInstanceName(body);
+    if (named) return sanitizeRepeatableSlot(named) || undefined;
+    const ruleId =
+      asString(body.规则) ?? asString(body.规则名) ?? asString(body.rule_id);
     if (ruleId) {
-      return sanitizeRepeatableSlot(`${ruleId}-batch`) || undefined;
+      return sanitizeRepeatableSlot(`${ruleId}-1`) || undefined;
     }
     return undefined;
   }
@@ -157,7 +228,7 @@ export function resolveRepeatableInsertTag(params: {
     const otherSiblings = siblings.filter((t) => t !== family);
     if (otherSiblings.length > 0 && raw === family) {
       return {
-        error: `「${family}」是可增殖产物，追加请用「${family}#唯一id」（生成规则用 rule_id，具体实例用 batch_id/姓名，开场白/主角设定用场景短码），不要覆盖基 tag。改某一条则 insert 同一完整 tag。`,
+        error: `「${family}」是可增殖产物，追加请用「${family}#唯一id」（生成规则用规则名，具体实例用名称，开场白/主角设定用场景短码），不要覆盖基 tag。改某一条则 insert 同一完整 tag。`,
       };
     }
     return { tag: family };

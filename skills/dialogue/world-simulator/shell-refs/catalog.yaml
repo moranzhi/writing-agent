@@ -1,0 +1,16 @@
+# 壳参考库。正文组成与 0 层正文组成读取后，按本局启用的区改一版并固定。
+# 旧 present-shells 只留给现有渲染器，不作为生成样本。
+
+shells:
+  - id: reading
+    name: 阅读
+  - id: dual-text
+    name: 正文为主
+  - id: data-cards
+    name: 数据常驻
+  - id: alongside
+    name: 对照
+  - id: paged
+    name: 分时
+  - id: piece
+    name: 成稿

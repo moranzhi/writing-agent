@@ -236,7 +236,7 @@ describe("phase runtime", () => {
     if (session.waitingReason?.kind === "worker_questions") {
       expect(session.waitingReason.questions[0]?.id).toBe("module-opening");
       expect(session.waitingReason.questions[0]?.prompt).toContain(
-        "玩家实际会待着玩的地方",
+        "会反复影响你的外部舞台",
       );
     }
     expect(llmCalls.calls()).toBe(0);

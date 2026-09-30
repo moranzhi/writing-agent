@@ -21,6 +21,8 @@ import {
 export const OPENING_SETUP_ARTIFACT_TAG = "设计.开场白与开场变量";
 /** 对话落盘开场正文族（可 设计.开场白#槽位 增殖） */
 export const OPENING_PRODUCT_FAMILY = "设计.开场白";
+/** 0 层开场族（可 设计.0层开场白与初态#槽位 增殖） */
+export const ZERO_LAYER_OPENING_FAMILY = "设计.0层开场白与初态";
 export const OPENING_OUTPUT_TAG = "输出.开场白";
 export const OPENING_INITIAL_VARS_TAG = "运行.初始变量";
 export const OPENING_CURRENT_VARS_TAG = "变量.当前";
@@ -89,6 +91,7 @@ function asTrimmed(v: unknown): string | undefined {
 }
 
 type OpeningCandidateEntry = {
+  id: string;
   text: string;
   persona: OpeningUserPersona | null;
   variables: OpeningVariable[];
@@ -148,6 +151,7 @@ function collectCandidateEntries(raw: unknown): OpeningCandidateEntry[] {
     if (typeof item === "string" && item.trim()) {
       const split = splitYamlFrontmatter(item);
       out.push({
+        id: "",
         text: asOpeningBodyText(split.text) || split.text,
         persona: split.persona,
         variables: [],
@@ -174,6 +178,7 @@ function collectCandidateEntries(raw: unknown): OpeningCandidateEntry[] {
         ) ||
         split.persona;
       out.push({
+        id: asTrimmed(row.id) || asTrimmed(row.候选id) || "",
         text: asOpeningBodyText(split.text) || split.text,
         persona,
         variables: variablesFromCandidate(row),
@@ -379,6 +384,22 @@ export function readSealedOpeningPersona(
   return parseUserPersonaField(raw) || parseOpeningUserPersona(raw);
 }
 
+/** 默认候选排到第 0 条，游玩的左右下标才能对上「第一次进入 0 层的那条」。 */
+function orderOpeningCandidates(
+  entries: OpeningCandidateEntry[],
+  defaultId: string | undefined,
+): OpeningCandidateEntry[] {
+  const id = defaultId?.trim();
+  if (!id) return entries;
+  const index = entries.findIndex((entry) => entry.id === id);
+  if (index <= 0) return entries;
+  return [
+    entries[index]!,
+    ...entries.slice(0, index),
+    ...entries.slice(index + 1),
+  ];
+}
+
 function bodyRecord(fragmentBody: unknown): Record<string, unknown> | null {
   if (!fragmentBody || typeof fragmentBody !== "object" || Array.isArray(fragmentBody)) {
     return null;
@@ -402,16 +423,21 @@ export function parseOpeningSealPayload(
     }
   })();
 
-  const primary =
-    asOpeningBodyText(body?.开场白全文) ||
-    asOpeningBodyText(body?.["输出.开场白"]) ||
-    (typeof fragment?.正文 === "string"
-      ? asOpeningBodyText(fragment.正文)
-      : undefined);
+  const fromList = orderOpeningCandidates(
+    collectCandidateEntries(body?.开场白候选),
+    asTrimmed(body?.默认候选id) || asTrimmed(body?.默认候选ID),
+  );
+  // 候选里的正文已是那一屏。开场白全文是旧稿副本，有候选时不再另算一条。
+  const primary = fromList.length
+    ? undefined
+    : asOpeningBodyText(body?.开场白全文) ||
+      asOpeningBodyText(body?.["输出.开场白"]) ||
+      (typeof fragment?.正文 === "string"
+        ? asOpeningBodyText(fragment.正文)
+        : undefined);
 
   const defaultPersona = parseUserPersonaField(body?.用户角色);
   const sharedVariables = collectVariables(body?.开场变量);
-  const fromList = collectCandidateEntries(body?.开场白候选);
   const candidates: string[] = [];
   const personas: Array<OpeningUserPersona | null> = [];
   const variableSets: OpeningVariable[][] = [];

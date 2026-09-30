@@ -108,4 +108,21 @@ describe("play-aux view", () => {
     expect(dorm?.persona?.name).toBe("李宗");
     expect(gate?.persona?.name).toBe("阿泽");
   });
+
+  it("lists proliferated zero-layer openings for play swipe", () => {
+    const board = new Blackboard();
+    board.write({
+      tag: "设计.0层开场白与初态#dorm",
+      content: "@玩家推开宿舍门。",
+      source: "agent",
+    });
+    board.write({
+      tag: "设计.0层开场白与初态#gate",
+      content: "@玩家停在闸机前。",
+      source: "agent",
+    });
+    const view = buildPlayAuxView(board, { [SLOT_OPENING_SELECTED_INDEX]: 1 });
+    expect(view.openings.map((o) => o.slot).sort()).toEqual(["dorm", "gate"]);
+    expect(view.selectedOpeningIndex).toBe(1);
+  });
 });

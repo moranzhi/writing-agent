@@ -133,6 +133,7 @@ import {
   findRecipeCatalogEntry,
   formatCreationFlowForUser,
   formatDictateRecipeBrief,
+  formatRecipeExamplesForCreationPlan,
   formatModuleCatalogForDictate,
   findModuleByName,
   findStepByRef,
@@ -167,7 +168,11 @@ import {
 import {
   CREATION_INTAKE_MODE_TAG,
   DICTATE_MODE_VALUE,
+  DICTATE_LAYER_META_KEY,
   DICTATE_ORDER_META_KEY,
+  DICTATE_SELF_SCORE_META_KEY,
+  applyDictatePlayBind,
+  buildDictateModuleReadIndex,
   buildDictateInsertFeedbackIndex,
   defaultDictateOrder,
   extractDictateDialogue,
@@ -559,9 +564,9 @@ export class SessionManager {
       content: expanded,
       source: "user",
     });
-    const first = s.messages[0];
-    if (first?.title === "开场白") {
-      s.messages[0] = this.playOpeningMessage(expanded);
+    const openingAt = s.messages.findIndex((m) => m.title === "开场白");
+    if (openingAt >= 0) {
+      s.messages[openingAt] = this.playOpeningMessage(expanded);
     }
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
@@ -788,7 +793,17 @@ export class SessionManager {
         typeof rawOrder === "number" && Number.isFinite(rawOrder)
           ? rawOrder
           : undefined;
-      products.push({ tag: e.tag, content, order });
+      const layer = item?.metadata?.[DICTATE_LAYER_META_KEY];
+      const selfScore = item?.metadata?.[DICTATE_SELF_SCORE_META_KEY];
+      products.push({
+        tag: e.tag,
+        content,
+        order,
+        ...(layer === "intermediate" || layer === "final" ? { layer } : {}),
+        ...(selfScore && typeof selfScore === "object"
+          ? { selfScore: selfScore as DictateProduct["selfScore"] }
+          : {}),
+      });
     }
     return sortDictateProducts(products);
   }
@@ -837,20 +852,32 @@ export class SessionManager {
       recipeView,
       recipeOptions: s.recipeOptions,
     });
-    const moduleGuide = await resolveDictateModuleGuideForSession({
+    const moduleCatalog = await resolveDictateModuleCatalogForSession({
       skillName: s.runtime.getActiveSkill()?.name,
       moduleCatalog: s.moduleCatalog,
     });
+    if (moduleCatalog) s.moduleCatalog = moduleCatalog;
+    const moduleGuide = moduleCatalog
+      ? formatModuleCatalogForDictate(moduleCatalog)
+      : undefined;
     const insertFeedbackIndex = await resolveDictateInsertFeedbackIndexForSession({
       skillName: s.runtime.getActiveSkill()?.name,
-      moduleCatalog: s.moduleCatalog,
+      moduleCatalog,
     });
     const repeatableFamilies = [
-      ...(s.moduleCatalog?.modules ?? [])
+      ...(moduleCatalog?.modules ?? [])
         .filter((m) => m.repeatable === true && m.artifact?.trim())
         .map((m) => m.artifact!.trim()),
       ...DICTATE_OPENING_REPEATABLE_FAMILIES,
     ];
+    const recipeExamples = await resolveDictateRecipeExamplesForSession({
+      skillName: s.runtime.getActiveSkill()?.name,
+      recipeOptions: s.recipeOptions,
+    });
+    const moduleReadIndex = await resolveDictateModuleReadIndexForSession({
+      skillName: s.runtime.getActiveSkill()?.name,
+      moduleCatalog,
+    });
 
     const result = await runDictateTurn({
       llm,
@@ -858,10 +885,13 @@ export class SessionManager {
       recipeName: recipeView?.name,
       recipeBrief,
       moduleGuide,
+      recipeExamples,
+      moduleCatalog,
+      moduleReadIndex,
       repeatableFamilies,
       handlers: {
         listProducts: () => this.listDictateProducts(s),
-        writeProduct: (tag, content, order) => {
+        writeProduct: (tag, content, order, metadata) => {
           const board = s.runtime.getBlackboard();
           let writeContent = content;
           if (dictateProductFamily(tag) === OPENING_PRODUCT_FAMILY) {
@@ -894,6 +924,12 @@ export class SessionManager {
             metadata: {
               ...(existing?.metadata ?? {}),
               [DICTATE_ORDER_META_KEY]: resolved,
+              ...(metadata?.layer
+                ? { [DICTATE_LAYER_META_KEY]: metadata.layer }
+                : {}),
+              ...(metadata?.selfScore
+                ? { [DICTATE_SELF_SCORE_META_KEY]: metadata.selfScore }
+                : {}),
             },
           });
         },
@@ -912,6 +948,9 @@ export class SessionManager {
           });
         },
         deleteTag: (tag) => s.runtime.getBlackboard().deleteByTag(tag),
+        prepareOpening: () => {
+          applyDictatePlayBind(s.runtime.getBlackboard());
+        },
         clearDialogue: () => {
           const kept = this.listDictateProducts(s);
           const lastUser = [...s.messages]
@@ -962,7 +1001,9 @@ export class SessionManager {
       },
     });
 
-    this.clearAgentThinking(s.runtime.getSession().id);
+    const sessionId = s.runtime.getSession().id;
+    const thinking = this.agentThinkingLive.get(sessionId)?.trim() || undefined;
+    this.clearAgentThinking(sessionId);
     recordPreMessageCheckpoint(
       s.branchState,
       s.messages.length,
@@ -977,6 +1018,7 @@ export class SessionManager {
       actor: "orchestrator",
       title: "转述整理",
       body: result.reply,
+      ...(thinking ? { thinking } : {}),
     });
     s.runtime.enterDictateIntake();
   }
@@ -4346,27 +4388,70 @@ async function resolveDictateRecipeBriefForSession(params: {
   return view.declaration?.trim() || undefined;
 }
 
-/** 对话落盘：注入能力何时落盘（modules meta）；优先会话已载 catalog */
-async function resolveDictateModuleGuideForSession(params: {
+/** 对话落盘：加载可混合的参考案例，不把任何案例当作已选路径。 */
+async function resolveDictateRecipeExamplesForSession(params: {
+  skillName?: string | null;
+  recipeOptions?: RecipeCatalogEntry[];
+}): Promise<string | undefined> {
+  const entries = (params.recipeOptions ?? []).filter(
+    (entry) => entry.family === "dictate",
+  );
+  const skillName = params.skillName?.trim();
+  if (!skillName || entries.length === 0) return undefined;
+  try {
+    const skill = await loadSkill(skillName);
+    const packRoot = skill.skillPackRoot?.trim();
+    if (!packRoot) return undefined;
+    const details = await Promise.all(
+      entries.map((entry) => loadRecipeDetail(packRoot, entry)),
+    );
+    return formatRecipeExamplesForCreationPlan(details) || undefined;
+  } catch (err) {
+    console.error("[会话] 加载本局创作方案参考案例失败", err);
+    return undefined;
+  }
+}
+
+/** 对话落盘：取得含 prompt meta 的能力目录；优先复用会话已载目录 */
+async function resolveDictateModuleCatalogForSession(params: {
   skillName?: string | null;
   moduleCatalog?: ModuleCatalog | null;
-}): Promise<string | undefined> {
+}): Promise<ModuleCatalog | null> {
   let catalog = params.moduleCatalog ?? null;
   if (!catalog?.modules?.length) {
     const skillName = params.skillName?.trim();
-    if (!skillName) return undefined;
+    if (!skillName) return null;
     try {
       const skill = await loadSkill(skillName);
       const packRoot = skill.skillPackRoot?.trim();
-      if (!packRoot) return undefined;
+      if (!packRoot) return null;
       catalog = await loadModuleCatalog(packRoot);
     } catch (err) {
       console.error("[会话] 加载转述能力目录失败", err);
-      return undefined;
+      return null;
     }
   }
-  if (!catalog?.modules?.length) return undefined;
-  return formatModuleCatalogForDictate(catalog);
+  return catalog?.modules?.length ? catalog : null;
+}
+
+async function resolveDictateModuleReadIndexForSession(params: {
+  skillName?: string | null;
+  moduleCatalog?: ModuleCatalog | null;
+}) {
+  const skillName = params.skillName?.trim();
+  if (!skillName || !params.moduleCatalog?.modules.length) return undefined;
+  try {
+    const skill = await loadSkill(skillName);
+    const packRoot = skill.skillPackRoot?.trim();
+    if (!packRoot) return undefined;
+    return await buildDictateModuleReadIndex({
+      skillPackRoot: packRoot,
+      catalog: params.moduleCatalog,
+    });
+  } catch (err) {
+    console.error("[会话] 构建能力读取索引失败", err);
+    return undefined;
+  }
 }
 
 /** 对话落盘：insert(tag) → 用户可见规范索引 */

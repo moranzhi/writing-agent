@@ -4,6 +4,8 @@
 # name = 固定中文名（流程 JSON 的 name；同能力可多次时靠 step.id 区分）
 # declaration = 给人看/兜底的短声明（规划选型以 prompt.md ```meta 为准并覆盖本表）
 # artifact = 执行期产物 tag（程序映射；不写进流程 JSON）
+# layer = 默认产物层（intermediate / final）
+# mount = 默认游玩挂载目标；具体字段仍由投影器裁剪
 # repeatable = true 时允许同能力多次**新建**编入增量 DAG（如生成规则、具体实例）。
 # 回头修改已完成节点不是 repeatable：用户在图上点该节点重进，不要排 mode=revise。
 # closer = true 时为创作终节点：选定后程序落库、关 DAG、保存定稿
@@ -29,9 +31,21 @@
 # 〔先验产物〕例外：params 是规划产物，可空；「写什么」在步内钉。
 
 modules:
+  # —— 本局决策（仅对话落盘） ——
+  - id: creation-plan
+    name: 本局创作方案
+    intake: dictate
+    layer: intermediate
+    declaration: >-
+      先抽出用户要的核心体验，再主动找出有帮助的内容能力并分档，
+      形成本局专用创作方法；指导后续取舍，但不规定固定流程
+    artifact: 设计.本局创作方案
+
   # —— 体验契约 ——
   - id: aesthetics-interaction
     name: 美学纲领与交互范式
+    layer: final
+    mount: [world-simulator, narrator]
     declaration: >-
       钉清用户会在意的体验承诺：站位、反复感到什么、轮转何时停。
       询问相近故合为一步。
@@ -40,63 +54,64 @@ modules:
   - id: protagonist
     name: 主角设定
     repeatable: true
+    layer: final
+    mount: [world-simulator]
     declaration: >-
-      钉清 @玩家 扮演的那个人：名字、背景、特殊设定（身份/金手指等）。
-      代入有名片时排本步；可 设计.主角设定#短码 与开场白同槽绑定；禁止把名字/简介写进开场白正文。
+      钉清 @玩家 扮演的那个人：名字、背景、特殊设定（身份/金手指等）；
+      自动写入时加性格。代入有名片时排本步；可 设计.主角设定#短码 与开场白同槽绑定；禁止把名字/简介写进开场白正文。
     artifact: 设计.主角设定
-
-  - id: user-requirements
-    name: 用户需求
-    libraries: [preferences]
-    declaration: >-
-      把跨局偏好库里对本局生效的硬约束（禁区/纠偏/默认取向）落成可执行条目；
-      不重做文风问卷，也不钉体验站位
-    artifact: 设计.用户需求
 
   # —— 世界与内容 ——
   - id: world-blueprint
     name: 舞台骨架
+    layer: final
+    mount: [world-simulator]
     declaration: >-
-      本局舞台备案：划出玩家实际游玩会换区活动的主要区域并写细；
-      尺度与详细度随体验变。代入后几乎不移动、只在一处待着则不排
+      保存会在游玩中反复影响世界反馈的外部舞台：
+      熟悉基底、必要变造、核心运转和主要活动场所
     artifact: 设计.舞台骨架
 
   - id: generation-rules
     name: 生成规则
     kind: prior-artifact
     repeatable: true
+    layer: final
+    mount: [world-simulator, auditor]
     declaration: >-
-      要精准格式，或本局原创导致知识中无可参考对象、或难以在无指导情况下生成足够可信内容且故事里还要生成时：写出该对象族怎么生成；
-      创意字段用方向池，不堆枚举词；不填最终实例；可按对象反复
+      为需要统一生成的一类对象写出合同：名称、用途、字段、池或提示、填写工作流；
+      不填最终实例；可按对象反复。两份以上，或一份但字段多、需要先审工作流时使用
     artifact: 设计.生成规则
     params:
       - key: target
         label: 生成对象
         hint: 规划字段；编排器已知写哪一类就填。空则步内钉
       - key: rule_id
-        label: 规则 id
-        hint: 英文 kebab-case，须与 target 对应（女租客→female-tenants）；改对象时禁止沿用旧 id
+        label: 规则名
+        hint: 中文短名，须与 target 对应（女租客→女租客）；改对象时禁止沿用旧名
       - key: lifecycle_intent
         label: 生命周期意图
-        hint: runtime_only | seed_only | seed_and_runtime；不明则步内钉
+        hint: 仅游玩期 | 只预生成 | 预生成并游玩期；不明则步内钉；只预生成=中间层，其余=最终层
 
   - id: concrete-instances
     name: 具体实例
     kind: prior-artifact
     repeatable: true
+    layer: final
+    mount: [world-simulator]
     declaration: >-
-      已有预生成规则时：按该规则原样交出 records；不设计、不改合同；可按规则/批次反复
+      按已有生成规则填写一条记录，单独落成一份产物；
+      没有规则时只留下用户点名的一条字段很少的具名内容
     artifact: 设计.具体实例
     params:
       - key: rule_id
         label: 调用规则
-        hint: 规划字段；须来自已验收生成规则中 seed_only/seed_and_runtime 的 rule_id。空则步内钉
+        hint: 规划字段；填已有生成规则的中文规则名。无规则的单条极简路径可空
       - key: batch_goal
-        label: 批次目标
-        hint: 本批要锚定什么（如开局重要NPC）
+        label: 这一条
+        hint: 本条要锚定什么（如开局某位重要人物）
       - key: count
         label: 数量
-        hint: 同批时本批条数；规则「一次生成」为单条时忽略（本步只交 1 条）
+        hint: 每条实例一份产物；一次写入多条记录时程序按条拆开
 
   - id: narrative
     name: 叙事指南与故事推进
@@ -111,99 +126,155 @@ modules:
     name: 叙事指南
     intake: dictate
     libraries: [style-packs]
+    layer: final
+    mount: [narrator, world-simulator]
     declaration: >-
-      美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与写法档；
-      不重做体验问卷，也不钉故事怎么往前
+      从文风库选取本局写法（默认 1～2，确需可到 3），
+      落成风格推荐与要求、笔墨落点、少量禁忌与可选写法档；不钉推进
     artifact: 设计.叙事指南
 
   - id: story-progression
     name: 故事推进
     intake: dictate
+    libraries: [preferences]
+    layer: final
+    mount: [world-simulator, narrator]
     declaration: >-
-      美学已有方向时：钉故事怎么往前、用户输入用法（大纲扩写或扮演停笔）；
-      不重做文风问卷
+      从偏好库选取约束，只选定一种用户输入用法，
+      并写清扩写/续写定义、比例与 OOC 处理；不写遣词
     artifact: 设计.故事推进
 
   # —— 机制与数据 ——
   - id: mechanism
     name: 实现机制
+    layer: final
+    mount: [world-simulator]
     declaration: >-
-      整体感觉已钉，故事里有必须当作既成事实的变造法则时：
-      点出它们如何约束故事，不解释为何存在
+      保存世界中稳定成立的因果法则，供主世界层推演事件后果、
+      剧情变化和人物反应；一次可写多条共同作用的机制
     artifact: 设计.实现机制
 
   - id: topology
     name: 拓扑图谱
+    intake: dictate
+    layer: final
+    mount: [world-simulator, auditor]
+    repeatable: true
     declaration: >-
-      必须生成、但不适合走「生成规则→具体实例」时：用拓扑结构写出来
-      （升级路径、地图、人物关系等）
+      为一个独有但结构复杂的对象定义节点、连接、初始图与开场后的维护规则；
+      一份产物一张图，可按地图、关系链、升级树等对象反复
     artifact: 设计.拓扑图谱
 
   - id: variable-design
     name: 变量设计与更新规则
+    intake: dictate
+    layer: final
+    mount: [world-simulator, auditor]
     declaration: >-
-      体验必须跨轮记住少数状态时：钉真值、谁可写、如何变、维护语句，
-      以及按值换文案的映射索引
+      定义必须跨轮保存的最少真值、合法更新条件、权限与派生映射，
+      供程序选择简单状态工具或复杂维护副 Worker
     artifact: 设计.变量设计与更新规则
 
   - id: variable-context
-    name: 变量控制上下文
+    name: 信息可见范围
     declaration: >-
-      已有真值或映射时：钉谁看见什么（主世界层/转述/旁观）、未解锁不注入；
-      无信息差则可不排
+      程序根据变量、拓扑和秘密声明整理谁能看到什么、何时可以看到；
+      无特殊信息差时直接采用默认范围
     artifact: 设计.变量控制上下文
 
   # —— 呈现 ——
   - id: status-bar
     name: 回复呈现
+    intake: dictate
+    layer: final
+    mount: [world-simulator, narrator]
     declaration: >-
-      几乎每局都要：钉每轮终稿的必选/可选区域，以及各区域的简单内容规则
-      （字数、段落、选项怎么组成等）；不排版
+      定义普通楼层每轮实际启用的语义区域、出现条件、权威来源与内容要求；
+      可含隐藏更新语义区，不决定前端排版和渲染
     artifact: 设计.监控栏
+
+  - id: zero-layer-status
+    name: 0层回复呈现
+    intake: dictate
+    layer: final
+    mount: [world-simulator, narrator]
+    declaration: >-
+      定义持久 0 层卡实际启用的语义槽位、更新触发、更新方式与权威来源；
+      不决定 HTML 和排版
+    artifact: 设计.0层回复呈现
 
   - id: random-range
     name: 随机范围整理
+    intake: dictate
+    layer: final
+    mount: [world-simulator]
     declaration: >-
-      上游已有检定/对抗/掷骰需求时：汇总全部要用的随机项与取值范围（含表达式），
-      供程序每轮插入备用随机数；排在正文组成之前
+      把已定的检定和抽签收成「变量.当前」里的隐藏行，行名用「名称.随机数」
     artifact: 设计.随机范围整理
 
   - id: reply-format
     name: 正文组成
+    intake: dictate
+    layer: final
+    mount: [world-simulator, narrator]
     declaration: >-
-      把「回复呈现」已钉的内容展示给用户：选壳、美化排版，可写 CSS/HTML/JS；
-      排在回复呈现之后、开场白之前；有随机表则一并接到隐藏备用区
+      把普通楼层「回复呈现」的语义区域落成每条消息使用的前端模板：
+      定义区域位置、HTML/CSS/JS、数据绑定与特殊渲染
     artifact: 设计.正文组成
+
+  - id: zero-layer-reply-format
+    name: 0层正文组成
+    intake: dictate
+    layer: final
+    mount: [world-simulator, narrator]
+    declaration: >-
+      把 0 层语义槽位落成跨轮持久前端，定义固定外壳、槽位位置、
+      Tab 与结构化 slot_updates 渲染合同
+    artifact: 设计.0层正文组成
 
   # —— 开局（创作偏晚） ——
   - id: opening-setup
     name: 开场白与开场变量
     closer: true
+    repeatable: true
+    intake: dictate
+    layer: final
+    mount: [world-simulator, narrator]
     declaration: >-
-      创作终节点：写出 1～多条开场（每条 = meta 用户角色 + 正文；须含字面 @玩家）并钉同真相初值；
-      选定后程序落库、结束创作并保存定稿
+      普通楼层创作终节点，且可增殖：每条开场各占一个节点（设计.开场白#场景短码）。
+      默认 1 条；还要入口就再增殖。全部保存。游玩时左右切换，选中的一条作为 0 层
     artifact: 设计.开场白与开场变量
+
+  - id: zero-layer-opening-setup
+    name: 0层开场白与初态
+    closer: true
+    repeatable: true
+    intake: dictate
+    layer: final
+    mount: [world-simulator, narrator]
+    declaration: >-
+      0 层创作终节点，且可增殖：每条开场各占一个节点（设计.0层开场白与初态#场景短码），
+      自带持久卡第一屏、槽位初值和同真相运行初态。游玩时左右切换，选中的一条作为 0 层
+    artifact: 设计.0层开场白与初态
 
   # —— 收成 / 钉声明（共用；世界模拟器按需） ——
   - id: worker-spec
-    name: 游玩拓扑
+    name: 游玩执行方式
     repeatable: false
     declaration: >-
-      不能吃默认槽时才勾选：主世界层必开；有变量/表才开旁观；转述默认开；
-      强秘密才开视角；写手则大纲+章节；禁止发明执行单元与机遇槽
+      程序根据前面已经确认的写作、维护和秘密隔离需求，整理本局需要启用的固定执行单元
     artifact: 设计.worker规格
 
   - id: context-order
-    name: 上下文投影排序
+    name: 上下文排序
     repeatable: false
     auto: true
     declaration: >-
-      收成前给已启用槽排扁平投影序（含对话.历史）；
-      不发明槽、不重写长文、不演情节选择题
+      程序按变化频率与重要性排列各执行单元的上下文，并选择完整、摘要或字段投影
     artifact: 设计.上下文投影排序
 
   - id: refine
-    name: 细化终稿
+    name: 运行配置组装
     declaration: >-
-      按已勾选槽（或默认槽）与投影排序表收成运行规格；不发明新执行单元
+      程序把执行方式、上下文排序、变量表和输出合同组装成可直接开玩的运行配置
     artifact: 设计.worker集

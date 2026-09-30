@@ -98,4 +98,26 @@ describe("maintain need_generate sampling", () => {
     });
     expect(buildChanceBatchFromGenerationRule(rules, "nickname")).toBeNull();
   });
+
+  it("reads flat single-rule body and string pool entries", () => {
+    const rules = JSON.stringify({
+      正文: {
+        rule_id: "wasteland-npc",
+        池: [
+          {
+            名称: "公开职业池",
+            条目: ["厨师", "医生", "掮客"],
+          },
+        ],
+      },
+    });
+    const batch = buildChanceBatchFromGenerationRule(rules, "wasteland-npc");
+    expect(batch).toHaveLength(1);
+    expect(batch![0]!.id).toBe("pool:公开职业池");
+    expect(batch![0]!.items?.map((item) => item.id)).toEqual([
+      "厨师",
+      "医生",
+      "掮客",
+    ]);
+  });
 });

@@ -341,9 +341,9 @@ export async function handleBooksApi(
       title?: string;
       /** 编排器包 id（registry name） */
       orchestratorId?: string;
-      /** 用户手动选定的配方 id（内部 recipe） */
+      /** 旧客户端可传；新建作品改由创作对话判断路径 */
       recipeId?: string;
-      /** recipe=配方流（默认）；dictate=转述整理直填 */
+      /** 旧客户端兼容；新建作品统一使用 dictate */
       creationMode?: "recipe" | "dictate";
     };
     const skills = await listSkills();
@@ -363,16 +363,11 @@ export async function handleBooksApi(
       orchestratorId: director.name,
       orchestratorName: director.name,
     });
-    const creationMode =
-      body.creationMode === "dictate" ? "dictate" : "recipe";
-    if (!body.recipeId?.trim()) {
-      json(res, 400, { error: "请选择配方" });
-      return true;
-    }
+    const creationMode = "dictate";
     const session = await sessionManager.createForBook(
       book.id,
       director.name,
-      body.recipeId.trim(),
+      body.recipeId?.trim() || undefined,
       { creationMode },
     );
     json(res, 201, { book: getBook(book.id) ?? book, session });

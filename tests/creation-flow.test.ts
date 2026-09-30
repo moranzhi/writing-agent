@@ -15,6 +15,7 @@ import {
   catalogModulesForIntake,
   formatRecipeCatalogForAgent,
   formatDictateRecipeBrief,
+  formatRecipeExamplesForCreationPlan,
   formatSelectedRecipeForAgent,
   isCreationFlowComplete,
   loadAllRecipeDetails,
@@ -28,6 +29,7 @@ import {
   listReadySteps,
   computeStepLayers,
   spawnRepeatableCreationStep,
+  repeatableInstanceProductTag,
   spawnInstanceFromPrototype,
   hasSelectableCreationWork,
   hasAcceptedCloserStep,
@@ -466,7 +468,7 @@ describe("creation-flow", () => {
       catalog?.modules.find((m) => m.name === "具体实例")?.params?.[0]?.key,
     ).toBe("rule_id");
     expect(
-      catalog?.modules.find((m) => m.name === "上下文投影排序")?.auto,
+      catalog?.modules.find((m) => m.name === "上下文排序")?.auto,
     ).toBe(true);
     const gen = catalog?.modules.find((m) => m.name === "生成规则");
     expect(gen?.when).toBeTruthy();
@@ -476,8 +478,7 @@ describe("creation-flow", () => {
     expect(block).toContain("【能力");
     expect(block).toContain("美学纲领与交互范式：");
     expect(block).toContain("生成规则〔可反复〕〔先验产物〕");
-    expect(block).toContain("开场白与开场变量〔收口〕");
-    expect(block).toContain("上下文投影排序〔程序步〕");
+    expect(block).toContain("上下文排序〔程序步〕");
     expect(block).toContain("何时用");
     expect(block).toContain("何时不用");
     expect(block).toContain("role=prototype");
@@ -489,6 +490,8 @@ describe("creation-flow", () => {
     const dictateBlock = formatModuleCatalogForDictate(catalog!);
     expect(dictateBlock).toMatch(/^- 叙事指南：/m);
     expect(dictateBlock).toMatch(/^- 故事推进：/m);
+    expect(dictateBlock).toContain("开场白与开场变量〔可反复〕〔收口〕");
+    expect(dictateBlock).toContain("信息可见范围〔落档程序〕");
     expect(dictateBlock).not.toMatch(/^- 叙事指南与故事推进/m);
     expect(
       catalog?.modules.find((m) => m.name === "叙事指南与故事推进")?.intake,
@@ -499,16 +502,17 @@ describe("creation-flow", () => {
     expect(catalog?.modules.find((m) => m.name === "故事推进")?.intake).toBe(
       "dictate",
     );
-    expect(catalog?.modules.find((m) => m.name === "用户需求")?.libraries).toEqual([
+    expect(catalog?.modules.find((m) => m.name === "故事推进")?.libraries).toEqual([
       "preferences",
     ]);
+    expect(catalog?.modules.some((m) => m.id === "user-requirements")).toBe(false);
     expect(
       catalog?.modules.find((m) => m.name === "叙事指南")?.libraries,
     ).toEqual(["style-packs"]);
     expect(
       catalog?.modules.find((m) => m.name === "叙事指南与故事推进")?.libraries,
     ).toEqual(["style-packs"]);
-    expect(dictateBlock).toContain("【偏好库 · 可选用】");
+    expect(dictateBlock).not.toContain("【偏好库 · 可选用】");
     expect(
       catalogModulesForIntake(catalog!, "recipe").some(
         (m) => m.name === "叙事指南",
@@ -570,36 +574,44 @@ describe("creation-flow", () => {
     expect(dictate?.recipes.some((r) => r.name === "数据化跑团体验")).toBe(true);
     expect(dictate?.recipes.some((r) => r.id === "快穿短局")).toBe(true);
     expect(dictate?.recipes.some((r) => r.name === "快穿短局")).toBe(true);
+    expect(dictate?.recipes.some((r) => r.id === "正文组成")).toBe(false);
+    expect(dictate?.recipes).toHaveLength(4);
     expect(dictate?.recipes[0]?.id).toBe("快穿短局");
     const entry = dictate!.recipes.find((r) => r.id === "文本生成器")!;
     expect(entry.family).toBe("dictate");
     const detail = await loadRecipeDetail("dialogue/world-simulator", entry);
-    expect(detail.core).toMatch(/范例|模仿|转述|游玩/);
+    expect(detail.method?.join("")).toMatch(/范例|写法|输入/);
+    expect(detail.tierTendencies?.some((item) => item.module_id === "narrative-guide")).toBe(true);
     expect(detail.seed).toBeNull();
-    expect(formatDictateRecipeBrief(detail)).toMatch(/模仿|范例|转述|开玩/);
-    expect(formatDictateRecipeBrief(detail)).toMatch(/模仿要点|学哪些面|要点|文风/);
 
     const longform = dictate!.recipes.find((r) => r.id === "交互式长文生成器")!;
     const longDetail = await loadRecipeDetail("dialogue/world-simulator", longform);
-    expect(longDetail.brief).toMatch(/长文/);
-    expect(longDetail.core).toMatch(/长文|分段/);
+    expect(longDetail.brief).toMatch(/长连续/);
+    expect(longDetail.method?.join("")).toMatch(/变量|动态表/);
+    expect(longDetail.method?.join("")).toMatch(/硬机制|数据化跑团/);
 
     const rpg = dictate!.recipes.find((r) => r.id === "数据化跑团体验")!;
     const rpgDetail = await loadRecipeDetail("dialogue/world-simulator", rpg);
-    expect(rpgDetail.brief).toMatch(/美学|真值|映射/);
-    expect(rpgDetail.core).toMatch(/美学|真值|declare_variable|何时落盘/);
-    expect(formatDictateRecipeBrief(rpgDetail)).toContain("declare_variable");
-    expect(formatDictateRecipeBrief(rpgDetail)).toContain("何时落盘");
-    expect(formatDictateRecipeBrief(rpgDetail)).toMatch(/美学纲领|体验核心/);
+    expect(rpgDetail.brief).toMatch(/硬判断|结构化状态/);
+    expect(rpgDetail.method?.join("")).toMatch(/长短|连续性/);
+    expect(rpgDetail.tierTendencies?.some((item) => item.module_id === "mechanism")).toBe(true);
 
     const skip = dictate!.recipes.find((r) => r.id === "快穿短局")!;
     const skipDetail = await loadRecipeDetail("dialogue/world-simulator", skip);
     expect(skipDetail.seed).toBeNull();
-    expect(skipDetail.brief).toMatch(/一核|短局|主角/);
-    expect(skipDetail.core).toMatch(/一核|开场白|黑板/);
-    expect(skipDetail.when).toMatch(/快穿|一次性|短任务/);
-    expect(formatDictateRecipeBrief(skipDetail)).toMatch(/舞台骨架|生成规则|拓扑/);
-    expect(formatDictateRecipeBrief(skipDetail)).toMatch(/回合推演|数据化跑团体验/);
+    expect(skipDetail.brief).toMatch(/体验核|短反馈/);
+    expect(skipDetail.signals?.join("")).toMatch(/快穿|一次性|短任务/);
+
+    const examples = formatRecipeExamplesForCreationPlan([
+      detail,
+      longDetail,
+      rpgDetail,
+      skipDetail,
+    ]);
+    expect(examples).toContain("适用信号");
+    expect(examples).toContain("档位倾向");
+    expect(examples).toContain("variable-design=有必要");
+    expect(examples).not.toContain("固定路径");
   });
 
   it("parses selected recipe ref", () => {
@@ -844,10 +856,8 @@ modules:
     );
     expect(prompt).toBeTruthy();
     const opening = extractModuleOpening(prompt!);
-    expect(opening).toContain("原型世界");
-    expect(opening).toContain("变在哪里");
-    expect(opening).toContain("代入");
-    expect(opening).toContain("最想反复感受到");
+    expect(opening).toContain("反复获得什么体验");
+    expect(opening).toContain("站在什么位置");
     expect(opening).not.toContain("nail清站位");
 
     const {
@@ -884,9 +894,398 @@ modules:
       }),
       currentStepName: "美学纲领与交互范式",
     });
-    expect(binding?.opening).toContain("原型世界");
+    expect(binding?.opening).toContain("反复获得什么体验");
     expect(binding?.modulePrompt).toContain("```task");
     expect(binding?.modulePrompt).not.toContain("最想反复感受到的是什么");
+  });
+
+  it("loads the migrated world-blueprint contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "world-blueprint");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "world-blueprint",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("稳定反馈");
+    expect(sections.blocks.output).toContain('"核心运转"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.output).not.toContain('"追问"');
+    expect(sections.blocks.score).toContain("支撑度");
+    expect(sections.blocks.score).toContain("克制度");
+    expect(sections.blocks.score).not.toContain("0–10");
+  });
+
+  it("loads the migrated generation-rules contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "generation-rules");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "auditor"]);
+    expect(module?.repeatable).toBe(true);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "generation-rules",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.meta).toContain("两份或以上");
+    expect(sections.blocks.task).toContain("填写工作流");
+    expect(sections.blocks.output).toContain('"字段"');
+    expect(sections.blocks.output).toContain('"填写工作流"');
+    expect(sections.blocks.output).toContain('"依赖关系"');
+    expect(sections.blocks.output).not.toContain('"rules"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("字段妥当");
+    expect(sections.blocks.score).toContain("池与提示");
+    expect(sections.blocks.score).toContain("填写工作流");
+  });
+
+  it("loads the migrated concrete-instances contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find(
+      (item) => item.id === "concrete-instances",
+    );
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator"]);
+    expect(module?.repeatable).toBe(true);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "concrete-instances",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.meta).toContain("字段很少");
+    expect(sections.blocks.task).toContain("一份产物只含一条记录");
+    expect(sections.blocks.output).toContain('"名称"');
+    expect(sections.blocks.output).toContain('"记录"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("工作流符合度");
+    expect(sections.blocks.score).not.toContain("充实度");
+  });
+
+  it("loads the migrated narrative-guide contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "narrative-guide");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["narrator", "world-simulator"]);
+    expect(module?.libraries).toEqual(["style-packs"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "narrative-guide",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("read_library_entry");
+    expect(sections.blocks.task).toContain("风格推荐");
+    expect(sections.blocks.output).toContain('"选用文风"');
+    expect(sections.blocks.output).toContain('"写法要求"');
+    expect(sections.blocks.output).not.toContain('"示范"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("遣词可执行");
+    expect(sections.blocks.score).toContain("文风选用");
+    expect(sections.blocks.score).toContain("本局化");
+  });
+
+  it("loads the migrated story-progression contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find(
+      (item) => item.id === "story-progression",
+    );
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "narrator"]);
+    expect(module?.libraries).toEqual(["preferences"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "story-progression",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("只选定一种");
+    expect(sections.blocks.task).toContain("read_library_entry");
+    expect(sections.blocks.output).toContain('"用户输入用法"');
+    expect(sections.blocks.output).toContain('"扩写要求"');
+    expect(sections.blocks.output).toContain('"续写要求"');
+    expect(sections.blocks.output).toContain('"单轮篇幅"');
+    expect(sections.blocks.output).toContain('"目标字数"');
+    expect(sections.blocks.output).toContain('"扩写占比"');
+    expect(sections.blocks.output).toContain('"续写占比"');
+    expect(sections.blocks.output).toContain('"OOC处理"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("唯一性与切分");
+    expect(sections.blocks.score).toContain("可执行性");
+    expect(sections.blocks.score).toContain("偏好本局化");
+  });
+
+  it("loads the migrated mechanism contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "mechanism");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "mechanism",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("多条共同作用");
+    expect(sections.blocks.task).toContain("缺失后果");
+    expect(sections.blocks.output).toContain('"既成机制"');
+    expect(sections.blocks.output).toContain('"因果影响"');
+    expect(sections.blocks.output).toContain('"推演口径"');
+    expect(sections.blocks.output).toContain('"共同作用"');
+    expect(sections.blocks.output).not.toContain('"缺失后果"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("骨架必要度");
+    expect(sections.blocks.score).toContain("因果清晰度");
+    expect(sections.blocks.score).toContain("推演开放度");
+    expect(sections.blocks.examples).toContain("灵气复苏");
+    expect(sections.blocks.examples).toContain("全民直播求生");
+  });
+
+  it("loads the migrated topology contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "topology");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "auditor"]);
+    expect(module?.repeatable).toBe(true);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "topology",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("一张图");
+    expect(sections.blocks.task).toContain("static");
+    expect(sections.blocks.task).toContain("record");
+    expect(sections.blocks.task).toContain("expand");
+    expect(sections.blocks.output).toContain('"节点字段"');
+    expect(sections.blocks.output).toContain('"连接字段"');
+    expect(sections.blocks.output).toContain('"初始图"');
+    expect(sections.blocks.output).toContain('"维护规则"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.output).not.toContain("SVG");
+    expect(sections.blocks.score).toContain("对象适配");
+    expect(sections.blocks.score).toContain("字段合同");
+    expect(sections.blocks.score).toContain("初始图有效性");
+    expect(sections.blocks.score).toContain("维护可执行性");
+    expect(sections.blocks.score).toContain("长期一致性");
+  });
+
+  it("loads the migrated variable-design contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "variable-design");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "auditor"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "variable-design",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("deterministic");
+    expect(sections.blocks.task).toContain("narrative_inference");
+    expect(sections.blocks.task).toContain("inline_tool");
+    expect(sections.blocks.task).toContain("auditor_bundle");
+    expect(sections.blocks.output).toContain('"允许写入者"');
+    expect(sections.blocks.output).toContain('"更新规则"');
+    expect(sections.blocks.output).toContain('"派生映射"');
+    expect(sections.blocks.output).toContain('"触发规则"');
+    expect(sections.blocks.output).toContain('"维护复杂度"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.output).not.toContain("maintain.v1");
+    expect(sections.blocks.output).not.toContain("隐藏段");
+    expect(sections.blocks.score).toContain("真值必要性");
+    expect(sections.blocks.score).toContain("字段妥当性");
+    expect(sections.blocks.score).toContain("更新可执行性");
+    expect(sections.blocks.score).toContain("权限与公开性");
+    expect(sections.blocks.score).toContain("映射与触发一致性");
+  });
+
+  it("loads the migrated status-bar contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "status-bar");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "narrator"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "status-bar",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("语义区域");
+    expect(sections.blocks.task).toContain("inline");
+    expect(sections.blocks.output).toContain('"语义区域"');
+    expect(sections.blocks.output).toContain("program_projection");
+    expect(sections.blocks.output).toContain("maintenance_channel");
+    expect(sections.blocks.output).toContain("state_ops");
+    expect(sections.blocks.output).not.toContain('"启用"');
+    expect(sections.blocks.output).not.toContain("1000～2000");
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("区域必要性");
+    expect(sections.blocks.score).toContain("来源一致性");
+    expect(sections.blocks.score).toContain("内容可执行性");
+    expect(sections.blocks.score).toContain("信息负担");
+    expect(sections.blocks.score).toContain("职责边界");
+  });
+
+  it("loads the migrated random-range contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "random-range");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "random-range",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("名称.随机数");
+    expect(sections.blocks.task).toContain("只剩 1 个");
+    expect(sections.blocks.output).toContain("敏捷.随机数");
+    expect(sections.blocks.output).not.toContain("票 id");
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("覆盖度");
+    expect(sections.blocks.score).toContain("克制");
+  });
+
+  it("loads the migrated reply-format contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "reply-format");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "narrator"]);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "reply-format",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("普通楼层");
+    expect(sections.blocks.task).toContain("present.onData");
+    expect(sections.blocks.output).toContain('"数据契约"');
+    expect(sections.blocks.output).toContain('"区域落点"');
+    expect(sections.blocks.output).toContain('"frontend"');
+    expect(sections.blocks.output).toContain('"html"');
+    expect(sections.blocks.output).toContain('"css"');
+    expect(sections.blocks.output).toContain('"js"');
+    expect(sections.blocks.output).toContain('"示例灌数"');
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("区域落实");
+    expect(sections.blocks.score).toContain("权威绑定");
+    expect(sections.blocks.score).toContain("实现完整");
+    expect(sections.blocks.score).toContain("本局化");
+  });
+
+  it("loads the migrated opening-setup contract", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const module = catalog?.modules.find((item) => item.id === "opening-setup");
+    expect(module?.layer).toBe("final");
+    expect(module?.mount).toEqual(["world-simulator", "narrator"]);
+    expect(module?.closer).toBe(true);
+    expect(module?.repeatable).toBe(true);
+
+    const prompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "opening-setup",
+    );
+    const { parseModulePromptSections } = await import(
+      "../src/skills/creation-flow.js"
+    );
+    const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("默认只生成 1 条");
+    expect(sections.blocks.task).toContain("@玩家");
+    expect(sections.blocks.task).toContain("随机");
+    expect(sections.blocks.output).toContain('"默认候选id"');
+    expect(sections.blocks.output).toContain('"开场白候选"');
+    expect(sections.blocks.output).not.toContain('"开场白全文"');
+    expect(sections.blocks.output).toContain("present.v1");
+    expect(sections.blocks.output).not.toContain('"自评"');
+    expect(sections.blocks.score).toContain("开场必要");
+    expect(sections.blocks.score).toContain("前端符合");
+    expect(sections.blocks.score).toContain("状态自洽");
+    expect(sections.blocks.score).toContain("角色占位");
+    expect(sections.blocks.score).toContain("收口可切换");
+  });
+
+  it("loads the three zero-layer presentation contracts", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    const ids = [
+      "zero-layer-status",
+      "zero-layer-reply-format",
+      "zero-layer-opening-setup",
+    ];
+    for (const id of ids) {
+      const module = catalog?.modules.find((item) => item.id === id);
+      expect(module?.layer).toBe("final");
+      expect(module?.mount).toEqual(["world-simulator", "narrator"]);
+      const prompt = await loadModulePrompt("dialogue/world-simulator", id);
+      const { parseModulePromptSections } = await import(
+        "../src/skills/creation-flow.js"
+      );
+      const sections = parseModulePromptSections(prompt!);
+      expect(sections.blocks.task).toBeTruthy();
+      expect(sections.blocks.output).not.toContain('"自评"');
+      expect(sections.blocks.score).toBeTruthy();
+    }
+
+    expect(
+      catalog?.modules.find((item) => item.id === "zero-layer-opening-setup")
+        ?.closer,
+    ).toBe(true);
+    expect(
+      catalog?.modules.find((item) => item.id === "zero-layer-opening-setup")
+        ?.repeatable,
+    ).toBe(true);
+    const formatPrompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "zero-layer-reply-format",
+    );
+    expect(formatPrompt).toContain("zero-layer.update.v1");
+    expect(formatPrompt).toContain("slot_updates");
+    expect(formatPrompt).toContain("base_revision");
+
+    const openingPrompt = await loadModulePrompt(
+      "dialogue/world-simulator",
+      "zero-layer-opening-setup",
+    );
+    expect(openingPrompt).toContain("zero-layer.card.v1");
+    expect(openingPrompt).toContain("@玩家");
+    expect(openingPrompt).toContain("不输出任何 `名称.随机数`");
   });
 
   it("parses and validates step params from catalog", async () => {
@@ -954,7 +1353,67 @@ modules:
     expect(loaded.promptBody).toContain("【本步对象】");
     expect(loaded.promptBody).toContain("target: 怪物");
     expect(loaded.promptBody).toContain("rule_id: monsters");
-    expect(loaded.worker.outputTags).toContain("设计.生成规则");
+    expect(loaded.worker.outputTags).toEqual(["设计.生成规则#monsters"]);
+  });
+
+  it("lands each rule, instance, and opening on its own tag", () => {
+    const catalog = parseModuleCatalog(`
+modules:
+  - id: generation-rules
+    name: 生成规则
+    declaration: 一条规则一份产物
+    artifact: 设计.生成规则
+    repeatable: true
+  - id: concrete-instances
+    name: 具体实例
+    declaration: 一条记录一份产物
+    artifact: 设计.具体实例
+    repeatable: true
+  - id: opening-setup
+    name: 开场白与开场变量
+    declaration: 一条开场一份产物
+    artifact: 设计.开场白与开场变量
+    repeatable: true
+    closer: true
+  - id: aesthetics-interaction
+    name: 美学纲领与交互范式
+    declaration: 一次写完
+    artifact: 设计.美学纲领与交互范式
+`)!;
+    const rule = catalog.modules.find((m) => m.id === "generation-rules")!;
+    const row = catalog.modules.find((m) => m.id === "concrete-instances")!;
+    const opening = catalog.modules.find((m) => m.id === "opening-setup")!;
+    const once = catalog.modules.find((m) => m.id === "aesthetics-interaction")!;
+    expect(
+      repeatableInstanceProductTag({
+        module: rule,
+        step: { id: "生成规则·怪物", role: "instance", params: { rule_id: "女租客" } },
+      }),
+    ).toBe("设计.生成规则#女租客");
+    expect(
+      repeatableInstanceProductTag({
+        module: row,
+        step: { id: "具体实例#1", role: "instance", params: { batch_goal: "雷樱" } },
+      }),
+    ).toBe("设计.具体实例#1");
+    expect(
+      repeatableInstanceProductTag({
+        module: row,
+        step: { id: "具体实例·雷樱", role: "instance", params: { batch_goal: "雷樱" } },
+      }),
+    ).toBe("设计.具体实例#雷樱");
+    expect(
+      repeatableInstanceProductTag({
+        module: opening,
+        step: { id: "开场白与开场变量#dorm", role: "instance" },
+      }),
+    ).toBe("设计.开场白#dorm");
+    expect(
+      repeatableInstanceProductTag({
+        module: once,
+        step: { id: "美学纲领与交互范式", role: "instance" },
+      }),
+    ).toBeNull();
   });
 
   it("injects empty prior-artifact plan and still lets the step run", async () => {
@@ -1298,6 +1757,45 @@ modules:
     expect("error" in second).toBe(false);
     if ("error" in second) return;
     expect(second.step.id).toBe("生成规则#2");
+  });
+
+  it("spawns an opening instance from its own prototype without depending on itself", () => {
+    const catalog = parseModuleCatalog(`
+modules:
+  - name: 开场白与开场变量
+    declaration: 可增殖收口
+    artifact: 设计.开场白与开场变量
+    closer: true
+    repeatable: true
+`)!;
+    const flow = parseCreationFlow(`{
+      "status": "open",
+      "steps": [
+        {
+          "id": "开场白与开场变量",
+          "name": "开场白与开场变量",
+          "role": "prototype",
+          "depends_on": []
+        }
+      ]
+    }`)!;
+    const spawned = spawnInstanceFromPrototype({
+      flow,
+      catalog,
+      prototypeId: "开场白与开场变量",
+      acceptedStepIds: [],
+    });
+    expect("error" in spawned).toBe(false);
+    if ("error" in spawned) return;
+    expect(spawned.step.role).toBe("instance");
+    expect(spawned.step.from).toBe("开场白与开场变量");
+    expect(spawned.step.depends_on).toEqual([]);
+    const proto = spawned.flow.steps.find((s) => s.role === "prototype");
+    expect(proto?.depends_on).toEqual([]);
+    expect(spawned.flow.steps.map((s) => s.id)).toEqual([
+      "开场白与开场变量",
+      "开场白与开场变量#1",
+    ]);
   });
 
   it("removeUnstartedInstance drops empty spawn and closer dep", () => {

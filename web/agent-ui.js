@@ -188,6 +188,30 @@ function canRefreshMessage(msg) {
   return true;
 }
 
+/**
+ * 游玩 0 层开场：多条时用 ‹ › 切换，选中的一条替换开场消息。
+ * 与消息版本 swipe 分开，不重 roll。
+ */
+function renderOpeningSwipeHtml(view, msg) {
+  if (!isPlayView(view)) return "";
+  if (String(msg?.title ?? "").trim() !== "开场白") return "";
+  const openings = view.playAux?.openings ?? [];
+  const total = openings.length;
+  if (total < 2) return "";
+  const current = Math.min(
+    total - 1,
+    Math.max(0, Number(view.playAux?.selectedOpeningIndex) || 0),
+  );
+  const id = esc(msg.id);
+  const prev = current - 1;
+  const next = current + 1;
+  return `<span class="msg-variant-nav" title="‹ › 切换开场，选中的一条作为 0 层">
+    <button type="button" class="msg-action" data-msg-action="opening-prev" data-msg-id="${id}" data-opening-index="${prev}"${prev < 0 ? " disabled" : ""} aria-label="上一条开场">‹</button>
+    <span class="msg-variant-count">${current + 1}/${total}</span>
+    <button type="button" class="msg-action" data-msg-action="opening-next" data-msg-id="${id}" data-opening-index="${next}"${next >= total ? " disabled" : ""} aria-label="下一条开场">›</button>
+  </span>`;
+}
+
 /** ‹ n/total › 多版切换；末页 › 与 ↻ 均可重 roll；单版只显示 ↻ */
 function renderVariantNavHtml(msg) {
   if (!msg?.id) return "";
@@ -741,10 +765,7 @@ function openContentPeek(payload) {
 }
 
 function formatDictatePeekHtml(content) {
-  const trimmed = String(content ?? "").trim();
-  if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
-  // 与侧栏同一路径：勿走 formatArtifactBodyHtml（## 分段会丢掉前置 JSON/正文）
-  return `<div class="dictate-product-body">${safeBodyHtml(trimmed)}</div>`;
+  return renderStoredProductHtml(content);
 }
 
 const dictateProductContentByEl = new WeakMap();
@@ -1144,6 +1165,13 @@ function wireMessageFeedActions(feed, handlers) {
       return;
     }
 
+    if (action === "opening-prev" || action === "opening-next") {
+      const index = Number(btn.getAttribute("data-opening-index"));
+      if (!Number.isFinite(index) || index < 0) return;
+      h.onSelectOpening?.(index);
+      return;
+    }
+
     if (action === "variant-prev") {
       h.onSwitchVariant?.(messageId, "prev");
       return;
@@ -1231,9 +1259,64 @@ function isPlayProcessMessage(msg, view) {
   return !isPlayFinalReply(msg, view);
 }
 
+/** 开场回退把多份产物拼成 `【设计.tag】` + JSON。拆开后按产物卡渲染，不把结构化原文当散文。 */
+function splitBracketProductSections(text) {
+  const trimmed = String(text || "").trim();
+  const re = /^【((?:设计|用户)\.[^】]+)】[ \t]*$/gm;
+  const hits = [];
+  let m;
+  while ((m = re.exec(trimmed))) {
+    hits.push({
+      title: m[1].trim(),
+      index: m.index,
+      headerEnd: m.index + m[0].length,
+    });
+  }
+  if (!hits.length) return null;
+  const sections = [];
+  if (hits[0].index > 0) {
+    const preamble = trimmed.slice(0, hits[0].index).trim();
+    if (preamble) sections.push({ title: "", content: preamble });
+  }
+  for (let i = 0; i < hits.length; i++) {
+    const h = hits[i];
+    const end = i + 1 < hits.length ? hits[i + 1].index : trimmed.length;
+    sections.push({
+      title: h.title,
+      content: trimmed.slice(h.headerEnd, end).trim(),
+    });
+  }
+  return sections;
+}
+
+function renderStoredProductHtml(content) {
+  const trimmed = String(content ?? "").trim();
+  if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    const parsed = tryParseJsonDoc(trimmed);
+    if (parsed != null && typeof parsed === "object") {
+      return formatArtifactBodyHtml(trimmed, {
+        flat: true,
+        hideAskSidecar: true,
+        hideScores: true,
+      });
+    }
+  }
+  return `<div class="dictate-product-body">${safeBodyHtml(trimmed)}</div>`;
+}
+
 function formatPlayPresentHtml(body, view) {
   const trimmed = stripPresentSourceFences((body || "").trim());
   if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
+  const bundled = splitBracketProductSections(trimmed);
+  if (bundled) {
+    return bundled
+      .map((sec) => {
+        if (!sec.title) return `<p class="msg-bundle-lead">${esc(sec.content)}</p>`;
+        return renderStoredProductHtml(sec.content);
+      })
+      .join("");
+  }
   const tweaks = view?.presentationTweaks;
   const fallbackShell =
     tweaks?.shell_id && PRESENT_SHELL_IDS?.includes?.(tweaks.shell_id)
@@ -2041,6 +2124,7 @@ function normalizeContextFragmentDoc(doc) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return doc;
   const row = { ...doc };
   const hasBody = row.正文 != null || row.body != null;
+  if (row.schema === "context-fragment-v1") row.schema = "context-fragment.v1";
   const looksFrag =
     row.schema === "context-fragment.v1" ||
     (typeof row.技能 === "string" && row.技能.trim()) ||
@@ -2625,27 +2709,36 @@ function collectOpeningCandidates(body) {
   const sharedVars = openingVariablesFrom(body);
   const rows = [];
   const seen = new Set();
-  const push = (text, persona, variables) => {
+  const push = (text, persona, variables, id) => {
     const value = openingTextFrom(text);
     if (!value || seen.has(value)) return;
     seen.add(value);
     rows.push({
+      id: String(id || "").trim(),
       text: value,
       persona: persona || fallback,
       variables: variables?.length ? variables : sharedVars,
     });
   };
-  push(body.开场白全文, fallback, sharedVars);
-  if (Array.isArray(body.开场白候选)) {
-    for (const item of body.开场白候选) {
-      if (typeof item === "string") push(item, fallback, sharedVars);
-      else if (item && typeof item === "object") {
-        push(
-          item.正文 || item.全文 || item.text || item.开场白 || item.内容,
-          openingPersonaFrom(item, fallback),
-          openingVariablesFrom(item),
-        );
-      }
+  const listed = Array.isArray(body.开场白候选) ? body.开场白候选 : [];
+  if (!listed.length) push(body.开场白全文, fallback, sharedVars, "");
+  for (const item of listed) {
+    if (typeof item === "string") push(item, fallback, sharedVars, "");
+    else if (item && typeof item === "object") {
+      push(
+        item.正文 || item.全文 || item.text || item.开场白 || item.内容,
+        openingPersonaFrom(item, fallback),
+        openingVariablesFrom(item),
+        item.id || item.候选id,
+      );
+    }
+  }
+  const defaultId = String(body.默认候选id || body.默认候选ID || "").trim();
+  if (defaultId) {
+    const index = rows.findIndex((row) => row.id === defaultId);
+    if (index > 0) {
+      const [picked] = rows.splice(index, 1);
+      rows.unshift(picked);
     }
   }
   return rows;
@@ -5690,24 +5783,22 @@ function renderDictateProductsList(view) {
         .replace(/#/g, " · ");
       return `<div class="dictate-product dictate-product--rail" role="listitem" data-dictate-product>
         <button type="button" class="dictate-product-sum" aria-expanded="false">
-          <span class="dictate-product-sum-inner">
-            <span class="dictate-product-sum-top">
-              <span class="dictate-product-tag" title="${esc(tag)}">${esc(shortTag || tag || "未命名")}</span>
-              ${
-                order != null
-                  ? `<span class="dictate-product-order" title="相对序">${order}</span>`
-                  : ""
-              }
-              <span class="dictate-product-chevron" aria-hidden="true"></span>
-            </span>
+          <span class="dictate-product-sum-top">
+            <span class="dictate-product-tag" title="${esc(tag)}">${esc(shortTag || tag || "未命名")}</span>
             ${
-              preview
-                ? `<span class="dictate-product-preview">${esc(preview)}${
-                    content.length > 72 ? "…" : ""
-                  }</span>`
-                : `<span class="dictate-product-preview is-empty">（空）</span>`
+              order != null
+                ? `<span class="dictate-product-order" title="相对序">${order}</span>`
+                : ""
             }
+            <span class="dictate-product-chevron" aria-hidden="true"></span>
           </span>
+          ${
+            preview
+              ? `<span class="dictate-product-preview">${esc(preview)}${
+                  content.length > 72 ? "…" : ""
+                }</span>`
+              : `<span class="dictate-product-preview is-empty">（空）</span>`
+          }
         </button>
         <div class="dictate-product-body" hidden data-pending="1"></div>
       </div>`;
@@ -5720,9 +5811,7 @@ function hydrateDictateProductBody(card) {
   const body = card.querySelector(".dictate-product-body");
   if (!body || body.dataset.pending !== "1") return;
   const content = readDictateProductContent(card);
-  body.innerHTML = content.trim()
-    ? safeBodyHtml(content)
-    : `<p class="empty-sm">（无正文）</p>`;
+  body.innerHTML = renderStoredProductHtml(content);
   delete body.dataset.pending;
 }
 
@@ -6050,9 +6139,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         ? `${view.uiPrompt}${
             view.selectedRecipe?.name
               ? `\n\n已选配方：${view.selectedRecipe.name}`
-              : view.recipes?.length
-                ? "\n\n（请先在新建作品时选定配方）"
-                : ""
+              : ""
           }`
         : view.waitingReason?.kind === "worker_questions"
           ? "在下方回答提问。"
@@ -6122,11 +6209,12 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
       !label.includes(subtitle) &&
       subtitle !== label;
     const headInner = isUser
-      ? `<span class="msg-time">${fmtTime(msg.createdAt)}</span>${renderMsgVariantBadge(msg)}`
+      ? renderMsgVariantBadge(msg)
       : `<div class="msg-head-main">
           <span class="msg-tag">${esc(label)}</span>
           ${showSubtitle ? `<span class="msg-subtitle">${esc(subtitle)}</span>` : ""}
         </div>
+        ${renderOpeningSwipeHtml(view, msg)}
         ${renderMsgVariantBadge(msg)}
         <span class="msg-time">${fmtTime(msg.createdAt)}</span>`;
     const menuTrigger = `<button type="button" class="msg-menu-trigger" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>`;
@@ -6136,7 +6224,10 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
     card.dataset.originalText = body;
 
     const questionsActive = kind === "worker_questions" && Boolean(activeQuestions);
-    const showThinking = !isUser && msg.thinking && isPlayView(view);
+    const showThinking =
+      !isUser &&
+      Boolean(msg.thinking) &&
+      (isPlayView(view) || kind === "dictate_reply");
     const innerBody = questionsActive
       ? `<p class="msg-q-index">${esc(body)}</p>`
       : kind === "worker_questions"

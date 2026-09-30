@@ -55,12 +55,20 @@ function findRuleBody(
 ): Record<string, unknown> | undefined {
   const body = parsed.正文;
   if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-  const rules = (body as Record<string, unknown>).rules;
+  const bodyRec = body as Record<string, unknown>;
+  const directId =
+    asString(bodyRec.规则名) ??
+    asString(bodyRec.rule_id) ??
+    asString(bodyRec.id) ??
+    asString(bodyRec.规则id);
+  if (directId === ruleId) return bodyRec;
+  const rules = bodyRec.rules;
   if (!Array.isArray(rules)) return undefined;
   for (const row of rules) {
     if (!row || typeof row !== "object" || Array.isArray(row)) continue;
     const r = row as Record<string, unknown>;
     const id =
+      asString(r.规则名) ??
       asString(r.rule_id) ??
       asString(r.id) ??
       asString(r.规则id);
@@ -94,16 +102,22 @@ export function buildChanceBatchFromGenerationRule(
     if (!isElementPool(pool)) continue;
     const poolId =
       asString(pool.pool_id) ?? asString(pool.池id) ?? asString(pool.名称);
-    const entries = (pool.条目 ?? pool.entries) as PoolEntry[] | undefined;
+    const entries = (pool.条目 ?? pool.entries) as unknown[] | undefined;
     if (!poolId || !Array.isArray(entries) || !entries.length) continue;
     const items = entries
       .map((e, idx) => {
-        const id = asString(e.id) ?? asString(e.内容) ?? `item-${idx}`;
+        if (typeof e === "string") {
+          const id = e.trim();
+          return id ? { id } : undefined;
+        }
+        if (!e || typeof e !== "object" || Array.isArray(e)) return undefined;
+        const row = e as PoolEntry;
+        const id = asString(row.id) ?? asString(row.内容) ?? `item-${idx}`;
         const weight =
-          typeof e.权重 === "number"
-            ? e.权重
-            : typeof e.weight === "number"
-              ? e.weight
+          typeof row.权重 === "number"
+            ? row.权重
+            : typeof row.weight === "number"
+              ? row.weight
               : undefined;
         return id ? { id, weight } : undefined;
       })

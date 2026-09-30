@@ -99,6 +99,55 @@ export function softenJsonText(s) {
   return t;
 }
 
+/**
+ * 根对象被提前写成 `} , "下一键"` 时丢掉这个 `}`。
+ * 只在 JSON.parse 失败后使用；合法对象不会出现这种根级衔接。
+ */
+export function repairPrematureRootClose(s) {
+  const text = String(s || "");
+  let out = "";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      out += c;
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      continue;
+    }
+    if (c === "{") {
+      depth += 1;
+      out += c;
+      continue;
+    }
+    if (c === "}") {
+      if (depth === 1 && continuesAsSiblingKey(text, i + 1)) continue;
+      if (depth > 0) depth -= 1;
+      out += c;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+function continuesAsSiblingKey(text, from) {
+  let j = from;
+  while (j < text.length && /\s/.test(text[j])) j += 1;
+  if (text[j] !== ",") return false;
+  j += 1;
+  while (j < text.length && /\s/.test(text[j])) j += 1;
+  return text[j] === '"';
+}
+
 /** 截断的 {… 补齐引号/括号，便于验收卡仍能出 mosaic */
 export function repairTruncatedJsonObject(slice) {
   let s = String(slice || "").trim();
@@ -138,6 +187,10 @@ export function tryParseJsonDoc(text) {
   }
 
   const cleaned = softenJsonText(convertStructuralSmartQuotes(stripped));
+  const repaired = repairPrematureRootClose(cleaned);
+  const repairedParsed =
+    tryParse(repaired) ?? tryParse(softenJsonText(repaired));
+  if (repairedParsed != null) return repairedParsed;
   if (
     (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
     (cleaned.startsWith("'") && cleaned.endsWith("'"))
@@ -153,9 +206,12 @@ export function tryParseJsonDoc(text) {
   const objEnd = cleaned.lastIndexOf("}");
   if (objStart >= 0 && objEnd > objStart) {
     const slice = cleaned.slice(objStart, objEnd + 1);
+    const repairedSlice = repairPrematureRootClose(slice);
     const parsed =
       tryParse(slice) ??
       tryParse(softenJsonText(slice)) ??
+      tryParse(repairedSlice) ??
+      tryParse(softenJsonText(repairedSlice)) ??
       tryParse(repairTruncatedJsonObject(slice)) ??
       tryParse(softenJsonText(repairTruncatedJsonObject(cleaned.slice(objStart))));
     if (parsed != null) return parsed;

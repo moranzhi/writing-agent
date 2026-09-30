@@ -1,9 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalizeInsertedContent,
   extractLastProductJson,
   selectJsonPayload,
   tryParseJsonDoc,
 } from "../src/parse/json-doc.js";
+
+describe("canonicalizeInsertedContent", () => {
+  it("extracts a broken fragment string into canonical JSON", () => {
+    const raw = `{
+"schema":"context-fragment-v1",
+"技能":"主角设定",
+"brief":"点题",
+"mount":"world-simulator"
+},
+"正文": { "称呼": "@玩家" }
+}`;
+    const stored = canonicalizeInsertedContent(raw);
+    expect(JSON.parse(stored)).toMatchObject({
+      schema: "context-fragment.v1",
+      技能: "主角设定",
+      正文: { 称呼: "@玩家" },
+    });
+    expect(canonicalizeInsertedContent("开场是一段散文。")).toBe("开场是一段散文。");
+  });
+});
 
 describe("selectJsonPayload", () => {
   it("keeps content when it is already the product", () => {

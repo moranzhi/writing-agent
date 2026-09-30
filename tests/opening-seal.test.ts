@@ -53,6 +53,39 @@ describe("opening-seal", () => {
     ).toBe(false);
   });
 
+  it("reads the default candidate body without a copied 开场白全文", () => {
+    const raw = JSON.stringify({
+      schema: "context-fragment.v1",
+      技能: "开场白与开场变量",
+      正文: {
+        默认候选id: "gate",
+        开场白候选: [
+          {
+            id: "dorm",
+            正文: "@玩家推开宿舍门。",
+            meta: { 开场变量: [{ 名: "口粮", 值: 1 }] },
+          },
+          {
+            id: "gate",
+            正文: "@玩家停在闸机前。",
+            meta: { 开场变量: [{ 名: "债额", 值: 3, 依据: "闸机票" }] },
+          },
+        ],
+      },
+    });
+    const first = parseOpeningSealPayload(raw, 0);
+    expect(first?.candidates).toEqual([
+      "@玩家停在闸机前。",
+      "@玩家推开宿舍门。",
+    ]);
+    expect(first?.selectedText).toBe("@玩家停在闸机前。");
+    expect(first?.variables).toEqual([
+      { name: "债额", value: 3, note: "闸机票" },
+    ]);
+    const second = parseOpeningSealPayload(raw, 1);
+    expect(second?.selectedText).toBe("@玩家推开宿舍门。");
+  });
+
   it("parses 1+ opening candidates and selects by index", () => {
     const first = parseOpeningSealPayload(fragment, 0);
     expect(first?.candidates).toHaveLength(2);

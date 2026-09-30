@@ -46,6 +46,33 @@ describe("dictate play-bind", () => {
     expect(refs.indexOf("设计.正文组成")).toBeLessThan(histIdx);
   });
 
+  it("groups context by change frequency before applying importance order", () => {
+    const fragment = (skill: string, stability: "stable" | "semi") =>
+      JSON.stringify({
+        schema: "context-fragment.v1",
+        技能: skill,
+        brief: skill,
+        mount: ["world-simulator"],
+        稳变: stability,
+        正文: { value: skill },
+        开放问题: [],
+      });
+    const order = buildDictateContextOrder({
+      products: [
+        { tag: "设计.稳定约束", content: fragment("稳定约束", "stable"), order: 10 },
+        { tag: "设计.阶段备忘", content: fragment("阶段备忘", "semi"), order: -50 },
+      ],
+      playSlots: defaultPlaySlots(),
+    });
+    const refs = order.slots[0]!.inserts.map((i) => i.ref);
+    const history = refs.indexOf(DIALOGUE_HISTORY_TAG);
+    expect(refs.indexOf("设计.稳定约束")).toBeLessThan(history);
+    expect(refs.indexOf("设计.阶段备忘")).toBeGreaterThan(history);
+    expect(refs.indexOf("设计.阶段备忘")).toBeLessThan(
+      refs.indexOf("用户.最新输入"),
+    );
+  });
+
   it("skips opening and worker-set tags; narrator only gets style", () => {
     const board = new Blackboard();
     board.write({
@@ -118,7 +145,7 @@ describe("dictate play-bind", () => {
     });
     board.write({
       tag: "设计.故事推进",
-      content: "用户输入用法：大纲扩写。禁止扮演停笔。",
+      content: "用户输入用法：大纲扩写。禁止续写与自动写入。",
       source: "dictate",
       metadata: { [DICTATE_ORDER_META_KEY]: -22 },
     });
@@ -147,7 +174,7 @@ describe("dictate play-bind", () => {
     expect(narrRefs).not.toContain("用户.需求");
     expect(JSON.parse(result.workerSetJson).play_slots.narrator).toBe(true);
     expect(board.getContentByTag("设计.故事推进")).toBe(
-      "用户输入用法：大纲扩写。禁止扮演停笔。",
+      "用户输入用法：大纲扩写。禁止续写与自动写入。",
     );
   });
 

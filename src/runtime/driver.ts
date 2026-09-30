@@ -58,6 +58,17 @@ export type AgentDriver = {
 
 export const DEFAULT_DRIVER_MAX_ITERATIONS = 12;
 
+/** 工具循环用尽轮次仍未收口。 */
+export class DriverIterationLimitError extends Error {
+  readonly iterations: number;
+
+  constructor(maxIterations: number) {
+    super(`Driver exceeded ${maxIterations} iterations`);
+    this.name = "DriverIterationLimitError";
+    this.iterations = maxIterations;
+  }
+}
+
 function assistantMessageFromToolCalls(
   content: string | null,
   toolCalls: DriverToolCall[],
@@ -158,7 +169,7 @@ export function createLocalLlmDriver(llm: LlmProvider): AgentDriver {
         }
       }
 
-      throw new Error(`Driver exceeded ${maxIterations} iterations`);
+      throw new DriverIterationLimitError(maxIterations);
     },
   };
 }

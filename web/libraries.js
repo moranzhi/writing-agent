@@ -87,7 +87,7 @@ function setTab(tab, pushUrl = true) {
   panelTitleEl.textContent = isStyle ? "文风库" : "偏好库";
   panelSubtitleEl.textContent = isStyle
     ? "跨卡「怎么写」；对话 + 样本提取 → 叙事指南选用"
-    : "跨卡硬约束；对话提取 →「用户需求」节点选用";
+    : "跨卡硬约束；由绑定偏好库的能力按需选用";
   extractTitleEl.textContent = isStyle ? "用 LLM 提取文风" : "用 LLM 提取偏好";
   extractHelpEl.textContent = isStyle
     ? "描述想要的写法，或贴样本；助手整理成可入库草稿。点「入库」写入列表。"

@@ -5,6 +5,23 @@ import {
 } from "../web/json-doc.js";
 
 describe("tryParseJsonDoc", () => {
+  it("joins a fragment whose root object closed before later keys", () => {
+    const raw = `{
+"schema":"context-fragment-v1",
+"技能":"主角设定",
+"brief":"点题",
+"brief_ok":true,
+"mount":"world-simulator"
+},
+"稳变":"stable",
+"正文": { "称呼": "李宗" }
+}`;
+    const parsed = tryParseJsonDoc(raw);
+    expect(parsed?.schema).toBe("context-fragment-v1");
+    expect(parsed?.稳变).toBe("stable");
+    expect(parsed?.正文?.称呼).toBe("李宗");
+  });
+
   it("keeps interior Chinese quotes in an otherwise valid fragment", () => {
     const raw = JSON.stringify({
       schema: "context-fragment.v1",

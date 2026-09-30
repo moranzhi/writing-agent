@@ -73,7 +73,7 @@ describe("dictate context", () => {
     expect(isDictateModeValue("recipe")).toBe(false);
   });
 
-  it("system prompt requires insert toolcall and relative order", () => {
+  it("system prompt starts from a plan and keeps generic write tools", () => {
     const prompt = buildDictateSystemPrompt({
       recipeName: "数据化跑团体验",
       recipeBrief:
@@ -81,9 +81,8 @@ describe("dictate context", () => {
       moduleGuide:
         "【能力 · 何时落盘】\n- 美学纲领与交互范式：…\n  落盘：insert 「设计.美学纲领与交互范式」\n  何时用：还不能回答站位",
     });
-    expect(prompt).toContain("设计.正文组成");
-    expect(prompt).toContain("设计.开场白");
-    expect(prompt).toContain("输出.开场白");
+    expect(prompt).toContain("creation-plan.v1");
+    expect(prompt).toContain("设计.本局创作方案");
     expect(prompt).toContain("insert");
     expect(prompt).toContain("delete");
     expect(prompt).toContain("declare_variable");
@@ -93,29 +92,15 @@ describe("dictate context", () => {
     expect(prompt).toContain("同 position 再 insert");
     expect(prompt).toContain("数据化跑团体验");
     expect(prompt).toMatch(/order/);
-    expect(prompt).toContain("仅允许 toolcall");
-    expect(prompt).toContain("设计.模仿范例");
-    expect(prompt).toContain("设计.模仿要点");
-    expect(prompt).toContain("设计.故事推进");
-    expect(prompt).toContain("设计.叙事指南");
-    expect(prompt).toContain("大纲扩写");
-    expect(prompt).toContain("扮演停笔关掉");
-    expect(prompt).toContain("只挂载这些产物");
     expect(prompt).toContain("【能力 · 何时落盘】");
     expect(prompt).toContain("设计.美学纲领与交互范式");
-    expect(prompt).toContain("同轮可多次 insert");
-    expect(prompt).toContain("不抢跑未齐条件的下游");
-    expect(prompt).toContain("也不自动开跑 D");
-    expect(prompt).toContain("快穿短局");
-    expect(prompt).toContain("一核短局");
-    expect(prompt).toMatch(/舞台骨架/);
-    expect(prompt).toMatch(/覆盖 C/);
-    expect(prompt).toContain("设计.主角设定");
-    expect(prompt).toContain("reply_module");
-    expect(prompt).toContain("对用户可见回复");
-    expect(prompt).toContain("有 N 个 reply_module");
-    expect(prompt).toContain("〔可反复〕须拆分");
-    expect(prompt).toContain("设计.具体实例#");
+    expect(prompt).toContain("通常 2～3 个");
+    expect(prompt).toContain("给 2～3 个选项来问");
+    expect(prompt).toContain("不是 DAG");
+    expect(prompt).toContain("不是用户已选路径");
+    expect(prompt).toContain("自然回应");
+    expect(prompt).not.toContain("体验锚定（程序打分）");
+    expect(prompt).not.toContain("## 本轮落什么");
   });
 
   it("formats module catalog for dictate with land tags and when", async () => {
@@ -209,13 +194,12 @@ describe("dictate context", () => {
     });
     const brief = index.get("设计.美学纲领与交互范式");
     expect(brief).toBeTruthy();
-    expect(brief!).toContain("# 模块 · 美学纲领与交互范式");
-    expect(brief!).toContain("回答时请附带本模块");
+    expect(brief!).toContain("# 本轮关注 · 美学纲领与交互范式");
+    expect(brief!).toContain("不要求固定标题");
     expect(brief!).toContain("本模块内容包括");
     expect(brief!).toContain("## 写入用户回复时做什么");
-    expect(brief!).toContain("## 探测与追问（本模块口径）");
-    expect(brief!).toContain("展示优于提问");
-    expect(brief!).toMatch(/自评关注|交互范式|美学纲领/);
+    expect(brief!).toContain("同轮多个产物时合并回应");
+    expect(brief!).toMatch(/自评关注|核心体验|背景与规则/);
 
     const alias = index.get("设计.开场白");
     expect(alias).toContain("开场白与开场变量");
@@ -357,6 +341,145 @@ describe("dictate context", () => {
     expect(products.map((p) => p.tag)).toEqual(["设计.具体实例#lei-ying"]);
   });
 
+  it("splits a concrete-instance records array into one product per record", async () => {
+    const products: { tag: string; content: string }[] = [];
+    const body = JSON.stringify({
+      schema: "context-fragment.v1",
+      技能: "具体实例",
+      brief: "十位目标",
+      正文: {
+        rule_id: "目标女配",
+        batch_id: "target-npcs-roster",
+        本批数量: 3,
+        批次条件: ["待清算的恶女名录"],
+        records: [
+          { 姓名: "苏晚", 身份: "同学" },
+          { 姓名: "林乔", 身份: "上司" },
+          { 姓名: "苏晚", 身份: "同名另一人" },
+        ],
+      },
+    });
+    const driver: AgentDriver = {
+      async run(input) {
+        const outcome = await input.handleStep([
+          {
+            id: "c1",
+            name: "insert",
+            arguments: JSON.stringify({
+              position: "设计.具体实例#target-npcs-roster",
+              content: body,
+            }),
+          },
+        ]);
+        expect(outcome.kind).toBe("continue");
+        if (outcome.kind === "continue") {
+          const payload = JSON.parse(outcome.results[0]!.content) as {
+            ok?: boolean;
+            split?: number;
+            positions?: string[];
+          };
+          expect(payload.ok).toBe(true);
+          expect(payload.split).toBe(3);
+          expect(payload.positions).toEqual([
+            "设计.具体实例#苏晚",
+            "设计.具体实例#林乔",
+            "设计.具体实例#苏晚-2",
+          ]);
+        }
+        return { iterations: 1, stop: { kind: "text", content: "已拆开" } };
+      },
+    };
+    const result = await runDictateTurn({
+      llm: {} as never,
+      dialogue: [{ role: "user", text: "把这三位分开落盘" }],
+      driver,
+      repeatableFamilies: ["设计.具体实例"],
+      handlers: {
+        listProducts: () => products,
+        writeProduct: (tag, content) => {
+          products.push({ tag, content });
+        },
+        deleteProduct: () => false,
+        readTag: () => undefined,
+        writeTag: () => undefined,
+        deleteTag: () => false,
+        clearDialogue: () => undefined,
+      },
+    });
+    expect(result.wroteTags).toEqual([
+      "设计.具体实例#苏晚",
+      "设计.具体实例#林乔",
+      "设计.具体实例#苏晚-2",
+    ]);
+    const first = JSON.parse(products[0]!.content) as {
+      brief: string;
+      正文: { 规则?: string; 名称?: string; 记录?: { 姓名?: string }; batch_id?: string };
+    };
+    expect(first.brief).toBe("苏晚");
+    expect(first.正文.规则).toBe("目标女配");
+    expect(first.正文.名称).toBe("苏晚");
+    expect(first.正文.记录?.姓名).toBe("苏晚");
+    expect(first.正文.batch_id).toBeUndefined();
+  });
+
+  it("prepares runtime tools before persisting an opening", async () => {
+    const events: string[] = [];
+    const driver: AgentDriver = {
+      async run(input) {
+        const prepared = await input.handleStep([
+          {
+            id: "prepare",
+            name: "prepare_opening",
+            arguments: "{}",
+          },
+        ]);
+        expect(prepared.kind).toBe("continue");
+        const outcome = await input.handleStep([
+          {
+            id: "opening",
+            name: "insert",
+            arguments: JSON.stringify({
+              position: "设计.开场白",
+              content: "@玩家推开门。",
+            }),
+          },
+        ]);
+        expect(outcome.kind).toBe("continue");
+        if (outcome.kind === "continue") {
+          const payload = JSON.parse(outcome.results[0]!.content) as {
+            runtime_prepared_before_opening?: boolean;
+            preparation_mode?: string;
+          };
+          expect(payload.runtime_prepared_before_opening).toBe(true);
+          expect(payload.preparation_mode).toBe("prepare_opening");
+        }
+        return {
+          text: "开场已写入",
+          iterations: 1,
+          stop: { kind: "text", content: "开场已写入" },
+        };
+      },
+    };
+
+    await runDictateTurn({
+      llm: {} as never,
+      dialogue: [{ role: "user", text: "生成开场" }],
+      driver,
+      handlers: {
+        listProducts: () => [],
+        prepareOpening: () => events.push("prepare"),
+        writeProduct: () => events.push("write"),
+        deleteProduct: () => false,
+        readTag: () => undefined,
+        writeTag: () => undefined,
+        deleteTag: () => false,
+        clearDialogue: () => undefined,
+      },
+    });
+
+    expect(events).toEqual(["prepare", "write"]);
+  });
+
   it("insert tool result includes reply_module from lookup", async () => {
     let capturedSpec: string | undefined;
     const driver: AgentDriver = {
@@ -378,7 +501,7 @@ describe("dictate context", () => {
             reply_module?: string;
           };
           expect(payload.ok).toBe(true);
-          expect(payload.reply_module).toContain("回答时请附带本模块");
+          expect(payload.reply_module).toContain("自然回复");
           capturedSpec = payload.reply_module;
         }
         return {
@@ -601,7 +724,7 @@ describe("dictate context", () => {
           };
           expect(a.reply_module).toContain("美学纲领");
           expect(b.reply_module).toContain("主角设定");
-          expect(a.reply_hint).toMatch(/多个 reply_module|本步已带回模块/);
+          expect(a.reply_hint).toMatch(/多个产物|本步已带回模块/);
           expect(b.reply_hint).toContain("本步已带回模块");
         }
         return {

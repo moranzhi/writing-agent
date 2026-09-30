@@ -515,6 +515,7 @@ export async function loadWorkerSkillWithContext(
   if (workerId.trim() === "design-step" && skill.skillPackRoot) {
     const {
       resolveDesignStepBinding,
+      repeatableInstanceProductTag,
       CREATION_CURRENT_STEP_TAG,
       CREATION_MODULE_OPENING_TAG,
       formatPriorArtifactContext,
@@ -550,18 +551,20 @@ export async function loadWorkerSkillWithContext(
         const { formatPlayAgentRosterForPrompt } = await import("./play-slots.js");
         rosterBlock = `${formatPlayAgentRosterForPrompt()}\n\n`;
       }
-      if (binding.module.id === "reply-format") {
-        const {
-          loadPresentShellCatalog,
-          formatPresentShellsForPrompt,
-        } = await import("./present-shell-catalog.js");
-        const shells = await loadPresentShellCatalog(
+      if (
+        binding.module.id === "reply-format" ||
+        binding.module.id === "zero-layer-reply-format"
+      ) {
+        const { loadShellRefCatalog, formatShellRefsForPrompt } = await import(
+          "./shell-ref-catalog.js"
+        );
+        const shells = await loadShellRefCatalog(
           skill.skillPackRoot,
           skillsRoot,
         );
         const parts: string[] = [];
         if (shells.length) {
-          parts.push(formatPresentShellsForPrompt(shells));
+          parts.push(formatShellRefsForPrompt(shells));
         }
         const {
           loadMarkdownSafeSubsetCatalog,
@@ -605,7 +608,12 @@ export async function loadWorkerSkillWithContext(
         ...(inheritTag ? [inheritTag] : []),
       ];
       const inputTags = [...new Set(baseInputs)];
-      const outputTags = [binding.module.artifact];
+      const outputTags = [
+        repeatableInstanceProductTag({
+          module: binding.module,
+          step: binding.step,
+        }) ?? binding.module.artifact,
+      ];
       const depSegments = depTags.map((tag, i) => ({
         id: `dep-${i}`,
         tier: "static" as const,
