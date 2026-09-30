@@ -13,6 +13,13 @@
       })();
     </script>
     <title>技能池 · Writing Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="/theme-init.js"></script>
     <link rel="stylesheet" href="/settings.css" />
     <link rel="stylesheet" href="/modules.css" />
   </head>
@@ -49,7 +56,7 @@
         </div>
         <nav class="mod-list" id="mod-list"></nav>
         <p class="st-rail-note">
-          编排器编排工作流计划时从这里选型；本页只读浏览方法正文。
+          创作助手根据本局设计清单从这里取用能力；本页只读浏览方法正文。
         </p>
       </aside>
 
@@ -64,11 +71,13 @@
           </div>
         </header>
 
-        <div class="st-status" id="meta-bar" hidden></div>
         <p class="mod-error" id="mod-error" hidden></p>
 
-        <div class="st-body mod-body" id="mod-detail">
-          <p class="mod-empty">从左侧选择一项技能</p>
+        <div class="mod-read">
+          <div class="st-status" id="meta-bar" hidden></div>
+          <div class="st-body mod-body" id="mod-detail">
+            <p class="mod-empty">从左侧选择一项技能</p>
+          </div>
         </div>
       </main>
     </div>

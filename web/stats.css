@@ -2,12 +2,19 @@
 
 .stats-shell {
   grid-template-columns: minmax(0, 1fr);
-  max-width: 1120px;
+  max-width: none;
+  width: 100%;
 }
 
 .stats-main {
-  padding: 0 0 40px;
+  padding: 0;
   min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.stats-main > * {
+  flex-shrink: 0;
 }
 
 .stats-main .st-main-head {
@@ -77,7 +84,7 @@
   display: inline-flex;
   padding: 2px;
   border-radius: 7px;
-  background: #f4f4f5;
+  background: color-mix(in srgb, var(--st-surface) 62%, var(--st-bg));
   border: 1px solid var(--st-border);
 }
 
@@ -157,14 +164,14 @@
   padding: 0 10px;
   border: 1px solid var(--st-border);
   border-radius: 6px;
-  background: #fafafa;
+  background: color-mix(in srgb, var(--st-surface) 72%, var(--st-bg));
   color: var(--st-text);
   font-size: 12px;
   cursor: pointer;
 }
 
 .stats-suggest:hover {
-  background: #f4f4f5;
+  background: var(--st-accent-soft);
   border-color: var(--st-border-strong);
 }
 
@@ -340,13 +347,11 @@
   background: var(--st-surface);
   border: 1px solid var(--st-border);
   border-radius: var(--st-radius);
-  overflow: auto;
-  max-height: min(70vh, 720px);
-  margin: 0 24px;
+  overflow-x: auto;
+  margin: 0 24px 24px;
 }
 
 .stats-table-wrap-model {
-  max-height: none;
   margin-bottom: 18px;
 }
 
@@ -368,7 +373,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #fafafa;
+  background: color-mix(in srgb, var(--st-surface) 82%, var(--st-bg));
   border-bottom: 1px solid var(--st-border);
   padding: 8px 12px;
   text-align: left;
@@ -392,7 +397,7 @@
 }
 
 .stats-table tbody tr:hover td {
-  background: #fafafa;
+  background: color-mix(in srgb, var(--st-surface) 58%, var(--st-bg));
 }
 
 .stats-table .num {
