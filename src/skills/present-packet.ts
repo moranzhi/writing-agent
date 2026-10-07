@@ -40,9 +40,11 @@ export type ShellAdaptation = {
   tweaks: PresentShellTweaks;
 };
 
-export type PresentBlocks = Partial<
-  Record<PresentRegionId, string | Record<string, unknown> | unknown[]>
->;
+export type PresentBlockValue = string | Record<string, unknown> | unknown[];
+
+/** 已知壳区域以外的键来自本局正文组成数据契约，必须原样保留。 */
+export type PresentBlocks = Partial<Record<PresentRegionId, PresentBlockValue>> &
+  Record<string, PresentBlockValue | undefined>;
 
 export type PresentPacket = {
   schema: typeof PRESENT_SCHEMA;
@@ -112,25 +114,29 @@ export function normalizePresentShellId(
   return fallback;
 }
 
+function asPresentBlockValue(value: unknown): PresentBlockValue | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return value as Record<string, unknown>;
+  return undefined;
+}
+
 function normalizeBlocks(raw: unknown): PresentBlocks {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const row = raw as Record<string, unknown>;
   const out: PresentBlocks = {};
-  const keys: PresentRegionId[] = [
-    "monitor",
-    "header",
-    "body",
-    "footer",
-    "aside",
-    "hidden",
-  ];
-  for (const k of keys) {
-    if (row[k] !== undefined) out[k] = row[k] as PresentBlocks[typeof k];
+  for (const [key, value] of Object.entries(row)) {
+    if (key === "正文" || key === "监控") continue;
+    const block = asPresentBlockValue(value);
+    if (block !== undefined) out[key] = block;
   }
-  // 兼容中文键
-  if (out.body === undefined && row.正文 !== undefined) out.body = row.正文 as string;
+  if (out.body === undefined && row.正文 !== undefined) {
+    const body = asPresentBlockValue(row.正文);
+    if (body !== undefined) out.body = body;
+  }
   if (out.monitor === undefined && row.监控 !== undefined) {
-    out.monitor = row.监控 as PresentBlocks["monitor"];
+    const monitor = asPresentBlockValue(row.监控);
+    if (monitor !== undefined) out.monitor = monitor;
   }
   if (typeof out.body === "string") {
     out.body = stripPresentSourceFences(out.body);

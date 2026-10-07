@@ -13,7 +13,7 @@ import {
   sanitizeReasoningEffort,
   sanitizeVerbosity,
 } from "../src/llm/generation-compat.js";
-import { buildRequestBody } from "../src/llm/client.js";
+import { buildRequestBody, extractMessageParts, openRouterSessionId } from "../src/llm/client.js";
 import type { LlmConfig } from "../src/config/env.js";
 
 const stGeneration = {
@@ -410,6 +410,24 @@ describe("fetchWithGenerationCompat", () => {
   });
 });
 
+describe("extractMessageParts", () => {
+  it("keeps reply_user when arguments are an object and id is missing", () => {
+    const parts = extractMessageParts({
+      content: [{ type: "text", text: "同一次请求里的说明" }],
+      tool_calls: [
+        {
+          type: "function",
+          function: { name: "reply_user", arguments: { text: "形成了气氛" } },
+        },
+      ],
+    });
+    expect(parts.toolCalls).toEqual([
+      { id: "call-0", name: "reply_user", arguments: JSON.stringify({ text: "形成了气氛" }) },
+    ]);
+    expect(parts.content).toBe("同一次请求里的说明");
+  });
+});
+
 describe("buildRequestBody", () => {
   const messages = [{ role: "user" as const, content: "hi" }];
 
@@ -595,6 +613,24 @@ describe("buildRequestBody", () => {
       responseFormat: "json_object",
     });
     expect(body.messages).toBe(messages);
+  });
+
+  it("writes session_id only for OpenRouter", () => {
+    const openrouter: LlmConfig = {
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "k",
+      model: "google/gemini-3.8-flash",
+    };
+    const direct: LlmConfig = {
+      baseUrl: "https://api.deepseek.com/v1",
+      apiKey: "k",
+      model: "deepseek-v4-pro",
+    };
+    const id = "9b76dcb6-0703-4b0d-ba75-faa985b532b4";
+    expect(buildRequestBody(openrouter, messages, { sessionId: id }).session_id).toBe(id);
+    expect(buildRequestBody(direct, messages, { sessionId: id }).session_id).toBeUndefined();
+    expect(buildRequestBody(openrouter, messages, {}).session_id).toBeUndefined();
+    expect(openRouterSessionId(openrouter.baseUrl, `  ${"a".repeat(300)}  `)).toHaveLength(256);
   });
 
   it("does not forward top_k from an imported ST preset", () => {

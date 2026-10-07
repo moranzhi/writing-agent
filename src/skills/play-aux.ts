@@ -45,7 +45,10 @@ export type PlayAuxOpening = {
   /** 产物 tag：设计.开场白 或 设计.开场白#槽位；opening-setup 候选为假想 tag */
   tag: string;
   slot: string;
+  /** 侧栏预览用：present.v1 已压成可读正文 */
   text: string;
+  /** 选用时落盘 / 灌呈现壳：保留完整 present.v1 或散文原文 */
+  document: string;
   persona: OpeningUserPersona | null;
 };
 
@@ -67,34 +70,15 @@ function selectedOpeningIndex(slots: Record<string, unknown> | undefined): numbe
   return 0;
 }
 
-/** 黑板上全部可选用开场（工序候选优先；否则对话落盘 设计.开场白[#槽]） */
-export function collectOpenings(board: Blackboard): PlayAuxOpening[] {
-  const payload = parseOpeningSealPayload(
-    board.getContentByTag(OPENING_SETUP_ARTIFACT_TAG),
-    0,
-  );
-  if (payload?.candidates.length) {
-    return payload.candidates.map((text, index) => {
-      const one = parseOpeningSealPayload(
-        board.getContentByTag(OPENING_SETUP_ARTIFACT_TAG),
-        index,
-      );
-      const tag = `${OPENING_SETUP_ARTIFACT_TAG}#${index + 1}`;
-      return {
-        index,
-        tag,
-        slot: String(index + 1),
-        text: presentReadablePlain(text) || text,
-        persona: one?.persona ?? payload.persona,
-      };
-    });
-  }
+type OpeningProductRow = {
+  tag: string;
+  content: string;
+  order: number;
+  slot: string;
+};
 
-  const rows: Array<{
-    tag: string;
-    content: string;
-    order: number;
-  }> = [];
+function listOpeningProductRows(board: Blackboard): OpeningProductRow[] {
+  const rows: OpeningProductRow[] = [];
   for (const e of board.listTagIndex()) {
     const family = dictateProductFamily(e.tag);
     if (
@@ -111,24 +95,72 @@ export function collectOpenings(board: Blackboard): PlayAuxOpening[] {
       typeof rawOrder === "number" && Number.isFinite(rawOrder)
         ? rawOrder
         : effectiveDictateOrder({ tag: e.tag });
-    rows.push({ tag: e.tag, content, order });
+    rows.push({
+      tag: e.tag,
+      content,
+      order,
+      slot: dictateProductSlot(e.tag),
+    });
   }
   rows.sort((a, b) => {
     if (a.order !== b.order) return a.order - b.order;
     return a.tag.localeCompare(b.tag, "zh");
   });
+  return rows;
+}
 
+function openingsFromRows(
+  board: Blackboard,
+  rows: OpeningProductRow[],
+): PlayAuxOpening[] {
   return rows.map((row, index) => {
     const split = splitOpeningDocument(row.content);
-    const text = split.text.trim() || row.content;
+    const document = split.text.trim() || row.content;
     return {
       index,
       tag: row.tag,
-      slot: dictateProductSlot(row.tag),
-      text: presentReadablePlain(text) || text,
+      slot: row.slot,
+      document,
+      text: presentReadablePlain(document) || document,
       persona: personaBoundToOpening(board, row.tag, row.content),
     };
   });
+}
+
+/**
+ * 可切换开场。已有 `设计.开场白#场景短码` 时只认这些带槽位的卡，
+ * 裸 `设计.开场白` 与整包 `设计.开场白与开场变量` 不进切换列表。
+ * 还没有槽位卡时，才回退旧整包候选或裸基名。
+ */
+export function collectOpenings(board: Blackboard): PlayAuxOpening[] {
+  const rows = listOpeningProductRows(board);
+  const slotted = rows.filter((row) => row.slot);
+  if (slotted.length) return openingsFromRows(board, slotted);
+
+  const payload = parseOpeningSealPayload(
+    board.getContentByTag(OPENING_SETUP_ARTIFACT_TAG),
+    0,
+  );
+  if (payload?.candidates.length) {
+    return payload.candidates.map((text, index) => {
+      const one = parseOpeningSealPayload(
+        board.getContentByTag(OPENING_SETUP_ARTIFACT_TAG),
+        index,
+      );
+      const tag = `${OPENING_SETUP_ARTIFACT_TAG}#${index + 1}`;
+      const document = text.trim();
+      return {
+        index,
+        tag,
+        slot: String(index + 1),
+        document,
+        text: presentReadablePlain(document) || document,
+        persona: one?.persona ?? payload.persona,
+      };
+    });
+  }
+
+  return openingsFromRows(board, rows);
 }
 
 export function buildPlayAuxView(

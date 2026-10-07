@@ -21,6 +21,12 @@ import {
 } from "../parse/json-doc.js";
 import { assembleWorkerContext } from "../skills/context-segments.js";
 import { isPlayLayerActive } from "../skills/play-turn.js";
+import { isNarratorEnabled } from "../skills/play-slots.js";
+import {
+  contractOutputInstruction,
+  parseReplyDataContract,
+  presentSchemaFromContract,
+} from "../skills/reply-contract.js";
 import {
   PRESENT_TAG,
   PRESENT_JSON_SCHEMA,
@@ -829,21 +835,33 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
     isPlayLayerActive(params.slots) && isPlayGmBodyWorker(worker.id);
   const playPresent =
     isPlayLayerActive(params.slots) && isPlayPresentWorker(worker.id);
+  const replyFormatRaw =
+    params.blackboard.getContentByTag("设计.正文组成") ??
+    params.blackboard.getContentByTag("设计.0层正文组成") ??
+    params.blackboard.getContentByTag("设计.回复格式");
+  const replyContract = parseReplyDataContract(replyFormatRaw);
+  const narratorOn = isNarratorEnabled(playSlots);
+  const fillByContract =
+    Boolean(replyContract?.frontend && replyContract.modelBlocks.length) &&
+    (playPresent || (playGmBody && !narratorOn));
+  const contractSchema =
+    fillByContract && replyContract
+      ? presentSchemaFromContract(replyContract)
+      : undefined;
   const playShell: PresentShellId | undefined =
     playPresent || playGmBody
-      ? parseShellAdaptationFromReplyFormat(
-          params.blackboard.getContentByTag("设计.正文组成") ??
-            params.blackboard.getContentByTag("设计.回复格式"),
-        )?.shell_id ?? "prose"
+      ? parseShellAdaptationFromReplyFormat(replyFormatRaw)?.shell_id ?? "prose"
       : undefined;
 
   const systemContent =
     promptBody +
-    (playGmBody
-      ? playGmBodyOutputInstruction()
-      : playPresent && playShell
-        ? playPresentOutputInstruction(playShell)
-        : WORKER_OUTPUT_INSTRUCTION) +
+    (contractSchema && replyContract && !useGmHarness
+      ? contractOutputInstruction(replyContract)
+      : playGmBody
+        ? playGmBodyOutputInstruction()
+        : playPresent && playShell
+          ? playPresentOutputInstruction(playShell)
+          : WORKER_OUTPUT_INSTRUCTION) +
     (useGmHarness ? GM_CHANCE_HARNESS_INSTRUCTION : "");
 
   // 任务 messages 即可；preset 夹心由 wrapLlmForSession / PresetLlmProvider 统一装配
@@ -888,7 +906,7 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
       }
     : undefined;
 
-  if (playGmBody) {
+  if (playGmBody && !contractSchema) {
     const completeOpts = {
       caller: `worker:${worker.id}`,
       label: worker.name?.trim() || worker.id,
@@ -905,12 +923,19 @@ export async function runWorkerSkill(params: WorkerRunParams): Promise<WorkerRun
   }
 
   const result = await completeStructured(params.llm, messages, {
-    schema: playPresent ? PRESENT_JSON_SCHEMA : {
-      type: "object",
-      additionalProperties: true,
-    },
-    name: playPresent ? "submit_present_packet" : "submit_worker_result",
-    schemaIsLoose: !playPresent,
+    schema: contractSchema
+      ? contractSchema.schema
+      : playPresent
+        ? PRESENT_JSON_SCHEMA
+        : {
+            type: "object",
+            additionalProperties: true,
+          },
+    name:
+      contractSchema || playPresent
+        ? "submit_present_packet"
+        : "submit_worker_result",
+    schemaIsLoose: contractSchema ? contractSchema.loose : !playPresent,
     capabilities: resolveActiveProfile()?.capabilities,
     caller: `worker:${worker.id}`,
     label: worker.name?.trim() || worker.id,

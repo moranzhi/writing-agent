@@ -101,8 +101,10 @@ export function stripPresentSourceFences(raw) {
 function normalizeBlocks(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const out = {};
-  for (const k of ["monitor", "header", "body", "footer", "aside", "hidden"]) {
-    if (raw[k] !== undefined) out[k] = raw[k];
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === "正文" || key === "监控") continue;
+    if (value == null) continue;
+    out[key] = value;
   }
   if (out.body === undefined && raw.正文 !== undefined) out.body = raw.正文;
   if (out.monitor === undefined && raw.监控 !== undefined) out.monitor = raw.监控;

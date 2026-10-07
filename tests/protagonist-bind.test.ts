@@ -203,6 +203,39 @@ describe("protagonist overlay", () => {
     expect(protagonistTagForOpeningSlot("设计.开场白")).toBe(PROTAGONIST_TAG);
   });
 
+  it("binds present.v1 meta.用户角色 to the slotted card and follows opening rewrites", async () => {
+    const {
+      ensureProtagonistFromPersona,
+      personaBoundToOpening,
+      protagonistTagForOpeningSlot,
+    } = await import("../src/persona/protagonist-bind.js");
+    const { splitOpeningDocument } = await import("../src/skills/opening-seal.js");
+
+    const openingTag = "设计.开场白#debt-hall";
+    const card = (简介: string) =>
+      JSON.stringify({
+        schema: "present.v1",
+        blocks: { body: "清晨，@玩家推开堂屋门。" },
+        meta: { 用户角色: { 名字: "沈聿", 简介 } },
+      });
+
+    const board = new Blackboard();
+    const personaTag = protagonistTagForOpeningSlot(openingTag);
+    for (const 简介 of ["本地放贷人。", "持有这家债契的放贷人。"]) {
+      const content = card(简介);
+      const split = splitOpeningDocument(content);
+      expect(split.persona?.name).toBe("沈聿");
+      expect(split.text).toBe(content);
+      ensureProtagonistFromPersona(board, split.persona, personaTag, {
+        overwrite: true,
+      });
+      board.write({ tag: openingTag, content, source: "agent" });
+      expect(personaBoundToOpening(board, openingTag, content)?.description).toContain(
+        简介,
+      );
+    }
+  });
+
   it("overlays opening meta 用户角色 when the user switches to that preset", async () => {
     const { readSessionProtagonist, overlayPlayPersona } = await import(
       "../src/persona/protagonist-bind.js"

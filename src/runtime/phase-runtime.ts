@@ -141,6 +141,10 @@ import {
 } from "../dictate/types.js";
 import { applyDictatePlayBind } from "../dictate/play-bind.js";
 import {
+  applyMaintenanceStrategyToPlaySlots,
+  resolveMaintenanceStrategyFromBoard,
+} from "../skills/maintenance-strategy.js";
+import {
   dictateProductFamily,
   mergeGenerationRulesArtifacts,
 } from "../dictate/repeatable-tags.js";
@@ -148,6 +152,11 @@ import {
   VARIABLE_CATALOG_TAG,
   seedVariablesFromCatalog,
 } from "../skills/variable-catalog.js";
+import {
+  VARIABLE_DESIGN_TAG,
+  syncVariableDesignToRuntime,
+  writeVariableDesignSync,
+} from "../skills/variable-design-compile.js";
 import {
   VALUE_MAP_TAG,
   reprojectValueMaps,
@@ -164,6 +173,11 @@ import {
   parseShellAdaptationFromReplyFormat,
   presentOutputFromFallback,
 } from "../skills/present-packet.js";
+import { parseReplyDataContract } from "../skills/reply-contract.js";
+import {
+  mergePresentWithProjections,
+  projectPresentBlocks,
+} from "../skills/present-project.js";
 import { debugLog, labelAction, logStateChange, sessionSnap } from "../log.js";
 import {
   executeChance,
@@ -2049,21 +2063,45 @@ export class PhaseRuntime {
     // 偏好/文风改由节点产物（设计.用户需求 / 设计.叙事指南*）挂载，不再全量自动摊库
     if (this.isDictateIntakeMode()) {
       const bound = applyDictatePlayBind(this.blackboard);
-      if (bound.boundTags.length) {
+      if (!bound.skipped && bound.boundTags.length) {
         this.onMessage(
           `[对话落盘] 已自动挂载 ${bound.boundTags.length} 个产物到游玩上下文：${bound.boundTags.join("、")}`,
         );
-      } else {
+      } else if (!bound.skipped) {
         this.onMessage("[对话落盘] 已生成默认游玩规格（尚无产物可挂载）");
+      }
+      const strategyRaw = this.blackboard.getContentByTag("设计.维护策略")?.trim();
+      if (strategyRaw) {
+        try {
+          const s = JSON.parse(strategyRaw) as {
+            advice?: string;
+            auditor?: boolean;
+            inline?: boolean;
+          };
+          if (s.auditor) {
+            this.onMessage(
+              `[维护策略] 旁观副 LLM 填表（play_slots.auditor=true）`,
+            );
+          } else if (s.advice && s.advice !== "none") {
+            this.onMessage(`[维护策略] ${s.advice} → 旁观未开`);
+          }
+        } catch {
+          /* ignore */
+        }
       }
       this.seedVariablesAndReproject("opening-setup");
     } else {
       const finalTag = this.blackboard.getContentByTag(WORKER_SET_FINAL_TAG)?.trim();
       const draft = this.blackboard.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim();
       if (!finalTag) {
+        const strategy = resolveMaintenanceStrategyFromBoard(this.blackboard);
+        const play_slots = applyMaintenanceStrategyToPlaySlots(
+          defaultPlaySlots(),
+          strategy,
+        );
         const spec = draft?.trim()
           ? draft
-          : JSON.stringify({ play_slots: defaultPlaySlots() });
+          : JSON.stringify({ play_slots }, null, 2);
         this.writeWorkerTagContent(WORKER_SET_FINAL_TAG, spec, "opening-setup");
       }
     }
@@ -2077,34 +2115,82 @@ export class PhaseRuntime {
     };
   }
 
-  /** 目录初值 → 变量.当前；再按 设计.变量映射 重写投影 tag */
+  /** 变量设计 → 目录 → 变量.当前；再按 设计.变量映射 重写投影 tag */
   private seedVariablesAndReproject(actor: string): void {
-    const seeded = seedVariablesFromCatalog({
+    const designSync = syncVariableDesignToRuntime({
+      designRaw: this.blackboard.getContentByTag(VARIABLE_DESIGN_TAG),
       catalogRaw: this.blackboard.getContentByTag(VARIABLE_CATALOG_TAG),
       currentRaw: this.blackboard.getContentByTag(OPENING_CURRENT_VARS_TAG),
       initialRaw: this.blackboard.getContentByTag(OPENING_INITIAL_VARS_TAG),
-      actor: `system:${actor}`,
     });
-    if (seeded.initial) {
-      this.blackboard.write({
-        tag: OPENING_INITIAL_VARS_TAG,
-        content: seeded.initial,
-        source: actor,
+    if (designSync.catalog || designSync.current || designSync.initial) {
+      writeVariableDesignSync(designSync, (tag, content) => {
+        this.blackboard.write({ tag, content, source: actor });
       });
-    }
-    if (seeded.current) {
-      this.blackboard.write({
-        tag: OPENING_CURRENT_VARS_TAG,
-        content: seeded.current,
-        source: actor,
-      });
-      if (seeded.seededKeys.length) {
+      if (designSync.added.length) {
         this.onMessage(
-          `[变量] 已种初值：${seeded.seededKeys.join("、")}`,
+          `[变量] 已从变量设计同步目录：${designSync.added.join("、")}`,
         );
+      }
+      if (designSync.current && designSync.seededKeys.length) {
+        this.onMessage(
+          `[变量] 已种初值：${designSync.seededKeys.join("、")}`,
+        );
+      }
+    } else {
+      const seeded = seedVariablesFromCatalog({
+        catalogRaw: this.blackboard.getContentByTag(VARIABLE_CATALOG_TAG),
+        currentRaw: this.blackboard.getContentByTag(OPENING_CURRENT_VARS_TAG),
+        initialRaw: this.blackboard.getContentByTag(OPENING_INITIAL_VARS_TAG),
+        actor: `system:${actor}`,
+      });
+      if (seeded.initial) {
+        this.blackboard.write({
+          tag: OPENING_INITIAL_VARS_TAG,
+          content: seeded.initial,
+          source: actor,
+        });
+      }
+      if (seeded.current) {
+        this.blackboard.write({
+          tag: OPENING_CURRENT_VARS_TAG,
+          content: seeded.current,
+          source: actor,
+        });
+        if (seeded.seededKeys.length) {
+          this.onMessage(
+            `[变量] 已种初值：${seeded.seededKeys.join("、")}`,
+          );
+        }
       }
     }
     this.applyValueMapProjections(actor);
+  }
+
+  /** 把 program_projection 块从黑板灌进 present 正文 */
+  private enrichPresentWithProjections(content: string): string {
+    const trimmed = content.trim();
+    // 纯 Markdown 终稿保持原文；投影由视图 presentationProjection 灌进壳
+    if (!trimmed.startsWith("{")) return content;
+    const replyFormatRaw =
+      this.blackboard.getContentByTag("设计.正文组成") ??
+      this.blackboard.getContentByTag("设计.0层正文组成") ??
+      this.blackboard.getContentByTag("设计.回复格式");
+    const contract = parseReplyDataContract(replyFormatRaw);
+    if (!contract?.programBlocks.length) return content;
+    const projections = projectPresentBlocks({
+      contract,
+      statusBarRaw:
+        this.blackboard.getContentByTag("设计.监控栏") ??
+        this.blackboard.getContentByTag("设计.回复呈现"),
+      currentVarsRaw: this.blackboard.getContentByTag(OPENING_CURRENT_VARS_TAG),
+      topologyRaw: this.blackboard.getContentByTag("运行.拓扑"),
+      readTag: (tag) => this.blackboard.getContentByTag(tag),
+    });
+    if (!Object.keys(projections).length) return content;
+    const shell =
+      parseShellAdaptationFromReplyFormat(replyFormatRaw)?.shell_id ?? "prose";
+    return mergePresentWithProjections(content, projections, shell);
   }
 
   /** 按当前真值持续投影映射 tag（非 once） */
@@ -2589,10 +2675,13 @@ export class PhaseRuntime {
   ): string {
     const tableTags = new Set(["运行.初始变量", "变量.当前"]);
     let toWrite = content;
+    if (tag === "输出.用户展示" || tag === "输出.开场白") {
+      toWrite = this.enrichPresentWithProjections(toWrite);
+    }
     let prevDoc: TableDoc | null = null;
     let nextDoc: TableDoc | null = null;
     if (tableTags.has(tag)) {
-      const patch = parseTableDoc(content);
+      const patch = parseTableDoc(toWrite);
       if (patch) {
         prevDoc = parseTableDoc(this.blackboard.getContentByTag(tag));
         const { doc, skipped } = mergeTableCells({

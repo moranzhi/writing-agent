@@ -107,7 +107,7 @@ export const DESIGN_STAGE_SKILL_META: Record<
   "opening-generator": {
     label: "开局 · 开场白",
     purpose:
-      "创作末尾：优先落库设计.开场白与开场变量；否则现写开场；初值与开场同真相。",
+      "创作末尾：每条开场落库设计.开场白#场景短码；没有变量的卡不写初值。",
   },
 };
 

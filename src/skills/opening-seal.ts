@@ -347,13 +347,18 @@ export function parseOpeningUserPersona(
   if (!text) return null;
   try {
     const doc = JSON.parse(text) as unknown;
+    const row =
+      doc && typeof doc === "object" && !Array.isArray(doc)
+        ? (doc as Record<string, unknown>)
+        : undefined;
+    const meta =
+      row?.meta && typeof row.meta === "object" && !Array.isArray(row.meta)
+        ? (row.meta as Record<string, unknown>)
+        : undefined;
     const fromJson =
       parseUserPersonaField(doc) ||
-      parseUserPersonaField(
-        doc && typeof doc === "object" && !Array.isArray(doc)
-          ? (doc as Record<string, unknown>).用户角色
-          : undefined,
-      );
+      parseUserPersonaField(row?.用户角色) ||
+      parseUserPersonaField(meta?.用户角色);
     if (fromJson) return fromJson;
   } catch {
     /* not json */

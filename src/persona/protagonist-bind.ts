@@ -75,18 +75,24 @@ export function protagonistFragmentFromPersona(
   );
 }
 
-/** 黑板上尚无该 tag 的主角设定时写入（可指定开场同槽 tag）。 */
+/**
+ * 黑板上尚无该 tag 的主角设定时写入（可指定开场同槽 tag）。
+ * overwrite：开场自带的同槽名片随开场改稿同步。
+ */
 export function ensureProtagonistFromPersona(
   board: Blackboard,
   persona: OpeningUserPersona | null | undefined,
   tag: string = PROTAGONIST_TAG,
+  opts: { overwrite?: boolean } = {},
 ): boolean {
   if (!persona?.name?.trim()) return false;
   const writeTag = tag.trim() || PROTAGONIST_TAG;
-  if (board.getContentByTag(writeTag)?.trim()) return false;
+  const existing = board.getContentByTag(writeTag)?.trim();
+  const content = protagonistFragmentFromPersona(persona);
+  if (existing && (!opts.overwrite || existing === content.trim())) return false;
   board.write({
     tag: writeTag,
-    content: protagonistFragmentFromPersona(persona),
+    content,
     source: "runtime",
   });
   return true;
