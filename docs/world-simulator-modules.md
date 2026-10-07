@@ -5,7 +5,7 @@
 > **标准范例**：`modules/aesthetics-interaction/prompt.md`。  
 > **真值 / Data / Progressive（变量与门控）**：**`docs/progressive-data-design.md`**。  
 > **上下文片段 / 槽位 / 投影排序**：**`docs/context-fragment-design.md`**。  
-> **游玩呈现壳**：**`docs/play-presentation-shells.md`**（预览页 `/shells.html`）。  
+> **游玩呈现壳**：**`docs/play-presentation-shells.md`**。  
 > **主世界层↔旁观怎么配合**：**`docs/play-dm-auditor.md`**。  
 > **提示词待改清单**：**`docs/briefs/prompt-revision-inventory.md`**。  
 > **design-flow 提示词人工审查**：**`docs/briefs/design-flow-prompt-review.md`**。  

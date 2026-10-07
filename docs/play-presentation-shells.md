@@ -5,8 +5,7 @@
 > 创作挂钩：`设计.正文组成`（怎么展示）/ `设计.监控栏`（每轮看什么，技能名「回复呈现」）；终稿 tag 通常 `输出.用户展示`。  
 > 各壳介绍与规格：`skills/dialogue/world-simulator/present-shells/`（正文组成执行时动态注入）。  
 > **创作定位：按回复呈现清单选壳并分区；正文语法见【正文安全子集】（程序动态装载）。**  
-> 日常折叠/表格走 Markdown 安全子集；一般不写本局任意 CSS/HTML/JS。  
-> 预览：`/shells.html`
+> 日常折叠/表格走 Markdown 安全子集；一般不写本局任意 CSS/HTML/JS。
 
 ## 1. 创作怎么做（权威口径）
 
@@ -29,8 +28,6 @@
 | 正文 ‖ 线索对照 | `split_board` |
 | 局面 + 选项 | `choice_dock` |
 | 章正文 + 进度 | `chapter_reader` |
-
-预览页 `/shells.html`：主工作面是壳画布；侧栏只换壳；长度/语气在顶栏。
 
 ## 2. 信息层级与长文容量
 
@@ -127,7 +124,6 @@
 | 序 | 项 | 状态 |
 |----|----|------|
 | 1 | `web/` 壳渲染器 + 层级样式 | **已接** `present-shells.js` + `styles.css` |
-| 1b | 壳预览页 | **已接** `/shells.html` |
 | 2 | 正文组成微调进 SessionView | **已接** |
 | 3 | present.v1 解析 | **已接** `present-packet.ts` |
 | 4 | narrator 按壳输出 | **已接** |
