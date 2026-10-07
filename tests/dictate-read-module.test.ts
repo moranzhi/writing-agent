@@ -32,7 +32,8 @@ describe("dictate read_module", () => {
               content: "{}",
               self_score: {
                 dims: [
-                  { name: "核心体验", score: 5 },
+                  { name: "美学纲领", score: 5 },
+                  { name: "交互范式", score: 5 },
                   { name: "背景与规则", score: 5 },
                 ],
               },
@@ -82,7 +83,8 @@ describe("dictate read_module", () => {
               content: "{}",
               self_score: {
                 dims: [
-                  { name: "核心体验", score: 5 },
+                  { name: "美学纲领", score: 5 },
+                  { name: "交互范式", score: 5 },
                   { name: "背景与规则", score: 3, gap: "规则因果仍需确认" },
                 ],
               },
@@ -205,7 +207,8 @@ describe("dictate read_module", () => {
               content: "{}",
               self_score: {
                 dims: [
-                  { name: "核心体验", score: 3 },
+                  { name: "美学纲领", score: 3 },
+                  { name: "交互范式", score: 5 },
                   { name: "背景与规则", score: 5 },
                 ],
               },
@@ -226,7 +229,8 @@ describe("dictate read_module", () => {
               content: "{}",
               self_score: {
                 dims: [
-                  { name: "核心体验", score: 3, gap: "发生方式仍偏宽" },
+                  { name: "美学纲领", score: 3, gap: "发生方式仍偏宽" },
+                  { name: "交互范式", score: 5 },
                   { name: "背景与规则", score: 5 },
                 ],
               },
@@ -254,10 +258,111 @@ describe("dictate read_module", () => {
       layer: "final",
       selfScore: {
         dims: expect.arrayContaining([
-          expect.objectContaining({ name: "核心体验", score: 3 }),
+          expect.objectContaining({ name: "美学纲领", score: 3 }),
         ]),
       },
     });
+  });
+});
+
+describe("opening uses the reply contract", () => {
+  const contract = JSON.stringify({
+    schema: "context-fragment.v1",
+    正文: {
+      数据契约: {
+        blocks: {
+          body: { 类型: "markdown", 来源: "model_generated" },
+          forum_feed: { 类型: "list", 来源: "model_generated" },
+        },
+      },
+      frontend: { html: `<div id="app"></div>`, css: "", js: "" },
+    },
+  });
+  const scores = {
+    dims: [
+      { name: "开场必要", score: 5 },
+      { name: "前端符合", score: 5 },
+      { name: "状态自洽", score: 5 },
+      { name: "角色占位", score: 5 },
+      { name: "收口可切换", score: 5 },
+    ],
+  };
+
+  it("returns the live contract when the opening module is read", async () => {
+    const { catalog, moduleReadIndex } = await setup();
+    const tags = new Map<string, string>([["设计.正文组成", contract]]);
+    const driver: AgentDriver = {
+      async run(input) {
+        const outcome = await input.handleStep([
+          {
+            id: "r1",
+            name: "read_module",
+            arguments: JSON.stringify({ module_id: "opening-setup" }),
+          },
+        ]);
+        if (outcome.kind === "continue") {
+          const payload = JSON.parse(outcome.results[0]!.content);
+          expect(payload.reply_contract.model_blocks.map((block: { id: string }) => block.id)).toEqual([
+            "body",
+            "forum_feed",
+          ]);
+        }
+        return { iterations: 1, stop: { kind: "text", content: "已读" } };
+      },
+    };
+    await runDictateTurn({
+      llm: {} as never,
+      dialogue: [],
+      moduleCatalog: catalog,
+      moduleReadIndex,
+      driver,
+      handlers: handlers(tags),
+    });
+  });
+
+  it("rejects an opening that only fills the old body shell", async () => {
+    const { catalog, moduleReadIndex } = await setup();
+    const tags = new Map<string, string>([["设计.正文组成", contract]]);
+    const driver: AgentDriver = {
+      async run(input) {
+        await input.handleStep([
+          {
+            id: "r1",
+            name: "read_module",
+            arguments: JSON.stringify({ module_id: "opening-setup" }),
+          },
+        ]);
+        const outcome = await input.handleStep([
+          {
+            id: "i1",
+            name: "insert",
+            arguments: JSON.stringify({
+              position: "设计.开场白",
+              content: JSON.stringify({
+                schema: "present.v1",
+                shell: "prose",
+                blocks: { body: "@玩家推开门。" },
+              }),
+              self_score: scores,
+            }),
+          },
+        ]);
+        if (outcome.kind === "continue") {
+          const payload = JSON.parse(outcome.results[0]!.content);
+          expect(payload.error).toContain("forum_feed");
+        }
+        return { iterations: 1, stop: { kind: "text", content: "未写入" } };
+      },
+    };
+    const result = await runDictateTurn({
+      llm: {} as never,
+      dialogue: [],
+      moduleCatalog: catalog,
+      moduleReadIndex,
+      driver,
+      handlers: handlers(tags),
+    });
+    expect(result.wroteTags).toEqual([]);
   });
 });
 

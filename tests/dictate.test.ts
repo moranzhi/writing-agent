@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDictateMessages,
   buildDictateSystemPrompt,
+  formatDictateRoundTail,
   buildDictateInsertFeedbackIndex,
   defaultDictateOrder,
   extractDictateDialogue,
@@ -47,7 +48,7 @@ describe("dictate context", () => {
     });
     const body = messages[1]?.content ?? "";
     expect(body).toContain("冷色短句");
-    expect(body).toContain("尚无对话");
+    expect(body).toContain("尚无更早对话");
   });
 
   it("extracts only user + dictate_reply turns", () => {
@@ -73,8 +74,9 @@ describe("dictate context", () => {
     expect(isDictateModeValue("recipe")).toBe(false);
   });
 
-  it("system prompt starts from a plan and keeps generic write tools", () => {
-    const prompt = buildDictateSystemPrompt({
+  it("system prompt keeps stable rules; catalog and plan progress sit in the tail", () => {
+    const prompt = buildDictateSystemPrompt();
+    const tail = formatDictateRoundTail({
       recipeName: "数据化跑团体验",
       recipeBrief:
         "设定 + 真值 + 分档映射\n怎么做：\n- declare_variable\n- declare_map",
@@ -90,17 +92,31 @@ describe("dictate context", () => {
     expect(prompt).toContain("declare_map");
     expect(prompt).toContain("remove_map");
     expect(prompt).toContain("同 position 再 insert");
-    expect(prompt).toContain("数据化跑团体验");
+    expect(prompt).not.toContain("数据化跑团体验");
     expect(prompt).toMatch(/order/);
-    expect(prompt).toContain("【能力 · 何时落盘】");
-    expect(prompt).toContain("设计.美学纲领与交互范式");
+    expect(prompt).not.toContain("【能力 · 何时落盘】");
     expect(prompt).toContain("通常 2～3 个");
     expect(prompt).toContain("给 2～3 个选项来问");
     expect(prompt).toContain("不是 DAG");
-    expect(prompt).toContain("不是用户已选路径");
+    expect(prompt).not.toContain("不是用户已选路径");
     expect(prompt).toContain("自然回应");
+    expect(prompt.indexOf("填写收尾")).toBeLessThan(prompt.indexOf("写入规则"));
     expect(prompt).not.toContain("体验锚定（程序打分）");
     expect(prompt).not.toContain("## 本轮落什么");
+    expect(tail).toContain("数据化跑团体验");
+    expect(tail).toContain("【能力 · 何时落盘】");
+    expect(tail).toContain("不是用户已选路径");
+    expect(tail).toContain("尚无本局创作方案");
+  });
+
+  it("puts the fill reply_user duty before plan progress in the tail", () => {
+    const fillTail = formatDictateRoundTail({
+      phase: "fill",
+      creationPlanState: "【当前决策】\n- mood：已落",
+      checklist: "本轮写入：设计.氛围",
+    });
+    expect(fillTail.indexOf("必须调用 reply_user")).toBeLessThan(fillTail.indexOf("当前决策"));
+    expect(fillTail.indexOf("必须调用 reply_user")).toBeLessThan(fillTail.indexOf("本轮写入"));
   });
 
   it("formats module catalog for dictate with land tags and when", async () => {
@@ -171,6 +187,12 @@ describe("dictate context", () => {
     expect(mod?.id).toBe("aesthetics-interaction");
     expect(
       resolveModuleForInsertTag("设计.开场白", catalog!)?.id,
+    ).toBe("opening-setup");
+    expect(
+      resolveModuleForInsertTag("设计.开场白#opening-cycle2", catalog!)?.id,
+    ).toBe("opening-setup");
+    expect(
+      resolveModuleForInsertTag("设计.开场白与开场变量", catalog!)?.id,
     ).toBe("opening-setup");
     expect(
       resolveModuleForInsertTag("设计.具体实例#lei-ying", catalog!)?.id,
@@ -244,31 +266,47 @@ describe("dictate context", () => {
     expect("error" in overwriteBare).toBe(true);
 
     const openingFamilies = new Set(["设计.开场白", "设计.主角设定"]);
-    const firstOpen = resolveRepeatableInsertTag({
+    const bareOpen = resolveRepeatableInsertTag({
       tag: "设计.开场白",
       content: "@玩家推开门。",
       existingTags: [],
       repeatableFamilies: openingFamilies,
     });
-    expect("tag" in firstOpen && firstOpen.tag).toBe("设计.开场白");
-    const overwriteFirst = resolveRepeatableInsertTag({
-      tag: "设计.开场白",
-      content: "@玩家改写第一幕。",
+    expect("error" in bareOpen).toBe(true);
+    const namedFromBundle = resolveRepeatableInsertTag({
+      tag: "设计.开场白与开场变量",
+      content: JSON.stringify({
+        schema: "present.v1",
+        id: "opening-cycle2",
+        blocks: { body: "@玩家推开门。" },
+      }),
       existingTags: ["设计.开场白"],
       repeatableFamilies: openingFamilies,
     });
-    expect("tag" in overwriteFirst && overwriteFirst.tag).toBe("设计.开场白");
+    expect("tag" in namedFromBundle && namedFromBundle.tag).toBe(
+      "设计.开场白#opening-cycle2",
+    );
+    const keepNamed = resolveRepeatableInsertTag({
+      tag: "设计.开场白#opening-cycle2",
+      content: JSON.stringify({
+        schema: "present.v1",
+        blocks: { body: "@玩家改写这一幕。" },
+      }),
+      existingTags: ["设计.开场白", "设计.开场白与开场变量", "设计.开场白#opening-cycle2"],
+      repeatableFamilies: openingFamilies,
+    });
+    expect("tag" in keepNamed && keepNamed.tag).toBe("设计.开场白#opening-cycle2");
     const secondOpen = resolveRepeatableInsertTag({
       tag: "设计.开场白#gate",
       content: "@玩家在闸机前。",
-      existingTags: ["设计.开场白"],
+      existingTags: ["设计.开场白#opening-cycle2"],
       repeatableFamilies: openingFamilies,
     });
     expect("tag" in secondOpen && secondOpen.tag).toBe("设计.开场白#gate");
     const bareOpenConflict = resolveRepeatableInsertTag({
       tag: "设计.开场白",
       content: "又写一条",
-      existingTags: ["设计.开场白", "设计.开场白#gate"],
+      existingTags: ["设计.开场白#opening-cycle2", "设计.开场白#gate"],
       repeatableFamilies: openingFamilies,
     });
     expect("error" in bareOpenConflict).toBe(true);

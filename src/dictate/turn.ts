@@ -1,9 +1,9 @@
 import type { LlmProvider } from "../llm/client.js";
 import {
-  createLocalLlmDriver,
   DriverIterationLimitError,
   type AgentDriver,
 } from "../runtime/driver.js";
+import { createPlannedDictateDriver } from "./round.js";
 import { buildDictateMessages } from "./context.js";
 import { buildDictateSystemPrompt } from "./prompt.js";
 import { DICTATE_TOOL_DEFINITIONS } from "./tools.js";
@@ -41,8 +41,14 @@ import {
   serializeVariableCatalog,
   upsertVariableField,
   removeVariableField,
+  seedVariablesFromCatalog,
   type UpsertVariableInput,
 } from "../skills/variable-catalog.js";
+import {
+  VARIABLE_DESIGN_TAG,
+  syncVariableDesignToRuntime,
+  writeVariableDesignSync,
+} from "../skills/variable-design-compile.js";
 import {
   VALUE_MAP_TAG,
   parseValueMapDoc,
@@ -57,6 +63,46 @@ import {
 } from "../blackboard/table-cells.js";
 import { isDictateOpeningTag } from "./experience-anchor.js";
 import { canonicalizeInsertedContent } from "../parse/json-doc.js";
+import {
+  openingContractError,
+  parseReplyDataContract,
+  replyContractSummary,
+  type ReplyDataContract,
+} from "../skills/reply-contract.js";
+
+function seedCurrentFromCatalog(handlers: DictateTurnHandlers): string[] {
+  const seeded = seedVariablesFromCatalog({
+    catalogRaw: handlers.readTag(VARIABLE_CATALOG_TAG),
+    currentRaw: handlers.readTag("变量.当前"),
+    initialRaw: handlers.readTag("运行.初始变量"),
+    actor: "system:declare_variable",
+  });
+  const wrote: string[] = [];
+  if (seeded.initial) {
+    handlers.writeTag("运行.初始变量", seeded.initial);
+    wrote.push("运行.初始变量");
+  }
+  if (seeded.current) {
+    handlers.writeTag("变量.当前", seeded.current);
+    wrote.push("变量.当前");
+  }
+  return wrote;
+}
+
+function syncDesignProductToTable(
+  handlers: DictateTurnHandlers,
+  designContent?: string,
+): string[] {
+  const sync = syncVariableDesignToRuntime({
+    designRaw: designContent ?? handlers.readTag(VARIABLE_DESIGN_TAG),
+    catalogRaw: handlers.readTag(VARIABLE_CATALOG_TAG),
+    currentRaw: handlers.readTag("变量.当前"),
+    initialRaw: handlers.readTag("运行.初始变量"),
+  });
+  return writeVariableDesignSync(sync, (tag, content) =>
+    handlers.writeTag(tag, content),
+  );
+}
 
 export type DictateTurnHandlers = {
   listProducts: () => DictateProduct[];
@@ -127,7 +173,28 @@ export async function runDictateTurn(params: {
   repeatableFamilies?: ReadonlySet<string> | readonly string[];
   driver?: AgentDriver;
 }): Promise<DictateTurnResult> {
-  const driver = params.driver ?? createLocalLlmDriver(params.llm);
+  const driver =
+    params.driver ??
+    createPlannedDictateDriver({
+      llm: params.llm,
+      dialogue: params.dialogue,
+      handlers: {
+        listProducts: params.handlers.listProducts,
+        readTag: params.handlers.readTag,
+        writeTag: params.handlers.writeTag,
+        prepareOpening: params.handlers.prepareOpening,
+        lookupInsertFeedback: params.handlers.lookupInsertFeedback,
+        onThinkingDelta: params.handlers.onThinkingDelta,
+        onThinkingDone: params.handlers.onThinkingDone,
+      },
+      moduleCatalog: params.moduleCatalog,
+      moduleReadIndex: params.moduleReadIndex,
+      moduleGuide: params.moduleGuide,
+      recipeExamples: params.recipeExamples,
+      recipeName: params.recipeName,
+      recipeBrief: params.recipeBrief,
+      systemPrompt: params.systemPrompt,
+    });
   const wroteTags: string[] = [];
   const deletedTags: string[] = [];
   let clearedDialogue = false;
@@ -217,9 +284,31 @@ export async function runDictateTurn(params: {
             call.name,
             `${module.module_id}@${module.version}`,
           );
+          const replyContract =
+            module.module_id === "opening-setup" ||
+            module.module_id === "zero-layer-opening-setup"
+              ? contractForOpeningTag(
+                  module.module_id === "zero-layer-opening-setup"
+                    ? "设计.0层开场白与初态"
+                    : "设计.开场白",
+                  params.handlers.listProducts(),
+                )
+              : undefined;
           return {
             callId: call.id,
-            content: JSON.stringify({ ok: true, ...module }),
+            content: JSON.stringify({
+              ok: true,
+              ...module,
+              ...(replyContract
+                ? { reply_contract: replyContractSummary(replyContract) }
+                : module.module_id === "opening-setup" ||
+                    module.module_id === "zero-layer-opening-setup"
+                  ? {
+                      reply_contract_missing:
+                        "还没有可执行的正文组成数据契约。先写正文组成，再写开场。",
+                    }
+                  : {}),
+            }),
           };
         }
         if (call.name === "read_library_entry") {
@@ -385,6 +474,18 @@ export async function runDictateTurn(params: {
               const order = parseDictateOrder(args.order);
               const productsBeforeWrite = params.handlers.listProducts();
               const isOpening = isDictateOpeningTag(pieceTag);
+              const contractMiss = openingContractMiss(
+                pieceTag,
+                piece.content,
+                params.handlers.listProducts(),
+              );
+              if (contractMiss) {
+                params.handlers.onToolCall?.(call.name, contractMiss.error);
+                return {
+                  callId: call.id,
+                  content: JSON.stringify(contractMiss),
+                };
+              }
               const explicitlyPrepared = openingPrepared;
               if (isOpening && !explicitlyPrepared) {
                 params.handlers.prepareOpening?.();
@@ -464,6 +565,18 @@ export async function runDictateTurn(params: {
           const order = parseDictateOrder(args.order);
           const productsBeforeWrite = params.handlers.listProducts();
           const isOpening = isDictateOpeningTag(tag);
+          const contractMiss = openingContractMiss(
+            tag,
+            content,
+            params.handlers.listProducts(),
+          );
+          if (contractMiss) {
+            params.handlers.onToolCall?.(call.name, contractMiss.error);
+            return {
+              callId: call.id,
+              content: JSON.stringify(contractMiss),
+            };
+          }
           const explicitlyPrepared = openingPrepared;
           if (isOpening && !explicitlyPrepared) {
             params.handlers.prepareOpening?.();
@@ -480,6 +593,10 @@ export async function runDictateTurn(params: {
               : {}),
             ...(selfScore.value ? { selfScore: selfScore.value } : {}),
           });
+          if (tag === VARIABLE_DESIGN_TAG || tag.startsWith(`${VARIABLE_DESIGN_TAG}#`)) {
+            const synced = syncDesignProductToTable(params.handlers, content);
+            wroteTags.push(...synced);
+          }
           if (!isOpening) openingPrepared = false;
           wroteTags.push(tag);
           const detail =
@@ -557,6 +674,8 @@ export async function runDictateTurn(params: {
             serializeVariableCatalog(doc),
           );
           wroteTags.push(VARIABLE_CATALOG_TAG);
+          const seeded = seedCurrentFromCatalog(params.handlers);
+          wroteTags.push(...seeded);
           const detail = `${input.key} visible=${doc.fields.find((f) => f.key === input.key)?.user_visible !== false}`;
           params.handlers.onToolCall?.(call.name, detail);
           return {
@@ -824,6 +943,30 @@ function safeParseArgs(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function contractForOpeningTag(
+  tag: string,
+  products: DictateProduct[],
+): ReplyDataContract | undefined {
+  const want = tag.includes("0层") ? "设计.0层正文组成" : "设计.正文组成";
+  const raw =
+    products.find((product) => product.tag === want)?.content ??
+    products.find((product) => product.tag === "设计.回复格式")?.content;
+  return parseReplyDataContract(raw);
+}
+
+function openingContractMiss(
+  tag: string,
+  content: string,
+  products: DictateProduct[],
+): { error: string; reply_contract?: ReturnType<typeof replyContractSummary> } | undefined {
+  if (!isDictateOpeningTag(tag)) return undefined;
+  const contract = contractForOpeningTag(tag, products);
+  if (!contract) return undefined;
+  const error = openingContractError(content, contract);
+  if (!error) return undefined;
+  return { error, reply_contract: replyContractSummary(contract) };
 }
 
 function requiresModuleRead(moduleId: string, auto?: boolean): boolean {

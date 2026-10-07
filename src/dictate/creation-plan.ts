@@ -1,5 +1,6 @@
 import {
   catalogModulesForIntake,
+  isDictateProgramModule,
   type ModuleCatalog,
   type ModuleCatalogEntry,
 } from "../skills/creation-flow.js";
@@ -32,6 +33,53 @@ const PRESENTATION_MODULE_IDS: Record<
 const ALL_PRESENTATION_MODULE_IDS = new Set(
   Object.values(PRESENTATION_MODULE_IDS).flat(),
 );
+
+/** 技能页按节点在对话落盘里的角色分组，不按旧配方包。 */
+export const MODULE_BROWSE_GROUPS = [
+  {
+    id: "plan",
+    label: "本局方案",
+    hint: "抽出体验并给内容节点分档，不进入游玩",
+  },
+  {
+    id: "content",
+    label: "内容节点",
+    hint: "本局方案按档取用；这句话说清了再写",
+  },
+  {
+    id: "present",
+    label: "呈现链",
+    hint: "普通楼层与 0 层卡各用一套，两套不混用",
+  },
+  {
+    id: "program",
+    label: "落档程序",
+    hint: "开玩前由程序编译，创作对话不写入",
+  },
+] as const;
+
+export type ModuleBrowseGroupId = (typeof MODULE_BROWSE_GROUPS)[number]["id"];
+
+export function moduleBrowseGroup(module: {
+  id: string;
+  auto?: boolean;
+}): ModuleBrowseGroupId {
+  if (module.id === "creation-plan") return "plan";
+  if (isDictateProgramModule(module)) return "program";
+  if (ALL_PRESENTATION_MODULE_IDS.has(module.id)) return "present";
+  return "content";
+}
+
+export function modulePresentationMode(
+  moduleId: string,
+): CreationPresentationMode | null {
+  for (const mode of ["message", "zero_layer"] as const) {
+    if ((PRESENTATION_MODULE_IDS[mode] as readonly string[]).includes(moduleId)) {
+      return mode;
+    }
+  }
+  return null;
+}
 
 export type CreationPlanItem = {
   module_id: string;

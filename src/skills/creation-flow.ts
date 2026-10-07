@@ -1423,6 +1423,14 @@ const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
   "refine",
 ]);
 
+/** 落档程序或目录标了 auto 的节点：创作对话不 insert */
+export function isDictateProgramModule(module: {
+  id: string;
+  auto?: boolean;
+}): boolean {
+  return Boolean(module.auto) || DICTATE_PROGRAM_SIDE_MODULE_IDS.has(module.id);
+}
+
 /**
  * 注入对话落盘：能力何时落盘（meta when/when_not）+ insert 目标 tag。
  * 不写 DAG / design-step 话术；不塞执行全文。
@@ -1430,7 +1438,7 @@ const DICTATE_PROGRAM_SIDE_MODULE_IDS = new Set([
 export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
   const dictateModules = catalogModulesForIntake(catalog, "dictate");
   const lines = dictateModules.map((m) => {
-    const programSide = DICTATE_PROGRAM_SIDE_MODULE_IDS.has(m.id) || m.auto;
+    const programSide = isDictateProgramModule(m);
     const flags = [
       m.repeatable ? "〔可反复〕" : "",
       m.closer ? "〔收口〕" : "",
@@ -1439,7 +1447,7 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
     ]
       .filter(Boolean)
       .join("");
-    const land = dictateLandHint(m);
+    const land = dictateModuleLandHint(m);
     const parts: string[] = [
       `- ${m.name}${flags}：${m.declaration}`,
       `  落盘：${land}`,
@@ -1455,7 +1463,7 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
     "「必须」和「有必要」里用户还没提到的：本轮不落盘，按已有材料给 2～3 个选项询问，选定后再写。含糊或未到时机的下游同样先问，不先写。",
     "同轮写入的每份产物各回 reply_module，可见回复综合成一次。",
     "标〔落档程序〕的：创作对话一般不 insert，开玩/落档时由程序处理。",
-    "标〔收口〕的开场：写开场前，列出仍未落的「必须」和「有必要」，问用户这些还没设计要补哪几项或明确不要。用户这句已经说清的再写入。普通模式使用回复呈现/正文组成，0 层模式使用对应 0 层节点，不得混用。用户确认可以收口后，程序依次编译信息可见范围、游玩执行方式、上下文排序与运行配置，再写所选模式的开场产物。",
+    "标〔收口〕的开场：写开场前，列出仍未落的「必须」和「有必要」，问用户这些还没设计要补哪几项或明确不要。用户这句已经说清的再写入。普通模式使用回复呈现/正文组成，0 层模式使用对应 0 层节点，不得混用。用户确认可以收口后，程序依次按有无变量真值固定开旁观填表、编译信息可见范围、游玩执行方式、上下文排序与运行配置，再写所选模式的开场产物。",
     "标〔可反复〕的（生成规则、具体实例、开场白、拓扑等）：每条单独落盘，用「基名#唯一id」（生成规则用规则名，具体实例用名称，开场白用场景短码）。同完整 tag 才覆盖，禁止反复写基名盖掉别的条。开场全部保留；游玩时左右切换，选中的一条作为 0 层。",
     "能力执行全文不进聊天；规格只走 toolcall。insert 成功后按返回的 reply_module 写可见回复（见系统提示「对用户可见回复」）。",
     lines.join("\n"),
@@ -1464,12 +1472,15 @@ export function formatModuleCatalogForDictate(catalog: ModuleCatalog): string {
   return head;
 }
 
-function dictateLandHint(m: ModuleCatalogEntry): string {
-  if (DICTATE_PROGRAM_SIDE_MODULE_IDS.has(m.id) || m.auto) {
+export function dictateModuleLandHint(m: ModuleCatalogEntry): string {
+  if (isDictateProgramModule(m)) {
+    if (m.id === "worker-spec") {
+      return "落档/开玩程序处理：有变量真值时固定开旁观填表，创作期一般不 insert";
+    }
     return "落档/开玩程序处理；创作期一般不 insert";
   }
   if (m.id === "variable-design") {
-    return "declare_variable / declare_map；长文规则可另 insert 「设计.变量设计与更新规则」";
+    return "insert 「设计.变量设计与更新规则」（有真值时程序固定旁观副 LLM 填表，并同步目录与真表）；或用 declare_variable / declare_map 逐条钉目录";
   }
   if (m.id === "opening-setup") {
     return "insert 「设计.开场白#场景短码」——可增殖：每条开场各占一 tag；同完整 tag 才覆盖。游玩时左右切换，选中的一条作为 0 层";

@@ -1,7 +1,9 @@
 /**
  * 对话落盘 · 落档/开玩时自动把产物 tag 挂到游玩 worker。
  * 只做「固定上下文绑定」；变量清单、可见性、分档映射仍靠对话产出，此处不发明。
+ * 保存时按上游产物指纹决定是否重跑：没改过就保留已有排序和运行配置。
  */
+import { createHash } from "node:crypto";
 import type { Blackboard } from "../blackboard/blackboard.js";
 import {
   CONTEXT_ORDER_SCHEMA,
@@ -39,6 +41,12 @@ import {
   listValueMapTargetTags,
 } from "../skills/value-map.js";
 import {
+  applyMaintenanceStrategyToPlaySlots,
+  MAINTENANCE_STRATEGY_TAG,
+  resolveMaintenanceStrategyFromBoard,
+  writeMaintenanceStrategy,
+} from "../skills/maintenance-strategy.js";
+import {
   DICTATE_ORDER_META_KEY,
   effectiveDictateOrder,
   sortDictateProducts,
@@ -57,6 +65,7 @@ const SKIP_BIND_TAGS = new Set([
   CREATION_SELECTED_RECIPE_TAG,
   VARIABLE_CATALOG_TAG,
   VALUE_MAP_TAG,
+  MAINTENANCE_STRATEGY_TAG,
 ]);
 
 function shouldSkipBindTag(tag: string): boolean {
@@ -77,11 +86,16 @@ const STYLE_TAG_RE =
 /** 这些配方开玩时刚需叙事转述（主世界出内容、转述出文风） */
 const RECIPES_REQUIRE_NARRATOR = new Set(["文本生成器"]);
 
+/** 上次编译时所依据的上游指纹；两边产物一致且未过期则跳过重跑 */
+export const DICTATE_PLAY_BIND_INPUT_META = "dictatePlayBindInput";
+
 export type DictatePlayBindResult = {
   workerSetJson: string;
   contextOrder: ContextOrderDoc;
   boundTags: string[];
   changed: boolean;
+  /** 上游产物未改，保留已有上下文排序与运行配置 */
+  skipped: boolean;
 };
 
 function isStyleProductTag(tag: string): boolean {
@@ -314,7 +328,7 @@ function resolvePlaySlots(
   const parsed = existingRaw?.trim()
     ? parseWorkerSetYaml(existingRaw)
     : null;
-  const slots = { ...(parsed?.play_slots ?? defaultPlaySlots()) };
+  let slots = { ...(parsed?.play_slots ?? defaultPlaySlots()) };
   const recipeRef = parseSelectedRecipeRef(
     board.getContentByTag(CREATION_SELECTED_RECIPE_TAG),
   );
@@ -322,6 +336,9 @@ function resolvePlaySlots(
     slots.gm = true;
     slots.narrator = true;
   }
+  // 变量设计.维护复杂度 → auditor true/false（内联则关旁观）
+  const strategy = resolveMaintenanceStrategyFromBoard(board);
+  slots = applyMaintenanceStrategyToPlaySlots(slots, strategy);
   return slots;
 }
 
@@ -336,6 +353,8 @@ export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBin
     board.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim() ||
     "";
   const playSlots = resolvePlaySlots(existing || undefined, board);
+  const strategy = resolveMaintenanceStrategyFromBoard(board);
+  writeMaintenanceStrategy(board, strategy, "runtime:play-bind");
   const runtimeTags = collectRuntimeStateTags(board);
   const contextOrder = buildDictateContextOrder({
     products,
@@ -371,26 +390,100 @@ export function bindDictateProductsToPlaySpec(board: Blackboard): DictatePlayBin
         ? row.brief
         : "对话落盘：主世界出内容，叙事转述出文风";
   }
+  if (playSlots.auditor) {
+    const base =
+      typeof row.brief === "string" && row.brief.trim() ? String(row.brief) : "对话落盘落档自动生成";
+    if (!base.includes("旁观")) {
+      row.brief = `${base}；旁观副 LLM 填表（固定）`;
+    }
+  }
   const withSlots = JSON.stringify(row, null, 2);
   const workerSetJson = mergeContextOrderIntoWorkerSetJson(withSlots, contextOrder);
 
   const boundTags = products.map((p) => p.tag);
   const changed = workerSetJson.trim() !== existing.trim();
-  return { workerSetJson, contextOrder, boundTags, changed };
+  return { workerSetJson, contextOrder, boundTags, changed, skipped: false };
 }
 
-/** 写入黑板：设计.worker集 + 设计.上下文投影排序 */
+/**
+ * 上游指纹：会挂进游玩上下文的产物正文与次序，加上会改变槽位的配方、变量目录、映射和已启用槽。
+ * 不含投影结果（变量.当前、上下文排序、worker 集正文），避免保存后自己把自己标脏。
+ */
+export function dictatePlayBindInputKey(board: Blackboard): string {
+  const products = collectDictateBindProducts(board).map((product) => ({
+    tag: product.tag,
+    order: product.order ?? null,
+    content: product.content,
+  }));
+  const existing =
+    board.getContentByTag(WORKER_SET_FINAL_TAG)?.trim() ||
+    board.getContentByTag(WORKER_SET_DRAFT_TAG)?.trim() ||
+    "";
+  const payload = {
+    products,
+    recipe: board.getContentByTag(CREATION_SELECTED_RECIPE_TAG)?.trim() ?? "",
+    catalog: board.getContentByTag(VARIABLE_CATALOG_TAG)?.trim() ?? "",
+    maps: board.getContentByTag(VALUE_MAP_TAG)?.trim() ?? "",
+    playSlots: resolvePlaySlots(existing || undefined, board),
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function storedPlayBindKey(
+  board: Blackboard,
+  tag: string,
+): string | undefined {
+  const stamp = board.getLatestByTag(tag)?.metadata?.[DICTATE_PLAY_BIND_INPUT_META];
+  return typeof stamp === "string" && stamp.trim() ? stamp : undefined;
+}
+
+function freshPlayBind(
+  board: Blackboard,
+  key: string,
+): DictatePlayBindResult | null {
+  const orderItem = board.getLatestByTag(CONTEXT_ORDER_TAG);
+  const workerItem = board.getLatestByTag(WORKER_SET_FINAL_TAG);
+  const orderRaw = orderItem?.content?.trim() ?? "";
+  const workerRaw = workerItem?.content?.trim() ?? "";
+  if (!orderRaw || !workerRaw) return null;
+  if (storedPlayBindKey(board, CONTEXT_ORDER_TAG) !== key) return null;
+  if (storedPlayBindKey(board, WORKER_SET_FINAL_TAG) !== key) return null;
+  try {
+    const contextOrder = JSON.parse(orderRaw) as ContextOrderDoc;
+    if (!contextOrder || typeof contextOrder !== "object") return null;
+    return {
+      workerSetJson: workerItem!.content,
+      contextOrder,
+      boundTags: collectDictateBindProducts(board).map((product) => product.tag),
+      changed: false,
+      skipped: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 写入黑板：设计.worker集 + 设计.上下文投影排序。上游未改则不覆盖。 */
 export function applyDictatePlayBind(board: Blackboard): DictatePlayBindResult {
+  const key = dictatePlayBindInputKey(board);
+  const fresh = freshPlayBind(board, key);
+  if (fresh) return fresh;
+
   const result = bindDictateProductsToPlaySpec(board);
+  const orderItem = board.getLatestByTag(CONTEXT_ORDER_TAG);
+  const workerItem = board.getLatestByTag(WORKER_SET_FINAL_TAG);
+  const stamp = { [DICTATE_PLAY_BIND_INPUT_META]: key };
   board.write({
     tag: WORKER_SET_FINAL_TAG,
     content: result.workerSetJson,
     source: "runtime",
+    metadata: { ...(workerItem?.metadata ?? {}), ...stamp },
   });
   board.write({
     tag: CONTEXT_ORDER_TAG,
     content: JSON.stringify(result.contextOrder, null, 2),
     source: "runtime",
+    metadata: { ...(orderItem?.metadata ?? {}), ...stamp },
   });
   return result;
 }

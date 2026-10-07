@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CREATION_PLAN_TAG,
   buildDictateSystemPrompt,
+  formatDictateRoundTail,
   creationPlanModules,
   formatCreationPlanCapabilityCatalog,
   formatCreationPlanProgress,
@@ -9,7 +10,9 @@ import {
   validateCreationPlan,
   type CreationPlan,
 } from "../src/dictate/index.js";
+import { moduleBrowseGroup } from "../src/dictate/creation-plan.js";
 import {
+  catalogModulesForIntake,
   formatModuleCatalogForDictate,
   loadModuleCatalog,
 } from "../src/skills/creation-flow.js";
@@ -62,6 +65,32 @@ describe("creation plan", () => {
         "reply-format",
         "opening-setup",
       ]),
+    );
+  });
+
+  it("groups dictate nodes by runtime role and omits the recipe-only merge", async () => {
+    const catalog = await loadModuleCatalog("dialogue/world-simulator");
+    expect(catalog).toBeTruthy();
+    const dictate = catalogModulesForIntake(catalog!, "dictate");
+    const ids = dictate.map((module) => module.id);
+    expect(ids).not.toContain("narrative");
+    expect(moduleBrowseGroup(dictate.find((module) => module.id === "creation-plan")!)).toBe(
+      "plan",
+    );
+    expect(moduleBrowseGroup(dictate.find((module) => module.id === "narrative-guide")!)).toBe(
+      "content",
+    );
+    expect(moduleBrowseGroup(dictate.find((module) => module.id === "reply-format")!)).toBe(
+      "present",
+    );
+    expect(moduleBrowseGroup(dictate.find((module) => module.id === "zero-layer-status")!)).toBe(
+      "present",
+    );
+    expect(moduleBrowseGroup(dictate.find((module) => module.id === "refine")!)).toBe(
+      "program",
+    );
+    expect(new Set(dictate.map((module) => moduleBrowseGroup(module)))).toEqual(
+      new Set(["plan", "content", "present", "program"]),
     );
   });
 
@@ -160,17 +189,19 @@ describe("creation plan", () => {
     expect(unusedSection).not.toContain("何时用：");
 
     const oldFullGuide = formatModuleCatalogForDictate(catalog);
-    const before = buildDictateSystemPrompt({
+    const fixed = buildDictateSystemPrompt();
+    const before = formatDictateRoundTail({
       capabilityCatalog: shortCatalog,
       recipeExamples: "- text-generator：文本生成案例",
     });
-    const after = buildDictateSystemPrompt({ creationPlanState: progress });
+    const after = formatDictateRoundTail({ creationPlanState: progress });
+    expect(fixed).not.toContain("当前决策");
     expect(before).toContain("尚无本局创作方案");
     expect(after).toContain("当前决策");
     expect(after).toContain("收口前的核对清单");
     expect(after).not.toContain("旧配方案例目录");
     expect(after.length).toBeLessThan(
-      buildDictateSystemPrompt({ moduleGuide: oldFullGuide }).length,
+      formatDictateRoundTail({ moduleGuide: oldFullGuide }).length,
     );
   });
 

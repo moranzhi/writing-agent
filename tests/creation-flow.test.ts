@@ -1230,8 +1230,12 @@ modules:
     expect(sections.blocks.task).toContain("默认只生成 1 条");
     expect(sections.blocks.task).toContain("@玩家");
     expect(sections.blocks.task).toContain("随机");
-    expect(sections.blocks.output).toContain('"默认候选id"');
-    expect(sections.blocks.output).toContain('"开场白候选"');
+    expect(module?.artifact).toBe("设计.开场白");
+    expect(sections.blocks.task).toContain("设计.开场白#opening-cycle2");
+    expect(sections.blocks.task).not.toContain("写入 `设计.开场白与开场变量`");
+    expect(sections.blocks.output).toContain("设计.开场白#场景短码");
+    expect(sections.blocks.output).toContain('"开场变量"');
+    expect(sections.blocks.output).not.toContain('"开场白候选"');
     expect(sections.blocks.output).not.toContain('"开场白全文"');
     expect(sections.blocks.output).toContain("present.v1");
     expect(sections.blocks.output).not.toContain('"自评"');

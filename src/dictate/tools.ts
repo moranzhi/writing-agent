@@ -3,6 +3,66 @@ import type { ToolDefinition } from "../llm/client.js";
 /**
  * 对话落盘创作期工具：产物 / 变量 / 映射均须 toolcall；聊天只做确认与建议。
  */
+/** 第一次请求仅此一个工具：点出下一步要写的节点。 */
+export const DICTATE_SELECT_TOOL: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "select_nodes",
+    description:
+      "规定下一步要写入的目标节点。nodes 只填能力目录中的 module_id。这一步不写产物正文。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        nodes: {
+          type: "array",
+          description: "这段用户话要填充的节点。",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              module_id: { type: "string", description: "能力目录中的 id" },
+            },
+            required: ["module_id"],
+          },
+        },
+      },
+      required: ["nodes"],
+    },
+  },
+};
+
+/** 写入循环的收尾。未通过的节点还在时，程序不把这份正文给用户。 */
+export const DICTATE_REPLY_TOOL: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "reply_user",
+    description:
+      "本步必调。与 insert 放在同一次请求：节点表写完后立刻提交给用户的综合回复。正文按系统提示「用户可见回复」写。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: {
+          type: "string",
+          description:
+            "综合回复。先回应原话并说明形成了什么，再写自评最稳处；每个分数一般的缺口含短例子、一句体验变化和 2～3 个可接着说的选项；接着写下一步可以提及哪些，并补一个相关设定。多个产物合成一段。",
+        },
+      },
+      required: ["text"],
+    },
+  },
+};
+
+const WRITE_LOOP_TOOL_NAMES = new Set([
+  "insert",
+  "delete",
+  "declare_variable",
+  "undeclare_variable",
+  "declare_map",
+  "remove_map",
+]);
+
 export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
@@ -80,12 +140,12 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
           position: {
             type: "string",
             description:
-              "产物 tag，须以「用户.」或「设计.」开头。例：用户.需求、设计.正文组成、设计.开场白、设计.开场白#dorm；可增殖例：设计.生成规则#rule-id、设计.具体实例#batch-id、设计.主角设定#dorm。勿用本工具写变量目录/映射。",
+              "产物 tag，须以「用户.」或「设计.」开头。例：用户.需求、设计.正文组成、设计.开场白#opening-cycle2；可增殖例：设计.生成规则#rule-id、设计.具体实例#batch-id、设计.主角设定#dorm。开场必须带场景短码，不要写裸「设计.开场白」或「设计.开场白与开场变量」。勿用本工具写变量目录/映射。",
           },
           content: {
             type: "string",
             description:
-              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白[#短码]=叙事正文（有正文组成时为 present.v1 JSON；否则 Markdown），必须含字面 @玩家，禁止写入用户角色.名字/简介；设计.主角设定[#同短码]=名字/背景/特殊设定 JSON，与开场同短码即绑定该开局",
+              "落入该位置的正文。设计.正文组成=格式 JSON；设计.开场白#场景短码=这一张开场的 present.v1，blocks 必须含正文组成数据契约里的全部模型生成区（用来灌进已固定前端并替换示例），不要只写 shell+body，也不要填程序投影区；必须含字面 @玩家，名字不进 blocks。这条开场的玩家角色写在 meta.用户角色（名字+一到三句客观事实），程序同步为同短码主角设定。这张开场有初值才在同一份正文里写开场变量，没有就不写。设计.主角设定=共通的名字/背景/特殊设定 JSON；各开场不同的玩家角色写进开场 meta，不另写主角设定#短码",
           },
           order: {
             type: "number",
@@ -282,4 +342,10 @@ export const DICTATE_TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+];
+
+/** 第二次起的工具。不含 read_module：写法已由程序注入。同一轮重试不改变这份清单。 */
+export const DICTATE_WRITE_LOOP_TOOLS: ToolDefinition[] = [
+  ...DICTATE_TOOL_DEFINITIONS.filter((tool) => WRITE_LOOP_TOOL_NAMES.has(tool.function.name)),
+  DICTATE_REPLY_TOOL,
 ];

@@ -143,6 +143,74 @@ function bodyOfFragment(content: string): Record<string, unknown> | null {
   return body as Record<string, unknown>;
 }
 
+/** 多开场切换用的落盘族。每条必须是 基名#场景短码。 */
+export const OPENING_SLOT_FAMILY = "设计.开场白";
+/** 旧整包 tag。insert 时改写到 OPENING_SLOT_FAMILY#槽，避免再并列一份。 */
+export const LEGACY_OPENING_BUNDLE_FAMILY = "设计.开场白与开场变量";
+
+const OPENING_SLOT_REQUIRED =
+  "开场每条单独落盘，position 用「设计.开场白#场景短码」（例如 设计.开场白#opening-cycle2），供之后左右切换。不要写裸「设计.开场白」，也不要写「设计.开场白与开场变量」。改某一条则 insert 同一完整 tag。没有变量的卡不写开场变量，tag 仍然带场景短码。";
+
+/** 旧整包族改写成开场族，槽位原样保留。 */
+export function rewriteLegacyOpeningTag(tag: string): string {
+  const raw = tag.trim();
+  if (dictateProductFamily(raw) !== LEGACY_OPENING_BUNDLE_FAMILY) return raw;
+  const slot = dictateProductSlot(raw);
+  return slot ? buildRepeatableProductTag(OPENING_SLOT_FAMILY, slot) : OPENING_SLOT_FAMILY;
+}
+
+function openingCandidateRows(body: Record<string, unknown>): Record<string, unknown>[] {
+  const raw = body.开场白候选 ?? body.候选;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (row): row is Record<string, unknown> =>
+      Boolean(row) && typeof row === "object" && !Array.isArray(row),
+  );
+}
+
+/**
+ * 从单张开场正文抽出场景短码。多条候选挤在一份正文里时拒绝，要求拆成多次 insert。
+ */
+export function extractOpeningSlotFromContent(
+  content: string,
+): { slot?: string; error?: string } {
+  const parsed = tryParseJsonDoc(content);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const doc = parsed as Record<string, unknown>;
+  const nested = bodyOfFragment(content);
+  const body = nested ?? doc;
+  const direct =
+    asString(doc.id) ??
+    asString(doc.候选id) ??
+    asString(doc.场景短码) ??
+    asString(body.id) ??
+    asString(body.候选id) ??
+    asString(body.场景短码);
+  if (direct) {
+    const slot = sanitizeRepeatableSlot(direct);
+    return slot ? { slot } : {};
+  }
+  const rows = openingCandidateRows(body);
+  if (rows.length > 1) {
+    return {
+      error:
+        "多条开场不要写进同一份产物。每条 insert 一次「设计.开场白#场景短码」。",
+    };
+  }
+  const one = rows[0];
+  const fromOne = one
+    ? asString(one.id) ?? asString(one.候选id) ?? asString(one.场景短码)
+    : undefined;
+  const fallback =
+    rows.length <= 1
+      ? asString(body.默认候选id) ?? asString(body.默认候选ID)
+      : undefined;
+  const picked = fromOne ?? fallback;
+  if (!picked) return {};
+  const slot = sanitizeRepeatableSlot(picked);
+  return slot ? { slot } : {};
+}
+
 /**
  * 从正文抽出建议槽位：生成规则 → 规则名；具体实例 → 名称 / 记录里的姓名。
  */
@@ -207,8 +275,9 @@ export function resolveRepeatableInsertTag(params: {
   existingTags: readonly string[];
   repeatableFamilies: ReadonlySet<string>;
 }): ResolveRepeatableInsertResult {
-  const raw = params.tag.trim();
-  if (!raw) return { error: "position 为空" };
+  const requested = params.tag.trim();
+  if (!requested) return { error: "position 为空" };
+  const raw = rewriteLegacyOpeningTag(requested);
 
   const family = dictateProductFamily(raw);
   if (!params.repeatableFamilies.has(family)) {
@@ -217,13 +286,21 @@ export function resolveRepeatableInsertTag(params: {
 
   const explicit = dictateProductSlot(raw);
   const extracted = extractRepeatableSlotFromContent(family, params.content);
-  const slot = explicit || extracted || "";
+  const openingSlot =
+    family === OPENING_SLOT_FAMILY && !explicit
+      ? extractOpeningSlotFromContent(params.content)
+      : {};
+  if (openingSlot.error) return { error: openingSlot.error };
+  const slot = explicit || extracted || openingSlot.slot || "";
 
   const siblings = params.existingTags
     .map((t) => t.trim())
     .filter((t) => t && dictateProductFamily(t) === family);
 
   if (!slot) {
+    if (family === OPENING_SLOT_FAMILY) {
+      return { error: OPENING_SLOT_REQUIRED };
+    }
     // 允许覆盖基名自身；若已有其它 #槽位，禁止再用裸基名（须写明 #id）
     const otherSiblings = siblings.filter((t) => t !== family);
     if (otherSiblings.length > 0 && raw === family) {
@@ -235,11 +312,11 @@ export function resolveRepeatableInsertTag(params: {
   }
 
   const resolved = buildRepeatableProductTag(family, slot);
-  if (raw === family || raw !== resolved) {
+  if (requested !== resolved) {
     return {
       tag: resolved,
-      remapped: raw !== resolved,
-      note: raw !== resolved ? `可增殖已拆到 ${resolved}` : undefined,
+      remapped: true,
+      note: `已写入 ${resolved}。之后改这一条用同一完整 tag。`,
     };
   }
   return { tag: resolved };

@@ -15,6 +15,7 @@ import {
 /** 对话落盘常用简化 tag → 能力 id（catalog.artifact 之外） */
 export const DICTATE_INSERT_TAG_ALIASES: Readonly<Record<string, string>> = {
   "设计.开场白": "opening-setup",
+  "设计.开场白与开场变量": "opening-setup",
   "设计.美学纲领": "aesthetics-interaction",
   "设计.文风": "narrative-guide",
   "设计.监控栏": "status-bar",
@@ -54,7 +55,8 @@ export function resolveModuleForInsertTag(
     if (byFamily) return byFamily;
   }
 
-  const aliasId = DICTATE_INSERT_TAG_ALIASES[t];
+  const family = t.includes("#") ? t.slice(0, t.indexOf("#")).trim() : t;
+  const aliasId = DICTATE_INSERT_TAG_ALIASES[t] ?? DICTATE_INSERT_TAG_ALIASES[family];
   if (aliasId) {
     return catalog.modules.find((m) => m.id === aliasId) ?? null;
   }

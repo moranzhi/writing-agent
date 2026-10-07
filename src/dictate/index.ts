@@ -1,4 +1,15 @@
-export { buildDictateSystemPrompt, DICTATE_SYSTEM_PROMPT } from "./prompt.js";
+export {
+  buildDictateReplyPrompt,
+  buildDictateSelectPrompt,
+  buildDictateSystemPrompt,
+  DICTATE_SYSTEM_PROMPT,
+  formatDictateRoundTail,
+} from "./prompt.js";
+export {
+  buildDictateMessages,
+  buildDictateContext,
+  extractDictateDialogue,
+} from "./context.js";
 export {
   CREATION_INTAKE_MODE_TAG,
   DICTATE_MODE_VALUE,
@@ -16,10 +27,6 @@ export {
   type DictateSelfScore,
   type DictateChatTurn,
 } from "./types.js";
-export {
-  buildDictateMessages,
-  extractDictateDialogue,
-} from "./context.js";
 export { DICTATE_TOOL_DEFINITIONS } from "./tools.js";
 export { runDictateTurn, type DictateTurnResult } from "./turn.js";
 export {

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { Blackboard } from "../src/blackboard/blackboard.js";
 import {
+  applyDictatePlayBind,
   buildDictateContextOrder,
   bindDictateProductsToPlaySpec,
   collectDictateBindProducts,
+  DICTATE_PLAY_BIND_INPUT_META,
   isDictateStyleBindTag,
 } from "../src/dictate/play-bind.js";
 import { DICTATE_ORDER_META_KEY } from "../src/dictate/types.js";
@@ -214,5 +216,52 @@ describe("dictate play-bind", () => {
     expect(refs).toContain("变量.当前");
     expect(refs).toContain("上下文.角色态度");
     expect(refs).not.toContain("设计.变量映射");
+  });
+
+  it("skips rebind on save when mounted products are unchanged", () => {
+    const board = new Blackboard();
+    board.write({ tag: "用户.需求", content: "雨夜", source: "test" });
+    const first = applyDictatePlayBind(board);
+    expect(first.skipped).toBe(false);
+    const orderUpdated = board.getLatestByTag("设计.上下文投影排序")?.updatedAt;
+    const workerUpdated = board.getLatestByTag("设计.worker集")?.updatedAt;
+    expect(board.getLatestByTag("设计.上下文投影排序")?.metadata?.[DICTATE_PLAY_BIND_INPUT_META]).toEqual(
+      board.getLatestByTag("设计.worker集")?.metadata?.[DICTATE_PLAY_BIND_INPUT_META],
+    );
+
+    const second = applyDictatePlayBind(board);
+    expect(second.skipped).toBe(true);
+    expect(second.changed).toBe(false);
+    expect(board.getLatestByTag("设计.上下文投影排序")?.updatedAt).toBe(orderUpdated);
+    expect(board.getLatestByTag("设计.worker集")?.updatedAt).toBe(workerUpdated);
+  });
+
+  it("keeps a hand-edited order until a mounted product changes", () => {
+    const board = new Blackboard();
+    board.write({ tag: "用户.需求", content: "雨夜", source: "test" });
+    applyDictatePlayBind(board);
+
+    const orderItem = board.getLatestByTag("设计.上下文投影排序")!;
+    const doc = JSON.parse(orderItem.content) as { brief?: string };
+    doc.brief = "手改排序";
+    const handEdited = JSON.stringify(doc, null, 2);
+    board.write({
+      tag: "设计.上下文投影排序",
+      content: handEdited,
+      source: "user",
+      metadata: orderItem.metadata,
+    });
+    const kept = applyDictatePlayBind(board);
+    expect(kept.skipped).toBe(true);
+    expect(board.getContentByTag("设计.上下文投影排序")).toBe(handEdited);
+
+    board.write({ tag: "设计.叙事指南", content: "短句", source: "test" });
+    const rebound = applyDictatePlayBind(board);
+    expect(rebound.skipped).toBe(false);
+    expect(rebound.boundTags).toContain("设计.叙事指南");
+    const rewritten = JSON.parse(
+      board.getContentByTag("设计.上下文投影排序") ?? "{}",
+    ) as { brief?: string };
+    expect(rewritten.brief).not.toBe("手改排序");
   });
 });
