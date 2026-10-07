@@ -30,11 +30,48 @@ html[data-embed="1"] .st-main {
   overflow: hidden;
 }
 
-.mod-pack {
+.mod-count {
   margin: 0 8px 10px;
   font-size: 12px;
   color: var(--st-muted);
-  word-break: break-all;
+}
+
+.mod-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 12px;
+}
+
+.mod-group-label {
+  margin: 8px 8px 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--st-faint);
+}
+
+.mod-group-hint {
+  margin: 2px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--st-faint);
+}
+
+.mod-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.mod-tag {
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--st-border);
+  color: var(--st-muted);
 }
 
 .mod-filter {
@@ -76,6 +113,15 @@ html[data-embed="1"] .st-main {
   color: var(--st-accent);
   background: var(--st-accent-soft);
   border-color: transparent;
+}
+
+.mod-item:focus-visible,
+.mod-chip:focus-visible,
+.mod-raw-toggle:focus-visible,
+.mod-section-nav a:focus-visible,
+.mod-filter input:focus-visible {
+  outline: 2px solid var(--st-accent);
+  outline-offset: 2px;
 }
 
 .mod-list {
@@ -192,6 +238,26 @@ html[data-embed="1"] .st-main {
 
 .mod-read > .st-status {
   margin: 16px 28px 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.mod-meta-row + .mod-meta-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--st-border);
+}
+
+.mod-meta-row strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.mod-meta-row p {
+  margin: 0;
+  line-height: 1.5;
 }
 
 .mod-read > .st-body {

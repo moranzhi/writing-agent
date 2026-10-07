@@ -230,6 +230,54 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/listen/consume") {
+        const body = JSON.parse(await readBody(req)) as {
+          consumedChars?: number;
+        };
+        const n = Number(body.consumedChars);
+        if (!Number.isFinite(n) || n < 0) {
+          json(res, 400, { error: "需要 consumedChars ≥ 0" });
+          return;
+        }
+        try {
+          const view = sessionManager.markListenSerialConsumed(sessionId, n);
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "进度更新失败",
+          });
+        }
+        return;
+      }
+
+      if (req.method === "GET" && sub === "/listen/tts") {
+        const sectionId = (url.searchParams.get("sectionId") ?? "").trim();
+        if (!sectionId) {
+          json(res, 400, { error: "需要 sectionId" });
+          return;
+        }
+        try {
+          const audio = await sessionManager.synthesizeListenSection(
+            sessionId,
+            sectionId,
+          );
+          res.writeHead(200, {
+            "Content-Type": audio.contentType,
+            "Content-Length": audio.audio.length,
+            "Cache-Control": audio.cached ? "private, max-age=86400" : "no-store",
+            "X-TTS-Provider": audio.provider,
+            "X-TTS-Voice": audio.voice,
+            "X-TTS-Cached": audio.cached ? "1" : "0",
+          });
+          res.end(audio.audio);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "语音合成失败",
+          });
+        }
+        return;
+      }
+
       if (req.method === "POST" && sub === "/answers") {
         const body = JSON.parse(await readBody(req)) as {
           answers?: Array<{

@@ -35,6 +35,11 @@ import {
   isMarkdownRenderEnabled,
 } from "./markdown.js";
 import {
+  applyPlayAuxLlmBubbles,
+  initPlayAuxLlmBubbles,
+  isPlayAuxLlmBubblesEnabled,
+} from "./feed-prefs.js";
+import {
   filterUsedApiProfiles,
   forgetApiProfileUsage,
   loadApiProfileUsage,
@@ -64,7 +69,35 @@ let pendingComposerDraft = "";
 let pendingComposerDraftSeq = 0;
 /** 正在提交底栏：重绘时不要把已捕获的正文再塞进 pending */
 let skipComposerStash = false;
+/** @type {{ level: "root" } | { level: "mode"; mode: string } | { level: "book"; mode: string; bookId: string }} */
 let sidebarNav = { level: "root" };
+
+const CREATION_MODE_FOLDERS = [
+  { id: "dictate", name: "对话落盘" },
+  { id: "listen_serial", name: "听书连载" },
+  { id: "recipe", name: "工序编排" },
+];
+
+function bookCreationMode(book) {
+  const m = book?.creationMode;
+  if (m === "listen_serial" || m === "recipe" || m === "dictate") return m;
+  return "dictate";
+}
+
+function creationModeFolderLabel(modeId) {
+  return CREATION_MODE_FOLDERS.find((f) => f.id === modeId)?.name ?? modeId;
+}
+
+function booksInCreationMode(modeId) {
+  return books.filter((b) => bookCreationMode(b) === modeId);
+}
+
+function visibleCreationModeFolders() {
+  return CREATION_MODE_FOLDERS.filter((f) => {
+    if (f.id === "recipe") return booksInCreationMode("recipe").length > 0;
+    return true;
+  });
+}
 let bookSelectMode = false;
 let selectedBookIds = new Set();
 let activePlaySaveId = null;
@@ -128,7 +161,11 @@ function rememberWorkspaceSession() {
         mode,
         playSaveId:
           mode === "play" ? activePlaySaveId || "play-working" : null,
-        navLevel: sidebarNav.level === "book" ? "book" : "root",
+        navLevel: sidebarNav.level,
+        creationMode:
+          sidebarNav.level === "mode" || sidebarNav.level === "book"
+            ? sidebarNav.mode
+            : undefined,
       }),
     );
   } catch {
@@ -796,6 +833,21 @@ async function loadPersonas() {
   }
 }
 
+/** 换/改用户角色后重拉会话（服务端已按新 @玩家 重展开开场白） */
+async function refreshSessionAfterPersonaChange() {
+  if (!sessionId) {
+    renderPersonaPicker();
+    return;
+  }
+  try {
+    const view = await api(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    renderSession(view);
+  } catch (err) {
+    console.error(err);
+    renderPersonaPicker();
+  }
+}
+
 function keepPersonaMenuOpen() {
   const menu = $("persona-menu");
   if (menu) menu.open = true;
@@ -848,6 +900,7 @@ function wirePersonaMenu() {
           });
           personaEditingId = null;
           await loadPersonas();
+          await refreshSessionAfterPersonaChange();
           keepPersonaMenuOpen();
           return;
         }
@@ -865,6 +918,7 @@ function wirePersonaMenu() {
           });
           personaEditingId = null;
           await loadPersonas();
+          await refreshSessionAfterPersonaChange();
           keepPersonaMenuOpen();
           return;
         }
@@ -875,6 +929,7 @@ function wirePersonaMenu() {
           });
           personaEditingId = null;
           await loadPersonas();
+          await refreshSessionAfterPersonaChange();
           keepPersonaMenuOpen();
           return;
         }
@@ -905,10 +960,7 @@ function wirePersonaMenu() {
         }
         personaEditingId = null;
         if (sessionId) {
-          const view = await api(
-            `/api/sessions/${encodeURIComponent(sessionId)}`,
-          );
-          renderSession(view);
+          await refreshSessionAfterPersonaChange();
         } else {
           renderPersonaPicker();
         }
@@ -1086,6 +1138,7 @@ function composerApiSectionHtml() {
 
 function composerMoreMenuHtml() {
   const on = isMarkdownRenderEnabled();
+  const auxOn = isPlayAuxLlmBubblesEnabled();
   const wasOpen = $("composer-more-menu")?.hasAttribute("open");
   const title = composerMoreMenuTitle();
   const showClearDictate =
@@ -1124,6 +1177,19 @@ function composerMoreMenuHtml() {
         <span class="more-theme-copy">
           <span class="more-theme-name">Markdown 渲染</span>
           <span class="more-theme-desc">消息与产物按 Markdown 显示</span>
+        </span>
+        <span class="more-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <button
+        type="button"
+        class="more-menu-item more-toggle-item${auxOn ? " is-active" : ""}"
+        data-toggle-play-aux-llm
+        role="menuitemcheckbox"
+        aria-checked="${auxOn ? "true" : "false"}"
+      >
+        <span class="more-theme-copy">
+          <span class="more-theme-name">非主世界层气泡</span>
+          <span class="more-theme-desc">旁观等 LLM 产出，便于查上下文与原文</span>
         </span>
         <span class="more-toggle-mark" aria-hidden="true"></span>
       </button>
@@ -1235,6 +1301,11 @@ function syncMarkdownMenuUi() {
   document.querySelectorAll("[data-toggle-markdown]").forEach((btn) => {
     btn.classList.toggle("is-active", mdOn);
     btn.setAttribute("aria-checked", mdOn ? "true" : "false");
+  });
+  const auxOn = isPlayAuxLlmBubblesEnabled();
+  document.querySelectorAll("[data-toggle-play-aux-llm]").forEach((btn) => {
+    btn.classList.toggle("is-active", auxOn);
+    btn.setAttribute("aria-checked", auxOn ? "true" : "false");
   });
 }
 
@@ -1878,7 +1949,8 @@ async function fetchPlaySavesForBook(bookId, force = false) {
 }
 
 function setBookSelectMode(on, { keepSelection = false } = {}) {
-  if (on && sidebarNav.level !== "root") return;
+  // 多选只在「方式夹内的作品列表」
+  if (on && sidebarNav.level !== "mode") return;
   if (on) hideEnterPicker();
   bookSelectMode = on;
   if (!on) selectedBookIds = new Set();
@@ -2076,6 +2148,9 @@ function getNavBook() {
 }
 
 function catalogBookMeta(book) {
+  if (bookCreationMode(book) === "listen_serial") {
+    return "听书";
+  }
   const saves = playSavesByBook.get(book.id);
   if (saves === undefined) {
     void fetchPlaySavesForBook(book.id);
@@ -2156,7 +2231,14 @@ function renderPathBar() {
   if (!bar) return;
   bar.innerHTML = "";
   const book = getNavBook();
-  const inBook = Boolean(book);
+  const modeId =
+    sidebarNav.level === "mode" || sidebarNav.level === "book"
+      ? sidebarNav.mode
+      : book
+        ? bookCreationMode(book)
+        : null;
+  const inMode = Boolean(modeId);
+  const inBook = Boolean(book) && sidebarNav.level === "book";
 
   $("rail-tabs")?.toggleAttribute("hidden", !(isWorkspaceNav() || Boolean(activeBookId)));
 
@@ -2165,12 +2247,24 @@ function renderPathBar() {
   list.appendChild(
     pathItem({
       label: "目录",
-      title: "作品目录",
-      current: !inBook,
+      title: "创作方式",
+      current: sidebarNav.level === "root",
       onClick: () => showCatalog({ closeSession: false }),
     }),
   );
-  if (inBook) {
+  if (inMode && modeId) {
+    const modeLabel = creationModeFolderLabel(modeId);
+    list.appendChild(pathSep());
+    list.appendChild(
+      pathItem({
+        label: modeLabel,
+        title: modeLabel,
+        current: sidebarNav.level === "mode",
+        onClick: () => navigateToCreationMode(modeId, { closeSession: false }),
+      }),
+    );
+  }
+  if (inBook && book) {
     const bookLabel = book.title?.trim() || "作品";
     list.appendChild(pathSep());
     list.appendChild(
@@ -2184,10 +2278,30 @@ function renderPathBar() {
   bar.appendChild(list);
 }
 
+function navigateToCreationMode(modeId, { closeSession = false } = {}) {
+  if (!modeId) return;
+  hideEnterPicker();
+  if (closeSession) {
+    beginUiRequest();
+    stopLivePoll();
+    closeWorkspace();
+  }
+  sidebarNav = { level: "mode", mode: modeId };
+  document.body.dataset.navLevel = "mode";
+  bookSelectMode = false;
+  selectedBookIds = new Set();
+  setRailTab("books", { expand: true });
+  renderPathBar();
+  renderBookList();
+  if (!closeSession) rememberWorkspaceSession();
+}
+
 function navigateToBook(bookId) {
   if (!bookId) return;
   hideEnterPicker();
-  sidebarNav = { level: "book", bookId };
+  const book = books.find((b) => b.id === bookId);
+  const mode = bookCreationMode(book);
+  sidebarNav = { level: "book", mode, bookId };
   document.body.dataset.navLevel = "book";
   bookSelectMode = false;
   selectedBookIds = new Set();
@@ -2222,6 +2336,7 @@ function renderExplorerRow({
   actionClass,
   onClick,
   onDelete,
+  onAdd,
   onRename,
   onContextMenu,
   child,
@@ -2248,20 +2363,26 @@ function renderExplorerRow({
   if (typeof ariaExpanded === "boolean") {
     row.setAttribute("aria-expanded", ariaExpanded ? "true" : "false");
   }
+  const addHtml = onAdd
+    ? `<span class="explorer-add" role="button" tabindex="-1" title="${esc(onAdd.title || "新建")}" aria-label="${esc(onAdd.label || "新建")}">+</span>`
+    : "";
+  const delHtml = onDelete
+    ? `<span class="explorer-del" role="button" tabindex="-1" aria-label="删除">×</span>`
+    : "";
   row.innerHTML = `
     ${twistie ? `<span class="explorer-twist" data-twist>${expanded ? "▾" : "▸"}</span>` : ""}
     <span class="explorer-main">
       <span class="explorer-name" title="${esc(name)}">${esc(name)}</span>
       ${meta ? `<span class="explorer-meta" title="${esc(meta)}">${esc(meta)}</span>` : ""}
     </span>
-    ${onDelete ? `<span class="explorer-del" role="button" tabindex="-1" aria-label="删除">×</span>` : ""}`;
+    ${addHtml || delHtml ? `<span class="explorer-actions">${addHtml}${delHtml}</span>` : ""}`;
   row.addEventListener("click", (e) => {
-    if (e.target.closest(".explorer-del") || e.target.closest("[data-twist]")) return;
+    if (e.target.closest(".explorer-actions") || e.target.closest("[data-twist]")) return;
     onClick?.(e);
   });
   if (onRename) {
     row.addEventListener("dblclick", (e) => {
-      if (e.target.closest(".explorer-del") || e.target.closest("[data-twist]")) return;
+      if (e.target.closest(".explorer-actions") || e.target.closest("[data-twist]")) return;
       e.preventDefault();
       onRename();
     });
@@ -2269,6 +2390,10 @@ function renderExplorerRow({
   row.querySelector("[data-twist]")?.addEventListener("click", (e) => {
     e.stopPropagation();
     (onTwistie || onClick)?.();
+  });
+  row.querySelector(".explorer-add")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onAdd?.onClick?.();
   });
   row.querySelector(".explorer-del")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2337,17 +2462,6 @@ function renderSpecChildren(book, product, list) {
   }
 }
 
-function appendNewPlayFromSnapshot(book, list, instanceId) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "explorer-add child";
-  btn.textContent = "+";
-  btn.title = "从这份创作快照新开一局";
-  btn.setAttribute("aria-label", "新开一局");
-  btn.addEventListener("click", () => void startNewPlayForBook(book.id, instanceId));
-  list.appendChild(btn);
-}
-
 function appendCurrentDesignRow(book, list) {
   const live =
     book.id === activeBookId && Boolean(sessionId) && !isPlayNow();
@@ -2404,12 +2518,16 @@ function renderBookContents(book, list) {
         onTwistie: () => toggleSpecExpanded(book.id, product.id),
         onRename: () => void renamePlaySave(book.id, product.id, product.label),
         onDelete: () => void deletePlaySave(book.id, product.id, product.label, "规格"),
+        onAdd: {
+          label: "新开一局",
+          title: "从这份创作快照新开一局",
+          onClick: () => void startNewPlayForBook(book.id, product.id),
+        },
         onContextMenu: (e) =>
           showSaveMenu(book.id, product.id, product.label, e.clientX, e.clientY),
       }),
     );
     if (expanded) renderSpecChildren(book, product, list);
-    appendNewPlayFromSnapshot(book, list, product.id);
   }
 }
 
@@ -2417,11 +2535,6 @@ function renderBookList() {
   const list = $("book-list");
   if (!list) return;
   renderPathBar();
-  if (!books.length) {
-    list.innerHTML = `<p class="sidebar-empty">暂无作品<br><button type="button" class="btn-sm" id="btn-new-inline">+ 新建</button></p>`;
-    $("btn-new-inline")?.addEventListener("click", openNewBookDialog);
-    return;
-  }
   list.innerHTML = "";
 
   if (sidebarNav.level === "book") {
@@ -2430,13 +2543,46 @@ function renderBookList() {
       renderBookContents(book, list);
       return;
     }
-    sidebarNav = { level: "root" };
-    document.body.dataset.navLevel = "root";
+    const fallbackMode = sidebarNav.mode || "dictate";
+    sidebarNav = { level: "mode", mode: fallbackMode };
+    document.body.dataset.navLevel = "mode";
     renderPathBar();
   }
 
-  for (const book of books) {
+  if (sidebarNav.level === "root") {
+    for (const folder of visibleCreationModeFolders()) {
+      const count = booksInCreationMode(folder.id).length;
+      list.appendChild(
+        renderExplorerRow({
+          name: folder.name,
+          meta: count ? `${count} 部` : "空",
+          active: false,
+          selected: false,
+          actionClass: "explorer-folder",
+          onClick: () => navigateToCreationMode(folder.id),
+        }),
+      );
+    }
+    return;
+  }
+
+  // mode：该方式下的作品
+  const modeId = sidebarNav.mode || "dictate";
+  const modeBooks = booksInCreationMode(modeId);
+  if (!modeBooks.length) {
+    const empty = document.createElement("p");
+    empty.className = "sidebar-empty";
+    empty.innerHTML = `此方式下暂无作品<br><button type="button" class="btn-sm" id="btn-new-inline">+ 新建</button>`;
+    list.appendChild(empty);
+    $("btn-new-inline")?.addEventListener("click", () => {
+      openNewBookDialog({ presetMode: modeId === "recipe" ? "dictate" : modeId });
+    });
+    return;
+  }
+
+  for (const book of modeBooks) {
     const selected = selectedBookIds.has(book.id);
+    const listen = bookCreationMode(book) === "listen_serial";
     list.appendChild(
       renderExplorerRow({
         name: book.title,
@@ -2451,6 +2597,10 @@ function renderBookList() {
             return;
           }
           e.stopPropagation();
+          if (listen) {
+            void openBook(book.id);
+            return;
+          }
           if (enterPickerBookId === book.id) {
             hideEnterPicker();
             return;
@@ -2460,7 +2610,7 @@ function renderBookList() {
       }),
     );
   }
-  if (enterPickerBookId && sidebarNav.level === "root") {
+  if (enterPickerBookId && sidebarNav.level === "mode") {
     const row = list.querySelector(`[data-book-id="${enterPickerBookId}"]`);
     if (row) showEnterPicker(enterPickerBookId, row);
     else hideEnterPicker();
@@ -2503,6 +2653,7 @@ async function duplicateBookById(bookId, title) {
         title: data.book.title,
         activeSkillId: data.book.activeSkillId ?? data.book.orchestratorId,
         activeSkillName: data.book.activeSkillName ?? data.book.orchestratorName,
+        creationMode: bookCreationMode(data.book),
         preview: data.book.preview,
         updatedAt: data.book.updatedAt,
         orchestratorId: data.book.orchestratorId,
@@ -2572,7 +2723,7 @@ function setupBookBoxSelect() {
   };
 
   list.addEventListener("mousedown", (e) => {
-    if (sidebarNav.level !== "root" || e.button !== 0) return;
+    if (sidebarNav.level !== "mode" || e.button !== 0) return;
     if (e.target.closest("#book-action-menu")) return;
     if (e.target.closest(".explorer-row")) return;
     dragging = true;
@@ -2855,7 +3006,7 @@ function renderEmpty() {
   document.body.dataset.navLevel = "root";
   bookSelectMode = false;
   selectedBookIds = new Set();
-  closeWorkspace({ emptyCopy: "点击左侧 + 新建作品" });
+  closeWorkspace({ emptyCopy: "先选左侧创作方式，再新建作品" });
   renderBookList();
 }
 
@@ -3103,6 +3254,10 @@ function renderSession(view, loading = false) {
       const idx = lastView?.playAux?.selectedOpeningIndex ?? 0;
       void selectPlayOpening(idx, false);
     },
+    getListenSerial: () => lastView?.listenSerial,
+    onListenConsume: (consumedChars) => void markListenConsumed(consumedChars),
+    onListenPlay: (sectionId, opts) => void playListenSection(sectionId, opts),
+    onListenStop: () => stopListenPlayback(),
   });
   renderComposer(view, loading);
   rememberWorkspaceSession();
@@ -3487,14 +3642,53 @@ async function loadBooks() {
   renderBookList();
 }
 
-function openNewBookDialog() {
+function resolveNewBookCreationMode(opts = {}) {
+  if (opts.presetMode === "listen_serial" || opts.presetMode === "dictate") {
+    return opts.presetMode;
+  }
+  if (sidebarNav.level === "mode" || sidebarNav.level === "book") {
+    const m = sidebarNav.mode;
+    if (m === "listen_serial") return "listen_serial";
+    if (m === "dictate" || m === "recipe") return "dictate";
+  }
+  return null;
+}
+
+function openNewBookDialog(opts = {}) {
   $("input-book-title").value = "";
+  const locked = resolveNewBookCreationMode(opts);
+  const modeField = $("field-creation-mode");
+  const modeSel = $("input-creation-mode");
+  const lockedInput = $("input-creation-mode-locked");
+  const desc = $("dialog-new-book-desc");
+
+  if (locked) {
+    if (modeField) modeField.hidden = true;
+    if (lockedInput) lockedInput.value = locked;
+    if (modeSel) modeSel.value = locked;
+    if (desc) {
+      desc.textContent = `将创建到「${creationModeFolderLabel(locked)}」，填写名称即可。`;
+    }
+  } else {
+    // 仍在目录根：须先选方式，或临时露出下拉
+    if (modeField) modeField.hidden = false;
+    if (lockedInput) lockedInput.value = "";
+    if (modeSel) modeSel.value = "dictate";
+    if (desc) desc.textContent = "先选创作方式，再填写名称。";
+  }
+
   $("dialog-new-book").showModal();
   $("input-book-title").focus();
 }
 
 async function createBook() {
   const title = $("input-book-title").value.trim() || "未命名作品";
+  const locked = ($("input-creation-mode-locked")?.value || "").trim();
+  const creationMode =
+    locked === "listen_serial" ||
+    $("input-creation-mode")?.value === "listen_serial"
+      ? "listen_serial"
+      : "dictate";
   $("btn-create-book").disabled = true;
   try {
     const data = await api("/api/books", {
@@ -3502,15 +3696,20 @@ async function createBook() {
       body: JSON.stringify({
         title,
         orchestratorId: "world-simulator",
-        creationMode: "dictate",
+        creationMode,
       }),
     });
     $("dialog-new-book").close();
     if (data.book) books.unshift(data.book);
     activeBookId = data.book?.id;
-    sidebarNav = { level: "root" };
-    document.body.dataset.navLevel = "root";
+    sidebarNav = {
+      level: "book",
+      mode: creationMode,
+      bookId: data.book?.id,
+    };
+    document.body.dataset.navLevel = "book";
     renderSession(data.session, false);
+    renderBookList();
   } catch (err) {
     alert(err.message);
   } finally {
@@ -3520,6 +3719,7 @@ async function createBook() {
 
 async function openBook(bookId) {
   const seq = beginUiRequest();
+  navigateToBook(bookId);
   activeBookId = bookId;
   if (lastView?.bookId === bookId) renderSession(lastView, true);
   try {
@@ -3549,8 +3749,11 @@ async function deleteBookById(bookId) {
     if (activeBookId === bookId) activePlaySaveId = null;
     hideBookMenu();
     const wasHere = activeBookId === bookId || sidebarNav.bookId === bookId;
+    const mode = bookCreationMode(book);
     if (wasHere) {
-      if (books.length) showCatalog();
+      if (booksInCreationMode(mode).length) {
+        navigateToCreationMode(mode, { closeSession: true });
+      } else if (books.length) showCatalog();
       else renderEmpty();
     } else {
       renderBookList();
@@ -3584,6 +3787,113 @@ function defaultArchiveLabel() {
     formatSaveWhen(new Date().toISOString()) ||
     new Date().toLocaleString("zh-CN")
   );
+}
+
+async function markListenConsumed(consumedChars) {
+  if (!sessionId) return;
+  try {
+    const view = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/listen/consume`,
+      {
+        method: "POST",
+        body: JSON.stringify({ consumedChars }),
+      },
+    );
+    renderSession(view, false);
+  } catch (err) {
+    alert(err.message || "更新阅读进度失败");
+  }
+}
+
+/** @type {HTMLAudioElement | null} */
+let listenAudioEl = null;
+let listenPlayToken = 0;
+
+function stopListenPlayback() {
+  listenPlayToken += 1;
+  if (listenAudioEl) {
+    listenAudioEl.pause();
+    listenAudioEl.removeAttribute("src");
+    listenAudioEl.load();
+    listenAudioEl = null;
+  }
+  document
+    .querySelectorAll(".listen-section.is-playing")
+    .forEach((el) => el.classList.remove("is-playing"));
+}
+
+function listenTtsUrl(sectionId) {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/listen/tts?sectionId=${encodeURIComponent(sectionId)}`;
+}
+
+function markListenSectionPlaying(sectionId) {
+  document
+    .querySelectorAll(".listen-section.is-playing")
+    .forEach((el) => el.classList.remove("is-playing"));
+  const el = document.querySelector(
+    `.listen-section[data-section-id="${CSS.escape(sectionId)}"]`,
+  );
+  if (el) {
+    el.classList.add("is-playing");
+    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+/**
+ * @param {string} sectionId
+ * @param {{ continuous?: boolean }} [opts]
+ */
+async function playListenSection(sectionId, opts = {}) {
+  if (!sessionId || !sectionId) return;
+  const continuous = Boolean(opts.continuous);
+  stopListenPlayback();
+  const token = listenPlayToken;
+
+  const sections = lastView?.listenSerial?.sections ?? [];
+  let index = sections.findIndex((s) => s.id === sectionId);
+  if (index < 0) {
+    alert("未找到该节");
+    return;
+  }
+
+  const playOne = (id) =>
+    new Promise((resolve, reject) => {
+      if (token !== listenPlayToken) {
+        resolve("stopped");
+        return;
+      }
+      markListenSectionPlaying(id);
+      const audio = new Audio(listenTtsUrl(id));
+      listenAudioEl = audio;
+      audio.onended = () => resolve("ended");
+      audio.onerror = () => reject(new Error("播放失败（合成或网络错误）"));
+      void audio.play().catch((err) => reject(err));
+    });
+
+  try {
+    while (index >= 0 && index < sections.length) {
+      if (token !== listenPlayToken) return;
+      const cur = sections[index];
+      const result = await playOne(cur.id);
+      if (result !== "ended" || token !== listenPlayToken) return;
+
+      // 播完一节：把消费指针推到本节末尾
+      let endChars = 0;
+      for (let i = 0; i <= index; i += 1) {
+        endChars += String(sections[i]?.text || "").length;
+      }
+      await markListenConsumed(endChars);
+
+      if (!continuous) return;
+      index += 1;
+    }
+  } catch (err) {
+    if (token === listenPlayToken) {
+      alert(err?.message || "朗读失败");
+    }
+  } finally {
+    if (token === listenPlayToken) stopListenPlayback();
+  }
 }
 
 async function saveCurrentInstance() {
@@ -3629,6 +3939,49 @@ async function showStepArtifactDialog(stepId, name) {
   }
 }
 
+function firstCacheBreak(prev, next) {
+  const shared = Math.min(prev.length, next.length);
+  for (let i = 0; i < shared; i += 1) {
+    if (prev[i]?.tag !== next[i]?.tag || prev[i]?.hash !== next[i]?.hash) return i;
+  }
+  if (next.length > prev.length) return prev.length;
+  return -1;
+}
+
+function formatOutline(outline, prev, index, total) {
+  const segments = outline.segments || [];
+  const breakAt = prev ? firstCacheBreak(prev, segments) : null;
+  const lines = segments.map((seg, i) => {
+    let mark = "    ";
+    if (breakAt != null) {
+      if (breakAt < 0 || i < breakAt) mark = "已接上";
+      else if (i === breakAt) mark = "断开  ";
+      else mark = "之后  ";
+    }
+    const tag = seg.tag === "工具" ? `${seg.tag}〔tools 字段，不在消息正文〕` : seg.tag;
+    return `${String(i + 1).padStart(2, "0")}  ${mark}  ${tag}  ${Number(seg.chars || 0).toLocaleString("zh-CN")}字  ${seg.hash}`;
+  });
+  let note = "这条消息里没有更早的请求可比。跨轮断点在用量页，按同一会话往上一条看。";
+  if (breakAt != null && breakAt < 0) {
+    note = "与上一次请求的前缀整段相同。";
+  } else if (breakAt != null) {
+    const tag = segments[breakAt]?.tag || "（上一条更长，本条到此结束）";
+    note = `前 ${breakAt} 段与上一次请求相同，从「${tag}」起前缀不再一致。`;
+  }
+  const cached = Number(outline.cachedTokens ?? 0);
+  if (breakAt != null && cached === 0 && (breakAt < 0 || breakAt > 0)) {
+    note += " 账单缓存是 0：前面的标签对得上，但上游没有算进缓存。";
+  }
+  const step = outline.step ? ` · ${outline.step}` : "";
+  return [
+    `======== ${index}/${total}${step} · ${outline.caller || "unknown"} · ${outline.model || "model?"} ========`,
+    `prompt ${outline.promptTokens ?? "—"} · 缓存 ${outline.cachedTokens ?? "—"} · 未缓存 ${outline.cacheMissTokens ?? "—"} · 写出 ${outline.completionTokens ?? "—"}`,
+    note,
+    "",
+    ...lines,
+  ].join("\n");
+}
+
 function showContextTraceDialog(messageId) {
   const msg = (lastView?.messages ?? []).find((m) => m.id === messageId);
   const review = lastView?.reviewArtifact;
@@ -3642,59 +3995,63 @@ function showContextTraceDialog(messageId) {
   const meta = $("context-trace-meta");
   const body = $("context-trace-body");
   if (!dlg || !meta || !body) return;
-  if (!trace?.messages?.length) {
-    alert("这条消息没有保存请求上下文（可能已被修剪，或当时未开启保存）");
+  const subject = msg || review || {};
+  const stored = msg?.requestOutlines?.length
+    ? msg.requestOutlines
+    : trace?.segments?.length
+      ? [{
+          at: trace.createdAt,
+          caller: trace.caller,
+          model: trace.model,
+          segments: trace.segments,
+          promptTokens: subject.tokenUsage?.promptTokens,
+          completionTokens: subject.tokenUsage?.completionTokens,
+          cachedTokens: subject.tokenUsage?.cachedTokens,
+          cacheMissTokens: subject.tokenUsage?.cacheMissTokens,
+        }]
+      : [];
+  const full = formatTraceMessages(trace);
+  if (!stored.length && !full) {
+    alert("这条消息没有保存请求上下文");
     return;
   }
-  const subject = msg || review || {};
-  const requestChars =
-    trace.charCount ??
-    trace.messages.reduce((sum, item) => sum + String(item.content ?? "").length, 0);
-  const usage = subject.tokenUsage;
-  const responseBody = String(subject.body ?? subject.text ?? "").trim();
-  const thinking = String(subject.thinking ?? "").trim();
-  const requestLog = trace.messages.map((item, index) => {
-    const content = String(item.content ?? "");
-    const part = String(index + 1).padStart(2, "0");
-    return `======== REQUEST ${part}/${trace.messages.length} · ${item.role} · ${content.length.toLocaleString("zh-CN")} chars ========\n${content}`;
+  let prev = null;
+  const blocks = stored.map((outline, index) => {
+    const text = formatOutline(outline, prev, index + 1, stored.length);
+    prev = outline.segments || [];
+    return text;
   });
-  const responseLog = [
-    thinking
-      ? `======== RESPONSE THINKING · ${thinking.length.toLocaleString("zh-CN")} chars ========\n${thinking}`
-      : "",
-    responseBody
-      ? `======== RESPONSE BODY · ${responseBody.length.toLocaleString("zh-CN")} chars ========\n${responseBody}`
-      : "",
-  ].filter(Boolean);
-  const tokenMeta = usage?.totalTokens
-    ? ` · ${Number(usage.totalTokens).toLocaleString("zh-CN")} tokens`
-    : "";
+  const calls = stored.length;
+  const segments = stored.reduce((sum, item) => sum + (item.segments?.length || 0), 0);
+  const title = $("context-trace-title");
+  if (title) title.textContent = full ? "完整上下文" : "请求分段";
   meta.textContent = [
     subject.kind || "message",
-    subject.actor || trace.caller || "unknown",
-    trace.model || usage?.model || "model?",
-    `${trace.messages.length} 段请求`,
-    `${(requestChars / 1024).toFixed(1)} KB`,
-  ].join(" · ") + tokenMeta;
-  body.textContent = [
-    `MESSAGE  ${messageId}`,
-    `KIND     ${subject.kind || "unknown"}`,
-    `ACTOR    ${subject.actor || "-"}`,
-    `CALLER   ${trace.caller || usage?.caller || "unknown"}`,
-    `MODEL    ${trace.model || usage?.model || "model?"}`,
-    `CREATED  ${trace.createdAt || subject.createdAt || "-"}`,
-    `REQUEST  ${trace.messages.length} messages / ${requestChars.toLocaleString("zh-CN")} chars`,
-    trace.generation && Object.keys(trace.generation).length
-      ? `GEN      ${JSON.stringify(trace.generation)}`
-      : "GEN      (none)",
-    usage?.totalTokens
-      ? `TOKENS   total=${usage.totalTokens} cached=${usage.cachedTokens ?? 0} miss=${usage.cacheMissTokens ?? 0}`
-      : "TOKENS   not recorded",
-    "",
-    ...requestLog,
-    ...(responseLog.length ? ["", ...responseLog] : []),
-  ].join("\n\n");
+    subject.actor || stored[0]?.caller || trace?.caller || "unknown",
+    `${calls} 次请求`,
+    `${segments} 段`,
+    full ? "下方是发给模型的消息" : "这次只留下分段标签",
+  ].join(" · ");
+  const outline = $("context-trace-outline");
+  const messages = $("context-trace-messages");
+  if (outline) outline.textContent = blocks.join("\n\n");
+  body.textContent = full;
+  if (messages) messages.hidden = !full;
   dlg.showModal();
+  const scroll = $("context-trace-scroll");
+  if (scroll) scroll.scrollTop = 0;
+}
+
+function formatTraceMessages(trace) {
+  const messages = trace?.messages;
+  if (!Array.isArray(messages) || !messages.length) return "";
+  return messages
+    .map((message, index) => {
+      const role = message?.role || "message";
+      const content = typeof message?.content === "string" ? message.content : "";
+      return `----- ${index + 1}. ${role} -----\n${content}`;
+    })
+    .join("\n\n");
 }
 
 let comparePickerMessageId = null;
@@ -3896,9 +4253,14 @@ $("compare-results")?.addEventListener("click", (e) => {
 });
 
 $("btn-copy-context")?.addEventListener("click", async () => {
+  const outline = $("context-trace-outline")?.textContent ?? "";
   const body = $("context-trace-body")?.textContent ?? "";
+  const text = [
+    outline ? `【系统信息 · 对照给你看，不发给模型】\n${outline}` : "",
+    body ? `【发给模型的消息】\n${body}` : "",
+  ].filter(Boolean).join("\n\n");
   try {
-    await navigator.clipboard.writeText(body);
+    await navigator.clipboard.writeText(text);
   } catch {
     alert("复制失败");
   }
@@ -3915,7 +4277,14 @@ $("lifecycle-toggle")?.addEventListener("click", (e) => {
   if (stage === "play") enterPlayNow();
   else if (stage === "design") void setLifecycle("design");
 });
-$("btn-new-book")?.addEventListener("click", openNewBookDialog);
+$("btn-new-book")?.addEventListener("click", () => {
+  const locked = resolveNewBookCreationMode();
+  if (!locked && sidebarNav.level === "root") {
+    alert("请先进入「对话落盘」或「听书连载」文件夹，再新建作品。");
+    return;
+  }
+  openNewBookDialog(locked ? { presetMode: locked } : {});
+});
 $("btn-cancel-new")?.addEventListener("click", () => $("dialog-new-book").close());
 $("book-enter-pop")?.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -4124,6 +4493,14 @@ $("composer")?.addEventListener("click", (e) => {
     if (lastView && sessionId) renderSession(lastView, false);
     return;
   }
+  const auxBtn = e.target.closest("[data-toggle-play-aux-llm]");
+  if (auxBtn && menu.contains(auxBtn)) {
+    e.preventDefault();
+    applyPlayAuxLlmBubbles(!isPlayAuxLlmBubblesEnabled());
+    syncMarkdownMenuUi();
+    if (lastView && sessionId) renderSession(lastView, false);
+    return;
+  }
   const reloadBtn = e.target.closest("[data-reload-profiles]");
   if (reloadBtn && menu.contains(reloadBtn)) {
     e.preventDefault();
@@ -4197,11 +4574,11 @@ async function restoreWorkspaceSession() {
       : null;
   if (saved.navLevel === "book") {
     navigateToBook(bookId);
+  } else if (saved.navLevel === "mode" && saved.creationMode) {
+    navigateToCreationMode(saved.creationMode, { closeSession: false });
   } else {
-    sidebarNav = { level: "root" };
-    document.body.dataset.navLevel = "root";
-    renderPathBar();
-    renderBookList();
+    const mode = bookCreationMode(books.find((b) => b.id === bookId));
+    navigateToCreationMode(mode, { closeSession: false });
   }
 
   if (saved.sessionId) {
@@ -4243,6 +4620,7 @@ async function init() {
   initColorTheme();
   initUiFontScale();
   initMarkdownRender();
+  initPlayAuxLlmBubbles();
   syncThemeMenuUi();
   try {
     await Promise.all([loadBooks(), loadPersonas(), loadApiProfiles()]);
@@ -4251,7 +4629,6 @@ async function init() {
       if (!restored) showCatalog();
     } else {
       renderEmpty();
-      openNewBookDialog();
     }
   } catch {
     $("status-text").textContent = "加载失败";

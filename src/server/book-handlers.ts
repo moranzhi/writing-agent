@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listSkills } from "../skills/loader.js";
+import type { ModuleCatalogEntry } from "../skills/creation-flow.js";
 import { createBook, deleteBook, duplicateBook, getBook, listBooks, updateBook } from "../book/store.js";
 import { sessionManager } from "./session-manager.js";
 
@@ -39,17 +40,64 @@ function moduleStatusFromSections(
   return depth >= 2 ? "ready" : "partial";
 }
 
+type ModuleBrowseRow = {
+  id: string;
+  name: string;
+  declaration: string;
+  artifact: string;
+  hasPrompt: boolean;
+  sectionsPresent: string[];
+  status: ModuleStatus;
+  group: string;
+  presentMode: "message" | "zero_layer" | null;
+  layer: "intermediate" | "final" | null;
+  repeatable: boolean;
+  closer: boolean;
+  priorArtifact: boolean;
+  programSide: boolean;
+  libraries: string[];
+  land: string;
+};
+
+async function moduleBrowseFields(
+  entry: ModuleCatalogEntry,
+): Promise<
+  Omit<
+    ModuleBrowseRow,
+    | "id"
+    | "name"
+    | "declaration"
+    | "artifact"
+    | "hasPrompt"
+    | "sectionsPresent"
+    | "status"
+  >
+> {
+  const { dictateModuleLandHint, isDictateProgramModule } = await import(
+    "../skills/creation-flow.js"
+  );
+  const { moduleBrowseGroup, modulePresentationMode } = await import(
+    "../dictate/creation-plan.js"
+  );
+  const { getLibrary } = await import("../libraries/registry.js");
+  return {
+    group: moduleBrowseGroup(entry),
+    presentMode: modulePresentationMode(entry.id),
+    layer: entry.layer ?? null,
+    repeatable: Boolean(entry.repeatable),
+    closer: Boolean(entry.closer),
+    priorArtifact: entry.kind === "prior-artifact",
+    programSide: isDictateProgramModule(entry),
+    libraries: (entry.libraries ?? []).map(
+      (id) => getLibrary(id)?.label ?? id,
+    ),
+    land: dictateModuleLandHint(entry),
+  };
+}
+
 async function loadModulesPayload(skillId: string): Promise<{
-  skillPackId: string;
-  modules: Array<{
-    id: string;
-    name: string;
-    declaration: string;
-    artifact: string;
-    hasPrompt: boolean;
-    sectionsPresent: string[];
-    status: ModuleStatus;
-  }>;
+  groups: Array<{ id: string; label: string; hint: string }>;
+  modules: ModuleBrowseRow[];
 }> {
   const { loadSkill } = await import("../skills/loader.js");
   const {
@@ -59,13 +107,14 @@ async function loadModulesPayload(skillId: string): Promise<{
     catalogModulesForIntake,
     MODULE_SECTION_IDS,
   } = await import("../skills/creation-flow.js");
+  const { MODULE_BROWSE_GROUPS } = await import("../dictate/creation-plan.js");
   const skill = await loadSkill(skillId);
   if (!skill.skillPackRoot) {
-    return { skillPackId: skillId, modules: [] };
+    return { groups: [...MODULE_BROWSE_GROUPS], modules: [] };
   }
   const catalog = await loadModuleCatalog(skill.skillPackRoot);
-  const modules = [];
-  for (const m of catalogModulesForIntake(catalog ?? { modules: [] }, "recipe")) {
+  const modules: ModuleBrowseRow[] = [];
+  for (const m of catalogModulesForIntake(catalog ?? { modules: [] }, "dictate")) {
     const prompt = await loadModulePrompt(skill.skillPackRoot, m.id);
     const sections = prompt
       ? parseModulePromptSections(prompt)
@@ -83,27 +132,23 @@ async function loadModulesPayload(skillId: string): Promise<{
       hasPrompt,
       sectionsPresent: [...sectionsPresent],
       status: moduleStatusFromSections(hasPrompt, sectionsPresent, taskBody),
+      ...(await moduleBrowseFields(m)),
     });
   }
-  return { skillPackId: skillId, modules };
+  return { groups: [...MODULE_BROWSE_GROUPS], modules };
 }
 
 async function loadModuleDetailPayload(
   skillId: string,
   moduleId: string,
-): Promise<{
-  skillPackId: string;
-  id: string;
-  name: string;
-  declaration: string;
-  artifact: string;
-  hasPrompt: boolean;
-  sectionsPresent: string[];
-  status: ModuleStatus;
-  sections: Record<string, string>;
-  meta: Record<string, unknown> | null;
-  raw: string;
-} | null> {
+): Promise<
+  | (ModuleBrowseRow & {
+      sections: Record<string, string>;
+      meta: Record<string, unknown> | null;
+      raw: string;
+    })
+  | null
+> {
   const { loadSkill } = await import("../skills/loader.js");
   const {
     loadModuleCatalog,
@@ -141,7 +186,6 @@ async function loadModuleDetailPayload(
     }
   }
   return {
-    skillPackId: skillId,
     id: entry.id,
     name: entry.name,
     declaration: entry.declaration,
@@ -153,6 +197,7 @@ async function loadModuleDetailPayload(
       sectionsPresent,
       sections.task,
     ),
+    ...(await moduleBrowseFields(entry)),
     sections,
     meta,
     raw: prompt ?? "",
@@ -254,7 +299,7 @@ export async function handleBooksApi(
     return true;
   }
 
-  /** 默认配方包的技能池（编排备选） */
+  /** 对话落盘节点：按角色分组，不含旧配方包 */
   if (pathname === "/api/modules" && req.method === "GET") {
     const { DEFAULT_ORCHESTRATOR_ID } = await import(
       "../config/default-orchestrator.js"
@@ -343,8 +388,8 @@ export async function handleBooksApi(
       orchestratorId?: string;
       /** 旧客户端可传；新建作品改由创作对话判断路径 */
       recipeId?: string;
-      /** 旧客户端兼容；新建作品统一使用 dictate */
-      creationMode?: "recipe" | "dictate";
+      /** 进料方式：对话落盘（默认）| 听书连载 | 旧工序编排 */
+      creationMode?: "recipe" | "dictate" | "listen_serial";
     };
     const skills = await listSkills();
     const requested = body.orchestratorId?.trim();
@@ -356,14 +401,19 @@ export async function handleBooksApi(
       json(res, 400, { error: "没有可用的编排器技能包" });
       return true;
     }
-    const book = createBook({ title: body.title });
+    const rawMode = body.creationMode;
+    const creationMode =
+      rawMode === "listen_serial" || rawMode === "recipe" || rawMode === "dictate"
+        ? rawMode
+        : "dictate";
+    const book = createBook({ title: body.title, creationMode });
     updateBook(book.id, {
       activeSkillId: director.name,
       activeSkillName: director.description?.split("\n")[0]?.slice(0, 80) || director.name,
       orchestratorId: director.name,
       orchestratorName: director.name,
+      creationMode,
     });
-    const creationMode = "dictate";
     const session = await sessionManager.createForBook(
       book.id,
       director.name,

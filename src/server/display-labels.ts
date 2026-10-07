@@ -55,6 +55,7 @@ const PHASE_UNIT_LABELS: Record<string, string> = {
 const CREATION_MODE_LABELS: Record<string, string> = {
   recipe: "工序编排",
   dictate: "对话落盘",
+  listen_serial: "听书连载",
 };
 
 const SKILL_PACK_LABELS: Record<string, string> = {

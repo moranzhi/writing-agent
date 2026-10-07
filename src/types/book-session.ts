@@ -39,7 +39,22 @@ export type PersistedChatMessage = {
     messages: Array<{ role: string; content: string }>;
     charCount: number;
     model?: string;
+    segments?: Array<{ tag: string; chars: number; hash: string }>;
   };
+  /** 各次请求的标签轮廓，不含正文 */
+  requestOutlines?: Array<{
+    at: string;
+    caller: string;
+    step?: string;
+    turnId?: string;
+    model?: string;
+    promptTokens?: number;
+    completionTokens?: number;
+    cachedTokens?: number;
+    cacheMissTokens?: number;
+    cacheWriteTokens?: number;
+    segments: Array<{ tag: string; chars: number; hash: string }>;
+  }>;
   branchGroupId?: string;
   branchIndex?: number;
   branchTotal?: number;

@@ -9,7 +9,7 @@ import {
   renderQuestionsCard,
 } from "./questions-ui.js";
 import { displayCreationModeLabel, displayWorkerLabel, formatWorkerDisplayTitle, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
-import { fillPlayAux, hidePlayAuxTabs } from "./play-aux.js";
+import { capturePlayTableEdits, fillPlayAux, hidePlayAuxTabs } from "./play-aux.js";
 import {
   PRESENT_SHELL_IDS,
   parsePresentDoc,
@@ -24,8 +24,10 @@ import {
   presentSourceBytes,
   previewPacket,
   queuePresentFrame,
+  updatePresentFramePacket,
   watchPresentFrames,
 } from "./present-frame.js";
+import { isPlayAuxLlmBubblesEnabled, isPlayAuxLlmOutput } from "./feed-prefs.js";
 
 const HIDE_KINDS = new Set(["worker_stub"]);
 
@@ -44,6 +46,7 @@ const MSG_CLASS = {
   orchestrator_prompt: "agent",
   orchestrator_assessment: "agent",
   dictate_reply: "agent",
+  listen_reply: "agent",
   worker_running: "skill",
   worker_output: "skill",
   worker_questions: "questions",
@@ -58,6 +61,7 @@ const MSG_LABEL = {
   orchestrator_prompt: "编排器",
   orchestrator_assessment: "编排器 · 内容评价",
   dictate_reply: "对话落盘",
+  listen_reply: "听书连载",
   worker_running: "执行单元",
   worker_output: "执行单元",
   worker_questions: "提问",
@@ -120,6 +124,7 @@ export function isCreationCloserDone(view) {
 
 export function canOfferSaveProduct(view) {
   if (!view || isPlayView(view)) return false;
+  if (view.creationMode === "listen_serial") return false;
   if (view.creationMode === "dictate") {
     const products = view.dictateProducts;
     return Array.isArray(products) && products.length > 0;
@@ -129,6 +134,7 @@ export function canOfferSaveProduct(view) {
 
 export function canOfferEnterPlay(view) {
   if (!view || isPlayView(view)) return false;
+  if (view.creationMode === "listen_serial") return false;
   return canOfferSaveProduct(view) || Boolean(view.hasProduct);
 }
 
@@ -773,6 +779,56 @@ function openContentPeek(payload) {
   document.getElementById("msg-peek-close")?.focus?.();
 }
 
+/** 模型落盘原文：尽量 pretty JSON，整块一个滚动条（走 msg-peek-body） */
+function formatRawModelOutputHtml(raw, thinking) {
+  const parts = [];
+  const think = String(thinking ?? "").trim();
+  if (think) {
+    parts.push(
+      `<section class="msg-raw-section"><h3 class="msg-raw-kicker">思维链</h3><pre class="review-feed-plain"><code>${esc(think)}</code></pre></section>`,
+    );
+  }
+  let body = String(raw ?? "").trim();
+  if (!body) {
+    parts.push(`<p class="empty-sm">（无模型正文）</p>`);
+  } else {
+    let klass = "review-feed-plain";
+    if (body.startsWith("{") || body.startsWith("[")) {
+      try {
+        body = JSON.stringify(JSON.parse(body), null, 2);
+        klass = "json-pretty";
+      } catch {
+        /* keep raw */
+      }
+    }
+    parts.push(
+      `<section class="msg-raw-section"><h3 class="msg-raw-kicker">模型输出</h3><pre class="${klass}"><code>${esc(body)}</code></pre></section>`,
+    );
+  }
+  return parts.join("");
+}
+
+function openMessageRawPeek(card) {
+  if (!card) return;
+  const raw =
+    card.dataset.originalText ||
+    card.querySelector(".msg-body:not(.msg-body-editing), .coord-text")?.textContent ||
+    "";
+  const thinking =
+    card.querySelector(".msg-thinking-body")?.textContent ||
+    card.dataset.thinking ||
+    "";
+  const label =
+    card.querySelector(".msg-tag")?.textContent?.trim() ||
+    card.querySelector(".coord-kind")?.textContent?.trim() ||
+    "消息";
+  openContentPeek({
+    title: "查看原文",
+    subtitle: `${label} · 未过呈现壳的模型落盘正文`,
+    html: formatRawModelOutputHtml(raw, thinking),
+  });
+}
+
 function formatDictatePeekHtml(content) {
   return renderStoredProductHtml(content);
 }
@@ -935,6 +991,7 @@ function showMsgMenu(card, x, y) {
   const editBtn = document.getElementById("msg-menu-edit");
   const delBtn = document.getElementById("msg-menu-delete");
   const rollbackBtn = document.getElementById("msg-menu-rollback");
+  const rawBtn = document.getElementById("msg-menu-raw");
   const ctxBtn = document.getElementById("msg-menu-context");
   const compareBtn = document.getElementById("msg-menu-compare");
   if (editBtn) editBtn.toggleAttribute("hidden", !canEdit);
@@ -943,6 +1000,13 @@ function showMsgMenu(card, x, y) {
     rollbackBtn.toggleAttribute("hidden", !canRollback);
     rollbackBtn.textContent =
       rollbackMode === "pending-input" ? "回到这一轮输入" : "回退到这里";
+  }
+  if (rawBtn) {
+    const hasBody = Boolean(
+      (card.dataset.originalText || "").trim() ||
+        card.querySelector(".msg-body:not(.msg-body-editing), .coord-text")?.textContent?.trim(),
+    );
+    rawBtn.toggleAttribute("hidden", !hasBody);
   }
   if (ctxBtn) ctxBtn.toggleAttribute("hidden", !hasContext);
   if (compareBtn) compareBtn.toggleAttribute("hidden", !hasContext);
@@ -980,6 +1044,10 @@ function wireMsgActionMenu(handlers) {
       } catch {
         /* ignore */
       }
+      return;
+    }
+    if (action === "view-raw") {
+      openMessageRawPeek(card);
       return;
     }
     if (action === "view-context") {
@@ -1265,6 +1333,7 @@ function isPlayFinalReply(msg, view) {
 
 function isPlayProcessMessage(msg, view) {
   if (!isPlayView(view) || msg.role === "user") return false;
+  if (isPlayAuxLlmOutput(msg, view) && isPlayAuxLlmBubblesEnabled()) return false;
   return !isPlayFinalReply(msg, view);
 }
 
@@ -1314,7 +1383,89 @@ function renderStoredProductHtml(content) {
   return `<div class="dictate-product-body">${safeBodyHtml(trimmed)}</div>`;
 }
 
-function formatPlayPresentHtml(body, view) {
+function playFramePacket(trimmed, parsed, view) {
+  const presentView = parsed ? parsePresentDoc(parsed, "prose") : null;
+  let packet = null;
+  if (presentView?.packet?.blocks && Object.keys(presentView.packet.blocks).length) {
+    packet = presentView.packet;
+  } else {
+    const nested = openingPresentBlocks(parsed);
+    if (nested) packet = { schema: "present.v1", blocks: nested };
+    else {
+      const scene =
+        parsed && typeof parsed === "object"
+          ? typeof parsed.正文 === "string"
+            ? parsed.正文
+            : typeof parsed.body === "string"
+              ? parsed.body
+              : typeof parsed.brief === "string"
+                ? parsed.brief
+                : ""
+          : "";
+      const plain = (scene || (!parsed ? trimmed : "")).trim();
+      if (plain) packet = { schema: "present.v1", blocks: { body: plain } };
+    }
+  }
+  if (!packet) return null;
+  const projected = view?.presentationProjection;
+  if (projected && typeof projected === "object" && !Array.isArray(projected)) {
+    return {
+      ...packet,
+      blocks: { ...packet.blocks, ...projected },
+    };
+  }
+  return packet;
+}
+
+function openingPresentBlocks(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const body = parsed.正文;
+  const direct = body && typeof body === "object" ? body.blocks : null;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+  const list = body && typeof body === "object" ? body.开场白候选 : parsed.开场白候选;
+  const first = Array.isArray(list) ? list[0] : null;
+  const blocks = first?.正文?.blocks;
+  if (blocks && typeof blocks === "object" && !Array.isArray(blocks)) return blocks;
+  return null;
+}
+
+function rememberPresentation(view) {
+  if (!view || typeof view !== "object") return;
+  sessionPresentation = isFrontendBundle(view.presentationFrontend)
+    ? {
+        frontend: view.presentationFrontend,
+        slots: Array.isArray(view.presentationSlots) ? view.presentationSlots : [],
+      }
+    : null;
+}
+
+let sessionPresentation = null;
+
+function slotsFromContractBody(body) {
+  const contract = body?.数据契约 || body?.data_contract;
+  const blocks = contract?.blocks;
+  if (!blocks || typeof blocks !== "object" || Array.isArray(blocks)) return [];
+  return Object.entries(blocks)
+    .map(([id, row]) => ({
+      id,
+      type: (row && typeof row === "object" && (row.类型 || row.type)) || "text",
+    }))
+    .filter((slot) => slot.id);
+}
+
+function renderContractPresentHtml(bundle, packet, slots, minHeight) {
+  if (!packet || !isFrontendBundle(bundle) || presentSourceBytes(bundle) > PRESENT_BYTE_LIMIT) {
+    return "";
+  }
+  const id = queuePresentFrame(bundle, previewPacket(packet), slots);
+  return `<section class="present-preview play-present">
+    ${presentFrameSlotHtml(id, minHeight)}
+    <p class="present-preview-status" hidden></p>
+    <div class="present-preview-fallback" hidden></div>
+  </section>`;
+}
+
+function formatPlayPresentHtml(body, view, messageId) {
   const trimmed = stripPresentSourceFences((body || "").trim());
   if (!trimmed) return `<p class="empty-sm">（无正文）</p>`;
   const bundled = splitBracketProductSections(trimmed);
@@ -1326,6 +1477,14 @@ function formatPlayPresentHtml(body, view) {
       })
       .join("");
   }
+  const parsed = tryParseJsonDoc(trimmed);
+  const contractHtml = renderContractPresentHtml(
+    view?.presentationFrontend,
+    playFramePacket(trimmed, parsed, view),
+    view?.presentationSlots,
+    messageId ? presentMinHeightByMessage.get(messageId) : 0,
+  );
+  if (contractHtml) return contractHtml;
   const tweaks = view?.presentationTweaks;
   const fallbackShell =
     tweaks?.shell_id && PRESENT_SHELL_IDS?.includes?.(tweaks.shell_id)
@@ -1342,7 +1501,6 @@ function formatPlayPresentHtml(body, view) {
           ].includes(tweaks.shell_id)
         ? tweaks.shell_id
         : "prose";
-  const parsed = tryParseJsonDoc(trimmed);
   const presentView = parsed ? parsePresentDoc(parsed, fallbackShell) : null;
   if (presentView) {
     return renderPresentShellHtml(presentView.packet, esc, { tweaks });
@@ -1362,6 +1520,76 @@ function formatPlayPresentHtml(body, view) {
   return renderPresentShellHtml(presentFromPlain(plain, fallbackShell), esc, {
     tweaks,
   });
+}
+
+function messageFeedSig(msg, view) {
+  const openingSwipe =
+    isPlayView(view) && String(msg?.title ?? "").trim() === "开场白"
+      ? `o${view.playAux?.selectedOpeningIndex ?? 0}`
+      : "";
+  const projectionSig =
+    shouldRenderPlayPresent(msg, view) && view?.presentationProjection
+      ? JSON.stringify(view.presentationProjection)
+      : "";
+  const auxSig =
+    isPlayAuxLlmOutput(msg, view) && isPlayAuxLlmBubblesEnabled() ? "aux1" : "aux0";
+  return [
+    msg.role || "",
+    msg.kind || "",
+    msg.actor || "",
+    msg.title || "",
+    msg.thinking ? "1" : "0",
+    msg.contextTrace ? "t" : "",
+    msg.requestOutlines?.length ? "o" : "",
+    msgBody(msg, view),
+    openingSwipe,
+    projectionSig,
+    auxSig,
+  ].join("\u0001");
+}
+
+function playPresentPacketForUpdate(body, view) {
+  const trimmed = stripPresentSourceFences((body || "").trim());
+  if (!trimmed || splitBracketProductSections(trimmed)) return null;
+  if (!isFrontendBundle(view?.presentationFrontend)) return null;
+  return playFramePacket(trimmed, tryParseJsonDoc(trimmed), view);
+}
+
+/** 同一气泡里的呈现窗还在，就只灌新正文，不拆 iframe。 */
+function patchPresentWindow(card, msg, view, sig) {
+  const frame = card.querySelector("iframe.present-preview-frame");
+  if (!frame || !shouldRenderPlayPresent(msg, view)) return false;
+  const body = msgBody(msg, view);
+  const packet = playPresentPacketForUpdate(body, view);
+  if (!packet) return false;
+  if (!frame.contentWindow) return true;
+  updatePresentFramePacket(frame, packet);
+  card.dataset.originalText = body;
+  card.dataset.feedSig = sig;
+  const think = card.querySelector(".msg-thinking-body");
+  const thinking = String(msg.thinking ?? "").trim();
+  if (think && thinking && think.textContent !== thinking) think.textContent = thinking;
+  // 开场切换：计数 ‹ n/total › 也要跟着改
+  if (String(msg?.title ?? "").trim() === "开场白") {
+    const head = card.querySelector(".msg-head, .msg-foot");
+    const existing = head?.querySelector(".msg-variant-nav");
+    const html = renderOpeningSwipeHtml(view, msg);
+    if (html) {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      const next = wrap.firstElementChild;
+      if (existing && next) existing.replaceWith(next);
+      else if (head && next && !existing) {
+        const before =
+          head.querySelector(".msg-variant-badge, .msg-time, .msg-menu-trigger") ||
+          null;
+        head.insertBefore(next, before);
+      }
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+  return true;
 }
 
 /** 旧会话 skill 选择提示，新流程不再展示 */
@@ -1389,23 +1617,20 @@ function syncCoordRailChrome() {
   const toggleLabel = document.getElementById("coord-rail-toggle-label");
   const title = document.getElementById("coord-rail-title");
   const products = coordRailMode === "products";
+  const listen = coordRailMode === "listen";
   document.body.classList.toggle("coord-rail-collapsed", coordRailCollapsed);
   document.body.dataset.coordRailMode = coordRailMode;
-  if (toggleLabel) toggleLabel.textContent = products ? "产物" : "对话";
-  if (title) title.textContent = products ? "已持久化" : "此前对话";
+  const shortLabel = listen ? "正文" : products ? "产物" : "对话";
+  const longLabel = listen ? "大纲与正文" : products ? "已持久化" : "此前对话";
+  if (toggleLabel) toggleLabel.textContent = shortLabel;
+  if (title) title.textContent = longLabel;
   if (toggle) {
     toggle.setAttribute("aria-expanded", coordRailCollapsed ? "false" : "true");
-    toggle.title = coordRailCollapsed
-      ? products
-        ? "展开产物"
-        : "展开此前对话"
-      : products
-        ? "收起产物"
-        : "收起此前对话";
+    toggle.title = coordRailCollapsed ? `展开${longLabel}` : `收起${longLabel}`;
   }
   if (rail) {
     rail.dataset.collapsed = coordRailCollapsed ? "1" : "0";
-    rail.setAttribute("aria-label", products ? "已持久化产物" : "此前对话");
+    rail.setAttribute("aria-label", longLabel);
   }
 }
 
@@ -1576,6 +1801,13 @@ function shouldShowInFeed(msg, view) {
   if (msg.compressed) return false;
   if (isPlayView(view) && isPlayHousekeepingMessage(msg)) return false;
   if (isPlayView(view) && kind === "worker_questions") return false;
+  if (
+    isPlayView(view) &&
+    isPlayAuxLlmOutput(msg, view) &&
+    !isPlayAuxLlmBubblesEnabled()
+  ) {
+    return false;
+  }
   if (isSkillSelectionMessage(msg)) return false;
   if (isReviewSidecarQuestionStub(msg)) return false;
   if (
@@ -2415,6 +2647,14 @@ function renderKnownArtifactHtml(doc, opts = {}) {
   const schema = prepared.schema;
   const presentView = parsePresentDoc(prepared);
   if (presentView) {
+    const framed = sessionPresentation
+      ? renderContractPresentHtml(
+          sessionPresentation.frontend,
+          presentView.packet,
+          sessionPresentation.slots,
+        )
+      : "";
+    if (framed) return framed;
     return renderPresentShellHtml(presentView.packet, esc, {
       tweaks: opts.shellTweaks,
     });
@@ -2788,6 +3028,18 @@ function openingPresentPacket(text) {
   return presentFromPlain(trimmed, "prose");
 }
 
+function renderOpeningPresentHtml(packet) {
+  if (sessionPresentation) {
+    const framed = renderContractPresentHtml(
+      sessionPresentation.frontend,
+      packet,
+      sessionPresentation.slots,
+    );
+    if (framed) return framed;
+  }
+  return renderPresentShellHtml(packet, esc);
+}
+
 function renderOpeningSetupBodyHtml(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
   const candidates = collectOpeningCandidates(body);
@@ -2798,9 +3050,8 @@ function renderOpeningSetupBodyHtml(body) {
     .map((row, i) => {
       const hidden = i === 0 ? "" : " hidden";
       const selected = i === 0 ? " is-selected" : "";
-      return `<article class="opening-candidate${selected}" data-opening-index="${i}"${hidden}>${renderPresentShellHtml(
+      return `<article class="opening-candidate${selected}" data-opening-index="${i}"${hidden}>${renderOpeningPresentHtml(
         openingPresentPacket(row.text),
-        esc,
       )}${renderOpeningPersonaHtml(row.persona)}${renderOpeningVarsHtml(row.variables)}</article>`;
     })
     .join("");
@@ -2929,7 +3180,12 @@ function renderSpecialtyBodyHtml(body, skill) {
     { key: "美学纲领", missing: "（未写）" },
     { key: "交互范式", missing: "（未写）" },
   ];
-  const evalKeys = [{ key: "设定逻辑", missing: "（未写）" }];
+  const evalKeys = [
+    {
+      key: body.背景与规则 == null && body.设定逻辑 != null ? "设定逻辑" : "背景与规则",
+      missing: "（未写）",
+    },
+  ];
   const used = new Set([...productKeys, ...evalKeys].map((b) => b.key));
 
   const renderBlock = (b, cls) => {
@@ -4123,7 +4379,7 @@ function renderObjectSectionsHtml(obj, depth) {
         if (k === "自评") return renderSelfScoreHtml(v);
         if (k === "追问") return renderProbeHtml(v);
         if (k === "frontend" && isFrontendBundle(v)) {
-          return renderFrontendPreviewBlock(v, obj["示例灌数"]);
+          return renderFrontendPreviewBlock(v, obj["示例灌数"], slotsFromContractBody(obj));
         }
         return `<section class="ws-section"><h4>${esc(k)}</h4>${renderStructuredValueHtml(v, depth + 1)}</section>`;
       })
@@ -4232,7 +4488,7 @@ function renderObjectKvHtml(obj, depth) {
   const rows = entries
     .map(([k, v]) => {
       if (k === "frontend" && isFrontendBundle(v)) {
-        return renderFrontendPreviewBlock(v, obj["示例灌数"]);
+        return renderFrontendPreviewBlock(v, obj["示例灌数"], slotsFromContractBody(obj));
       }
       const isComplex = v != null && typeof v === "object";
       if (isComplex && isDiagnosticNode(v)) {
@@ -5371,12 +5627,14 @@ function renderCoordLine(msg, view, opts = {}) {
   const rollbackAttr = rollbackMessageId
     ? ` data-rollback-message-id="${esc(rollbackMessageId)}"`
     : "";
-  const contextAttr = msg.contextTrace ? ` data-has-context="1"` : "";
+  const contextAttr =
+    msg.contextTrace || msg.requestOutlines?.length ? ` data-has-context="1"` : "";
   const readOnlyAttr = opts.traceOnly ? ` data-read-only="1"` : "";
   const originalAttr = full ? ` data-original-text="${escAttr(full)}"` : "";
   const menu = inPack
     ? ""
     : `<button type="button" class="coord-line-menu" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>`;
+  const outlines = Array.isArray(msg.requestOutlines) ? msg.requestOutlines : [];
   const trace = msg.contextTrace;
   const variantTotal = Math.max(1, Number(msg.branchTotal) || 1);
   const variantIndex = Math.min(variantTotal, Math.max(1, (msg.branchIndex ?? 0) + 1));
@@ -5385,20 +5643,25 @@ function renderCoordLine(msg, view, opts = {}) {
     variantTotal > 1 ? `${variantIndex}/${variantTotal} 版` : "",
   ].filter(Boolean);
   const requestHint = requestBits.length ? requestBits.join(" · ") : "本次请求";
-  const traceMeta = trace
-    ? `<button type="button" class="coord-context-trigger" data-context-trigger aria-label="查看 ${esc(who)} 的${esc(requestHint)}上下文">
-        <span class="coord-context-label">保留上下文</span>
+  const segmentCount = outlines.reduce(
+    (sum, item) => sum + (item.segments?.length || 0),
+    0,
+  ) || trace?.segments?.length || 0;
+  const callCount = outlines.length || (trace ? 1 : 0);
+  const traceMeta = trace || outlines.length
+    ? `<button type="button" class="coord-context-trigger" data-context-trigger aria-label="查看 ${esc(who)} 的${esc(requestHint)}分段">
+        <span class="coord-context-label">请求分段</span>
         <span class="coord-context-request">${esc(requestHint)}</span>
-        <span>${trace.messages?.length ?? 0} 段</span>
-        <span>${((trace.charCount ?? 0) / 1024).toFixed(1)} KB</span>
+        <span>${callCount} 次</span>
+        <span>${segmentCount} 段</span>
       </button>
       <div class="coord-trace-meta">
-        <span title="调用方">${esc(trace.caller || msg.tokenUsage?.caller || "unknown")}</span>
-        <span title="模型">${esc(trace.model || msg.tokenUsage?.model || "model?")}</span>
+        <span title="调用方">${esc(trace?.caller || outlines[0]?.caller || msg.tokenUsage?.caller || "unknown")}</span>
+        <span title="模型">${esc(trace?.model || outlines[0]?.model || msg.tokenUsage?.model || "model?")}</span>
         ${msg.tokenUsage?.totalTokens ? `<span title="本次调用 Token">${Number(msg.tokenUsage.totalTokens).toLocaleString("zh-CN")} tok</span>` : ""}
       </div>`
     : "";
-  const traceClass = trace ? " coord-line--trace" : "";
+  const traceClass = trace || outlines.length ? " coord-line--trace" : "";
   return `<div class="coord-line ${isUser ? "coord-user" : "coord-agent"}${traceClass}" data-message-id="${esc(msg.id)}" data-kind="${esc(kind)}"${rollbackAttr}${contextAttr}${readOnlyAttr}${originalAttr}>
     ${menu}
     <div class="coord-who"><span>${esc(who)}</span><span class="coord-kind">${esc(kind)}</span><span class="coord-time">${fmtTime(msg.createdAt)}</span>${nav}</div>
@@ -5471,11 +5734,12 @@ function getRollbackMessageId(messages, messageId) {
   return messageIndex >= 0 ? messages[messageIndex + 1]?.id ?? null : null;
 }
 
-/** @returns {"speak"|"answer"|"review"|"busy"|"dictate"|null} */
+/** @returns {"speak"|"answer"|"review"|"busy"|"dictate"|"listen"|null} */
 function resolveDesignSurface(view, loading) {
   if (isPlayView(view)) return null;
   if (view.phase === "done") return null;
-  // 转述：主面始终是对话流；右侧才是产物
+  // 听书 / 转述：主面始终是对话流；右侧为大纲正文或产物
+  if (view.creationMode === "listen_serial") return "listen";
   if (view.creationMode === "dictate") return "dictate";
   const busy = Boolean(loading || (view.phase === "running" && !view.waitingReason));
   if (busy) return "busy";
@@ -5705,6 +5969,25 @@ function renderSpeakWorkspace(view) {
         view.hints?.[0] ||
         wr.message ||
         "描述本轮行动、对话或想说的话；由游玩管线推进。";
+    } else if (view.creationMode === "listen_serial") {
+      title = displayCreationModeLabel("listen_serial");
+      const ls = view.listenSerial;
+      const phase = ls?.phase;
+      if (phase === "awaiting_confirm") {
+        hint = "回复「确认」开始生成大纲与正文；或继续改需求。";
+      } else if (phase === "soft_stop") {
+        hint = "本段已兑现。输入「下一波」或「收工」，或一句意见改向。";
+      } else if (phase === "running") {
+        hint =
+          view.hints?.[0] ||
+          wr.message ||
+          "说「继续」补货；不满意直接一句意见改后面。";
+      } else {
+        hint =
+          view.hints?.[0] ||
+          wr.message ||
+          "用几句话描述题材与爽点；右侧是大纲与正文。";
+      }
     } else if (view.creationMode === "dictate") {
       title = displayCreationModeLabel("dictate");
       hint =
@@ -5888,11 +6171,121 @@ function fillCoordRailProducts(view) {
   syncCoordRailChrome();
 }
 
+function renderListenSerialRail(view) {
+  const ls = view.listenSerial;
+  if (!ls) {
+    return `<p class="coord-empty">确认开书后，这里显示大纲与正文缓冲。</p>`;
+  }
+  const brief = [
+    ls.thrill ? `<p class="listen-brief"><strong>爽点</strong> ${esc(ls.thrill)}</p>` : "",
+    ls.world ? `<p class="listen-brief"><strong>世界</strong> ${esc(ls.world)}</p>` : "",
+    ls.structure
+      ? `<p class="listen-brief"><strong>结构</strong> ${esc(ls.structure)}</p>`
+      : "",
+  ].join("");
+  const outline = (ls.outline ?? [])
+    .map((o) => {
+      const mark = o.status === "done" ? "✓" : o.status === "cut" ? "×" : "·";
+      const pay = o.payoff ? " · 兑现" : "";
+      return `<li class="listen-outline-item status-${esc(o.status)}">${mark} ${esc(o.title)}${pay}</li>`;
+    })
+    .join("");
+  const sections = (ls.sections ?? [])
+    .map(
+      (s) => `<article class="listen-section" data-section-id="${esc(s.id)}">
+      <header class="listen-section-head">
+        <h4 class="listen-section-title">${esc(s.title)}</h4>
+        <button type="button" class="btn-sm" data-listen-tts="${esc(s.id)}" title="用 Edge TTS 朗读本节">播</button>
+      </header>
+      <div class="listen-section-body">${esc(s.text).replace(/\n/g, "<br>")}</div>
+    </article>`,
+    )
+    .join("");
+  const unread = Number(ls.unreadChars) || 0;
+  const target = Number(ls.bufferTargetChars) || 0;
+  const consumed = Number(ls.consumedChars) || 0;
+  const total = (ls.sections ?? []).reduce((n, s) => n + String(s.text || "").length, 0);
+  const hasSections = (ls.sections ?? []).length > 0;
+  return `<div class="listen-rail">
+    <p class="listen-meta">未读约 ${unread} 字 / 缓冲目标 ${target} 字 · 阶段 ${esc(ls.phase)} · Edge TTS</p>
+    ${brief}
+    ${outline ? `<ul class="listen-outline">${outline}</ul>` : ""}
+    <div class="listen-sections">${sections || `<p class="coord-empty">尚无正文</p>`}</div>
+    <div class="listen-rail-actions">
+      <button type="button" class="btn-sm" data-listen-tts-chain="1" ${hasSections ? "" : "disabled"} title="从第一节连续播放">连续听</button>
+      <button type="button" class="btn-sm" data-listen-tts-stop="1" title="停止播放">停</button>
+      <button type="button" class="btn-sm" data-listen-consume="all" ${total <= consumed ? "disabled" : ""}>标记全部已读</button>
+      <button type="button" class="btn-sm" data-listen-consume="section" ${unread <= 0 ? "disabled" : ""}>标记已读至当前末</button>
+    </div>
+  </div>`;
+}
+
+function fillCoordRailListen(view, handlers) {
+  const coordRail = document.getElementById("coord-rail");
+  const drawerBody = document.getElementById("coord-drawer-body");
+  const drawerCount = document.getElementById("coord-drawer-count");
+  if (!coordRail) return;
+  if (coordRailMode !== "listen") {
+    coordRailMode = "listen";
+    coordRailCollapsed = false;
+  }
+  coordRail.hidden = false;
+  if (drawerBody) {
+    drawerBody.innerHTML = renderListenSerialRail(view);
+    if (!drawerBody.dataset.listenConsumeWired) {
+      drawerBody.dataset.listenConsumeWired = "1";
+      drawerBody.addEventListener("click", (e) => {
+        const stopBtn = e.target.closest("[data-listen-tts-stop]");
+        if (stopBtn && drawerBody.contains(stopBtn)) {
+          handlers?.onListenStop?.();
+          return;
+        }
+        const chainBtn = e.target.closest("[data-listen-tts-chain]");
+        if (chainBtn && drawerBody.contains(chainBtn)) {
+          const ls = handlers?.getListenSerial?.() ?? view.listenSerial;
+          const id = ls?.sections?.[0]?.id;
+          if (id) handlers?.onListenPlay?.(id, { continuous: true });
+          return;
+        }
+        const playBtn = e.target.closest("[data-listen-tts]");
+        if (playBtn && drawerBody.contains(playBtn)) {
+          const id = playBtn.getAttribute("data-listen-tts") || "";
+          if (id) handlers?.onListenPlay?.(id, { continuous: false });
+          return;
+        }
+        const btn = e.target.closest("[data-listen-consume]");
+        if (!btn || !drawerBody.contains(btn)) return;
+        const mode = btn.getAttribute("data-listen-consume");
+        const ls = handlers?.getListenSerial?.() ?? view.listenSerial;
+        if (!ls) return;
+        const total = (ls.sections ?? []).reduce(
+          (n, s) => n + String(s.text || "").length,
+          0,
+        );
+        const next =
+          mode === "all" ? total : Math.max(Number(ls.consumedChars) || 0, total);
+        handlers?.onListenConsume?.(next);
+      });
+    }
+  }
+  const n = view.listenSerial?.sections?.length ?? 0;
+  if (drawerCount) {
+    drawerCount.textContent = n ? String(n) : "";
+    drawerCount.title = n ? `${n} 节正文` : "尚无正文";
+  }
+  syncCoordRailChrome();
+}
+
 function fillCoordRail(visible, view, handlers) {
   const coordRail = document.getElementById("coord-rail");
   const drawerBody = document.getElementById("coord-drawer-body");
   const drawerCount = document.getElementById("coord-drawer-count");
   if (!coordRail) return;
+
+  if (view.creationMode === "listen_serial" && !isPlayView(view)) {
+    fillCoordRailListen(view, handlers);
+    return;
+  }
 
   // 转述产物栏只在创作层；游玩层与配方开玩一样走回合历史
   if (view.creationMode === "dictate" && !isPlayView(view)) {
@@ -5969,7 +6362,91 @@ function mountReviewWorkspace(stage, view, handlers, opts = {}) {
   }
 }
 
+/** 上一轮呈现框高度。重绘时先占住，避免框从 1px 长开把阅读位置顶到最上方。 */
+const presentMinHeightByMessage = new Map();
+const scrollFollow = new WeakMap();
+const SCROLL_PIN_SLACK = 120;
+let applyingScroll = 0;
+
+function capturePresentMinHeights(root) {
+  if (!root) return;
+  for (const frame of root.querySelectorAll(".present-preview-frame")) {
+    const id = frame.closest("[data-message-id]")?.dataset?.messageId;
+    if (!id) continue;
+    const h = Math.ceil(frame.getBoundingClientRect().height || Number.parseFloat(frame.style.height) || 0);
+    if (h > 8) presentMinHeightByMessage.set(id, h);
+  }
+}
+
+function scrollerIsPinned(el) {
+  const overflow = el.scrollHeight - el.clientHeight;
+  if (overflow <= 1) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_SLACK;
+}
+
+function messageAnchorSelector(id) {
+  const safe = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : String(id).replace(/"/g, '\\"');
+  return `[data-message-id="${safe}"]`;
+}
+
+function readScrollAnchor(el) {
+  if (!el) return { pin: true };
+  if (scrollerIsPinned(el)) return { pin: true };
+  const rootTop = el.getBoundingClientRect().top;
+  let anchor = null;
+  for (const node of el.querySelectorAll("[data-message-id]")) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > rootTop + 4) {
+      anchor = { id: node.dataset.messageId, offset: rect.top - rootTop };
+      break;
+    }
+  }
+  return { pin: false, top: el.scrollTop, anchor };
+}
+
+function isFollowedScroller(el) {
+  return el.id === "message-feed" || el.id === "dictate-feed" || el.classList?.contains("dictate-feed");
+}
+
+function applyScrollAnchor(el, saved) {
+  if (!el || !saved || !el.isConnected) return;
+  applyingScroll += 1;
+  try {
+    if (saved.pin) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    if (saved.anchor?.id) {
+      const node = el.querySelector(messageAnchorSelector(saved.anchor.id));
+      if (node) {
+        const delta =
+          node.getBoundingClientRect().top - el.getBoundingClientRect().top - saved.anchor.offset;
+        el.scrollTop += delta;
+        return;
+      }
+    }
+    if (typeof saved.top === "number") el.scrollTop = saved.top;
+  } finally {
+    requestAnimationFrame(() => {
+      applyingScroll = Math.max(0, applyingScroll - 1);
+    });
+  }
+}
+
+function settleScroller(el, saved) {
+  if (!el || !saved) return;
+  scrollFollow.set(el, saved);
+  applyScrollAnchor(el, saved);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (!el.isConnected) return;
+      applyScrollAnchor(el, scrollFollow.get(el) || saved);
+    });
+  });
+}
+
 export function renderMessageFeed(view, loading, handlers = {}) {
+  rememberPresentation(view);
   const feed = document.getElementById("message-feed");
   if (!feed) return;
 
@@ -6014,7 +6491,29 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     view.waitingReason?.kind === "intake" && view.intake?.fields?.length;
   const activeQuestions = getActiveQuestions(view);
 
-  feed.innerHTML = "";
+  const showIntake = intake && hasUserMessages(view);
+  const feedMode = `${view?.id || ""}|${designWorkspace ? `design:${surface}` : "chat"}|${showIntake ? "in" : ""}`;
+  const canKeepFeed =
+    !designWorkspace &&
+    feed.dataset.feedMode === feedMode &&
+    feed.childElementCount > 0;
+
+  const dictateEl = document.getElementById("dictate-feed");
+  let feedScroll = { pin: true };
+  let dictateScroll = { pin: true };
+  if (!canKeepFeed) {
+    capturePresentMinHeights(feed);
+    capturePresentMinHeights(stage);
+    capturePresentMinHeights(dictateEl);
+    feedScroll = readScrollAnchor(feed);
+    dictateScroll = readScrollAnchor(dictateEl);
+    scrollFollow.set(feed, feedScroll);
+    feed.dataset.rebuilding = "1";
+    feed.innerHTML = "";
+    delete feed.dataset.rebuilding;
+    feed.dataset.feedMode = feedMode;
+  }
+
   if (stage) {
     stage.hidden = true;
     stage.innerHTML = "";
@@ -6023,6 +6522,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     coordRail.hidden = true;
     const drawerBody = document.getElementById("coord-drawer-body");
     const drawerCount = document.getElementById("coord-drawer-count");
+    capturePlayTableEdits(drawerBody);
     if (drawerBody) drawerBody.innerHTML = "";
     if (drawerCount) drawerCount.textContent = "";
   }
@@ -6031,8 +6531,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   // 默认把询问卡停回主列底部槽位
   if (panelFeed) ensureQuestionsHostIn(panelFeed);
 
-  const showIntake = intake && hasUserMessages(view);
-  if (showIntake && !designWorkspace) {
+  if (showIntake && !designWorkspace && !feed.querySelector(":scope > .intake-panel")) {
     const box = document.createElement("div");
     box.className = "intake-panel";
     box.innerHTML = renderIntakePanel(view.intake, { variant: "feed" });
@@ -6047,23 +6546,28 @@ export function renderMessageFeed(view, loading, handlers = {}) {
 
     if (!stage) return;
 
-    // 转述：对话画在 stage 内（design-workspace 会藏掉 #message-feed）
-    if (surface === "dictate") {
+    // 转述 / 听书：对话画在 stage 内（design-workspace 会藏掉 #message-feed）
+    if (surface === "dictate" || surface === "listen") {
       stage.hidden = false;
-      const recipeName = view.selectedRecipe?.name
-        ? esc(view.selectedRecipe.name)
-        : "";
-      const dictateKicker = displayCreationModeLabel("dictate");
+      const recipeName =
+        surface === "dictate" && view.selectedRecipe?.name
+          ? esc(view.selectedRecipe.name)
+          : "";
+      const kicker = displayCreationModeLabel(
+        surface === "listen" ? "listen_serial" : "dictate",
+      );
       const head = recipeName
-        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${dictateKicker}</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
-        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${dictateKicker}</span></header>`;
+        ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${kicker}</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
+        : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${kicker}</span></header>`;
       stage.innerHTML = `${head}<div class="dictate-feed" id="dictate-feed"></div>`;
       const dictateFeed = stage.querySelector("#dictate-feed");
       if (panelFeed) ensureQuestionsHostIn(panelFeed);
       if (dictateFeed) {
         appendMessagesToFeed(dictateFeed, visible, view, handlers, activeQuestions, {
           emptyText:
-            "直接说你想要的体验与设定。我会整理进右侧产物，并在回复里跟你确认、建议补充。",
+            surface === "listen"
+              ? "用几句话描述题材与爽点。确认后我会写大纲和正文；右侧可看缓冲与大纲。"
+              : "直接说你想要的体验与设定。我会整理进右侧产物，并在回复里跟你确认、建议补充。",
           loading,
         });
         if (loading) {
@@ -6071,7 +6575,10 @@ export function renderMessageFeed(view, loading, handlers = {}) {
           pending.className = "msg agent msg-assistant-row msg-pending";
           pending.id = "msg-live-pending";
           const live = view.liveStream;
-          const label = live?.label ?? view.focus?.action ?? "整理中";
+          const label =
+            live?.label ??
+            view.focus?.action ??
+            (surface === "listen" ? "连载中" : "整理中");
           pending.innerHTML = `
             <div class="msg-bubble">
               <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
@@ -6080,7 +6587,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
           dictateFeed.appendChild(pending);
           wireRetryRun(pending, handlers);
         }
-        dictateFeed.scrollTop = dictateFeed.scrollHeight;
+        settleScroller(dictateFeed, dictateScroll);
       }
       return;
     }
@@ -6163,6 +6670,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
             : "在下方继续对话。",
     loading,
     emptyClass: isPlayView(view) ? "empty" : "empty empty-intake",
+    reconcile: canKeepFeed,
   });
 
   if (reviewingNow && view.reviewArtifact && !loading && stage && !isPlayView(view)) {
@@ -6174,38 +6682,75 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   }
 
   if (loading) {
-    const pending = document.createElement("article");
-    pending.className = "msg agent msg-assistant-row msg-pending";
-    pending.id = "msg-live-pending";
+    let pending = feed.querySelector(":scope > #msg-live-pending");
+    if (!pending) {
+      pending = document.createElement("article");
+      pending.className = "msg agent msg-assistant-row msg-pending";
+      pending.id = "msg-live-pending";
+      feed.appendChild(pending);
+      wireRetryRun(pending, handlers);
+    }
     const live = view.liveStream;
     const label = live?.label ?? view.focus?.action ?? "处理中";
-    pending.innerHTML = `
-      <div class="msg-bubble">
-        <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
-        <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
-      </div>`;
+    const body = pending.querySelector(".msg-live-body");
+    if (!body) {
+      pending.innerHTML = `
+        <div class="msg-bubble">
+          <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>
+          <div class="msg-body msg-live-body">${renderLiveStreamBody(live, view)}</div>
+        </div>`;
+      wireRetryRun(pending, handlers);
+    } else {
+      updateLiveStreamPanel(view);
+    }
     feed.appendChild(pending);
-    wireRetryRun(pending, handlers);
+  } else {
+    feed.querySelector(":scope > #msg-live-pending")?.remove();
   }
 
-  feed.scrollTop = feed.scrollHeight;
+  if (!canKeepFeed) settleScroller(feed, feedScroll);
   if (stage && !stage.hidden) stage.scrollTop = 0;
 }
 
 function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, opts = {}) {
   const loading = Boolean(opts.loading);
+  const reconcile = Boolean(opts.reconcile);
   if (!visible.length && !loading) {
-    const p = document.createElement("p");
-    p.className = opts.emptyClass || "empty empty-intake";
-    p.textContent = opts.emptyText || "在下方继续对话。";
-    feed.appendChild(p);
+    if (reconcile) {
+      for (const card of [...feed.querySelectorAll(":scope > article.msg")]) card.remove();
+    }
+    let empty = reconcile ? feed.querySelector(":scope > .empty") : null;
+    if (!empty) {
+      empty = document.createElement("p");
+      feed.appendChild(empty);
+    }
+    empty.className = opts.emptyClass || "empty empty-intake";
+    empty.textContent = opts.emptyText || "在下方继续对话。";
     wireMessageFeedActions(feed, handlers);
     wireMessageContextMenu(feed, handlers);
     return;
   }
 
+  if (reconcile) feed.querySelector(":scope > .empty")?.remove();
+
+  const byId = new Map();
+  if (reconcile) {
+    for (const card of feed.querySelectorAll(":scope > article[data-message-id]")) {
+      byId.set(card.dataset.messageId, card);
+    }
+  }
+  const seen = new Set();
+
   for (const msg of visible) {
     try {
+    if (!msg?.id) continue;
+    seen.add(msg.id);
+    const existing = byId.get(msg.id);
+    const sig = messageFeedSig(msg, view);
+    if (existing?.isConnected && existing.dataset.feedSig === sig) continue;
+    if (existing?.isConnected && patchPresentWindow(existing, msg, view, sig)) continue;
+    if (existing?.isConnected) existing.remove();
+
     const isUser = msg.role === "user";
     const kind = msg.kind ?? (isUser ? "user_input" : "system_info");
     const body = msgBody(msg, view);
@@ -6235,26 +6780,30 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
     const menuTrigger = `<button type="button" class="msg-menu-trigger" data-msg-menu-trigger aria-label="打开这条消息的操作菜单" title="更多操作">⋯</button>`;
 
     card.dataset.canEdit = canEditMessage(msg) ? "1" : "0";
-    card.dataset.hasContext = msg.contextTrace ? "1" : "0";
+    card.dataset.hasContext =
+      msg.contextTrace || msg.requestOutlines?.length ? "1" : "0";
     card.dataset.originalText = body;
+    card.dataset.feedSig = messageFeedSig(msg, view);
 
     const questionsActive = kind === "worker_questions" && Boolean(activeQuestions);
     const showThinking =
       !isUser &&
       Boolean(msg.thinking) &&
-      (isPlayView(view) || kind === "dictate_reply");
+      (isPlayView(view) || kind === "dictate_reply" || kind === "listen_reply");
     const innerBody = questionsActive
       ? `<p class="msg-q-index">${esc(body)}</p>`
       : kind === "worker_questions"
         ? formatQuestionsHtml(body)
         : shouldRenderPlayPresent(msg, view)
-          ? formatPlayPresentHtml(body, view)
+          ? formatPlayPresentHtml(body, view, msg.id)
           : kind === "worker_output"
             ? formatArtifactBodyHtml(body)
             : safeBodyHtml(body);
 
     const process = !isUser && isPlayProcessMessage(msg, view);
     const playFinal = !isUser && isPlayFinalReply(msg, view);
+    const playAux =
+      !isUser && isPlayAuxLlmOutput(msg, view) && isPlayAuxLlmBubblesEnabled();
     if (process) {
       card.classList.add("msg-play-process-row");
       card.innerHTML = `
@@ -6269,8 +6818,9 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
         </details>`;
     } else {
       if (playFinal) card.classList.add("msg-play-final");
+      if (playAux) card.classList.add("msg-play-aux");
       card.innerHTML = `
-        <div class="msg-bubble${questionsActive ? " msg-bubble-index" : ""}">
+        <div class="msg-bubble${questionsActive ? " msg-bubble-index" : ""}${playAux ? " msg-bubble-aux" : ""}">
           ${isUser ? "" : `<header class="msg-head">${headInner}${menuTrigger}</header>`}
           ${showThinking ? renderThinkingBlock(msg.thinking) : ""}
           <div class="msg-body">${innerBody}</div>
@@ -6286,6 +6836,25 @@ function appendMessagesToFeed(feed, visible, view, handlers, activeQuestions, op
         msgBody(msg, view) || "(这条消息渲染失败)",
       ).replace(/\n/g, "<br>")}</div></div>`;
       feed.appendChild(fallback);
+    }
+  }
+  if (reconcile) {
+    for (const [id, card] of byId) {
+      if (!seen.has(id) && card.isConnected) card.remove();
+    }
+    const wanted = visible.map((m) => m.id).filter(Boolean);
+    const ids = [...feed.querySelectorAll(":scope > article[data-message-id]")].map(
+      (el) => el.dataset.messageId,
+    );
+    if (ids.join("\0") !== wanted.join("\0")) {
+      const tail =
+        feed.querySelector(":scope > #msg-live-pending") ||
+        feed.querySelector(":scope > #questions-card-host");
+      for (const id of wanted) {
+        const safe = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : id;
+        const card = feed.querySelector(`:scope > article[data-message-id="${safe}"]`);
+        if (card) feed.insertBefore(card, tail);
+      }
     }
   }
   wireMessageFeedActions(feed, handlers);
@@ -6394,6 +6963,7 @@ export function renderBoardPanel(view) {
 }
 
 export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
+  rememberPresentation(view);
   renderLifecycle(view);
   renderSkillPicker(view);
   // 先铺主柱（可能把询问卡移进答题槽），再渲染卡
@@ -6410,7 +6980,7 @@ export function renderWorkspace(view, loading, _onPickSkill, handlers = {}) {
 }
 
 /** 正文组成的 frontend：同一位置渲染隔离预览，源码收在后面 */
-function renderFrontendPreviewBlock(bundle, sample) {
+function renderFrontendPreviewBlock(bundle, sample, slots) {
   const source = renderFrontendSourceDetails(bundle);
   if (presentSourceBytes(bundle) > PRESENT_BYTE_LIMIT) {
     return `<section class="af-section present-preview">
@@ -6419,7 +6989,7 @@ function renderFrontendPreviewBlock(bundle, sample) {
       ${source}
     </section>`;
   }
-  const id = queuePresentFrame(bundle, previewPacket(sample));
+  const id = queuePresentFrame(bundle, previewPacket(sample), slots);
   const note = sample ? "按示例灌数渲染，不是正史正文" : "骨架预览，还没有示例灌数";
   return `<section class="af-section present-preview">
     <h4 class="af-section-title">frontend</h4>
@@ -6463,6 +7033,14 @@ document.addEventListener("keydown", (e) => {
   }
 });
 document.addEventListener("scroll", (e) => {
+  if (
+    applyingScroll === 0 &&
+    e.target instanceof Element &&
+    isFollowedScroller(e.target) &&
+    e.target.dataset?.rebuilding !== "1"
+  ) {
+    scrollFollow.set(e.target, readScrollAnchor(e.target));
+  }
   // 打开菜单后短时间内忽略（避免焦点/布局引起的误关）
   if (Date.now() - dictateProductMenuState.openedAt < 250) return;
   // 菜单自身或菜单内滚动不关
@@ -6474,5 +7052,13 @@ document.addEventListener("scroll", (e) => {
   hideDictateProductMenu();
   hideFlowNodeMenu();
 }, true);
+
+document.addEventListener("present-frame-resize", (e) => {
+  const scroller = e.target?.closest?.("#message-feed, #dictate-feed, .dictate-feed");
+  if (!scroller || scroller.dataset?.rebuilding === "1") return;
+  const saved = scrollFollow.get(scroller);
+  if (!saved?.pin) return;
+  applyScrollAnchor(scroller, saved);
+});
 
 watchPresentFrames();

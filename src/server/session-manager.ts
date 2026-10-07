@@ -93,6 +93,7 @@ import {
   sessionSkillPackId,
   skillPacksMatch,
 } from "../book/skill-id.js";
+import type { RequestOutline } from "../llm/context-outline.js";
 import {
   pruneContextTraces,
   type LlmContextTrace,
@@ -102,6 +103,8 @@ import type { BlackboardItem } from "../types/blackboard.js";
 import { Blackboard } from "../blackboard/blackboard.js";
 import { parseWorkerSetYaml } from "../skills/worker-set-parse.js";
 import { parseShellAdaptationFromReplyFormat } from "../skills/present-packet.js";
+import { parseReplyDataContract } from "../skills/reply-contract.js";
+import { projectPresentBlocks } from "../skills/present-project.js";
 import {
   CREATION_ACCEPTED_CONTENT_TAG,
   CREATION_ACCEPTED_UNITS_TAG,
@@ -183,6 +186,16 @@ import {
   type DictateProduct,
 } from "../dictate/index.js";
 import {
+  LISTEN_SERIAL_MODE_VALUE,
+  isListenSerialModeValue,
+  markListenConsumed,
+  readListenState,
+  runListenSerialTurn,
+  toListenView,
+  type ListenSerialView,
+} from "../listen-serial/index.js";
+import { synthesizeSpeech, type TtsSynthesizeResult } from "../tts/index.js";
+import {
   formatQuestionAnswersForAi,
   formatQuestionAnswersForDisplay,
   isModuleOpeningQuestions,
@@ -255,6 +268,8 @@ export type ChatMessage = {
   thinking?: string;
   /** 该次 LLM 请求实际携带的全量上下文（观察用；按设置只保留最新 N 条） */
   contextTrace?: LlmContextTrace;
+  /** 本条回复对应的各次请求标签轮廓（选题、填写都在；不含正文） */
+  requestOutlines?: RequestOutline[];
   /** run 验收后过程讨论折叠（主 feed 隐藏）；创作 messages 不删不藏 */
   compressed?: boolean;
   tokenUsage?: MessageTokenUsage;
@@ -323,6 +338,14 @@ export type SessionView = {
     block_labels?: Record<string, string>;
     empty_states?: Record<string, string>;
   };
+  /** 正文组成固定前端。游玩和开场把 present.v1 灌进去，替换示例内容。 */
+  presentationFrontend?: { html: string; css: string; js: string };
+  /** 正文组成数据契约里的区。格式化时按 id 填进对应 data-block。 */
+  presentationSlots?: Array<{ id: string; type: string }>;
+  /**
+   * 程序投影块（来自 变量.当前 等）。前端灌 present 时与消息正文合并，随真值刷新。
+   */
+  presentationProjection?: Record<string, unknown>;
   /** 总管正在输出的思维链（流式，轮询用） */
   agentThinking?: string;
   /** Agent / Worker 流式输出（轮询用） */
@@ -333,10 +356,12 @@ export type SessionView = {
    */
   runActive?: boolean;
   resumed?: boolean;
-  /** 创作进料：recipe=配方节点流；dictate=转述整理直填 */
-  creationMode?: "recipe" | "dictate";
+  /** 创作进料：recipe=配方节点流；dictate=转述整理；listen_serial=听书连载 */
+  creationMode?: "recipe" | "dictate" | "listen_serial";
   /** 转述式已写入黑板的产物（按相对序） */
   dictateProducts?: Array<{ tag: string; content: string; order?: number }>;
+  /** 听书连载投影（大纲/正文缓冲/未读字数） */
+  listenSerial?: ListenSerialView;
   tokenStats?: {
     sessionTotal: number;
     sessionCached?: number;
@@ -555,8 +580,16 @@ export class SessionManager {
       this.writeOpeningPersonaChoice(s, true);
     }
 
+    // 与进游玩一致：用完整文档（含 present.v1），勿用侧栏预览的压扁正文
+    const rawOnBoard = board.getContentByTag(picked.tag)?.trim() ?? "";
+    const body =
+      splitOpeningDocument(
+        rawOnBoard || picked.document || picked.text,
+      ).text.trim() ||
+      picked.document?.trim() ||
+      picked.text.trim();
     const expanded = this.expandDirectivesText(
-      picked.text,
+      body,
       this.playDirectiveContext(s),
     );
     board.write({
@@ -566,7 +599,13 @@ export class SessionManager {
     });
     const openingAt = s.messages.findIndex((m) => m.title === "开场白");
     if (openingAt >= 0) {
-      s.messages[openingAt] = this.playOpeningMessage(expanded);
+      // 保留 id，前端才能 patch 呈现壳 forceFill，而不是拆 iframe 后软灌样本槽
+      s.messages[openingAt] = this.playOpeningMessage(
+        expanded,
+        s.messages[openingAt]!.id,
+      );
+    } else {
+      s.messages.unshift(this.playOpeningMessage(expanded));
     }
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
@@ -613,11 +652,13 @@ export class SessionManager {
 
     const next = applyContextOrderEdit(current!, edit);
     const serialized = serializeContextOrder(next);
+    const orderMeta = bb.getLatestByTag(CONTEXT_ORDER_TAG)?.metadata;
 
     bb.write({
       tag: CONTEXT_ORDER_TAG,
       content: serialized,
       source: "user",
+      metadata: orderMeta,
     });
 
     if (workerSetRaw) {
@@ -631,6 +672,7 @@ export class SessionManager {
           tag: targetTag,
           content: mergeContextOrderIntoWorkerSetJson(workerSetRaw, next),
           source: "user",
+          metadata: bb.getLatestByTag(targetTag)?.metadata,
         });
       }
     } else {
@@ -639,6 +681,7 @@ export class SessionManager {
         tag: CONTEXT_ORDER_TAG,
         content: serialized,
         source: "user",
+        metadata: orderMeta,
       });
     }
 
@@ -670,7 +713,7 @@ export class SessionManager {
     bookId?: string,
     preselectSkillId?: string,
     selectedRecipeId?: string,
-    opts?: { creationMode?: "recipe" | "dictate" },
+    opts?: { creationMode?: "recipe" | "dictate" | "listen_serial" },
   ): Promise<SessionView> {
     const id = randomUUID();
     const messages: ChatMessage[] = [];
@@ -713,18 +756,22 @@ export class SessionManager {
     } else {
       await runtime.start();
     }
-    const useDictate = opts?.creationMode === "dictate";
+    const creationMode = opts?.creationMode ?? "recipe";
+    const useDictate = creationMode === "dictate";
+    const useListen = creationMode === "listen_serial";
     await this.refreshRecipeOptions(
       managed,
-      useDictate ? "dictate" : "recipe",
+      useDictate || useListen ? "dictate" : "recipe",
     );
 
     if (selectedRecipeId?.trim()) {
       await this.applySelectedRecipe(managed, selectedRecipeId.trim(), {
-        seedFlow: !useDictate,
+        seedFlow: !useDictate && !useListen,
       });
     }
-    if (useDictate) {
+    if (useListen) {
+      this.enterListenSerialMode(managed);
+    } else if (useDictate) {
       this.enterDictateMode(managed);
     } else {
       await this.maybeKickAgentAfterDemand(runtime);
@@ -778,6 +825,145 @@ export class SessionManager {
     return isDictateModeValue(
       s.runtime.getBlackboard().getContentByTag(CREATION_INTAKE_MODE_TAG),
     );
+  }
+
+  /** 听书连载：薄上下文连续产文，不走对话落盘工具环 */
+  private enterListenSerialMode(s: ManagedSession): void {
+    const board = s.runtime.getBlackboard();
+    board.write({
+      tag: CREATION_INTAKE_MODE_TAG,
+      content: LISTEN_SERIAL_MODE_VALUE,
+      source: "runtime",
+    });
+    s.runtime.enterDictateIntake(
+      "听书连载：用几句话描述题材与爽点；确认后我会生成大纲并自动补正文。不满意就说一句意见改后面。",
+    );
+    const welcome =
+      "听书连载：说几句你想听的故事（题材、人设、爽点即可）。我会轻回问或给出草案；确认后自动出大纲和正文缓冲。听的过程中随时一句意见，只改后面的走向。";
+    s.messages.push({
+      id: randomUUID(),
+      role: "system",
+      text: welcome,
+      createdAt: new Date().toISOString(),
+      kind: "orchestrator_prompt",
+      actor: "orchestrator",
+      title: "听书连载",
+      body: welcome,
+    });
+  }
+
+  private isListenSerialMode(s: ManagedSession): boolean {
+    return isListenSerialModeValue(
+      s.runtime.getBlackboard().getContentByTag(CREATION_INTAKE_MODE_TAG),
+    );
+  }
+
+  private creationIntakeMode(
+    s: ManagedSession,
+  ): "recipe" | "dictate" | "listen_serial" {
+    if (this.isListenSerialMode(s)) return "listen_serial";
+    if (this.isDictateMode(s)) return "dictate";
+    return "recipe";
+  }
+
+  private extractListenDialogue(
+    messages: ChatMessage[],
+  ): Array<{ role: "user" | "assistant"; text: string }> {
+    const out: Array<{ role: "user" | "assistant"; text: string }> = [];
+    for (const m of messages) {
+      if (m.kind === "user_input" || m.role === "user") {
+        const t = (m.body ?? m.text ?? "").trim();
+        if (t) out.push({ role: "user", text: t });
+        continue;
+      }
+      if (m.kind === "listen_reply") {
+        const t = (m.body ?? m.text ?? "").trim();
+        if (t) out.push({ role: "assistant", text: t });
+      }
+    }
+    return out;
+  }
+
+  private async runListenSerialTurnForSession(
+    s: ManagedSession,
+    userText: string,
+  ): Promise<void> {
+    const llm = createDefaultMainAgentLlm(s.trackingRef, () =>
+      this.personaForManaged(s),
+    );
+    const dialogue = this.extractListenDialogue(s.messages);
+    const result = await runListenSerialTurn({
+      llm,
+      board: s.runtime.getBlackboard(),
+      dialogue,
+      userText,
+    });
+    const keep = normalizeContextTraceKeepLatest(
+      loadAppSettings().contextTraceKeepLatest,
+    );
+    const requestOutlines = s.trackingRef.current.pendingOutlines;
+    const pendingTrace = s.trackingRef.current.pendingContextTrace;
+    const tokenUsage = s.trackingRef.current.pendingUsage;
+    s.trackingRef.current.pendingOutlines = undefined;
+    s.trackingRef.current.pendingContextTrace = undefined;
+    s.trackingRef.current.pendingUsage = undefined;
+    s.messages.push({
+      id: randomUUID(),
+      role: "system",
+      text: result.reply,
+      createdAt: new Date().toISOString(),
+      kind: "listen_reply",
+      actor: "orchestrator",
+      title: "听书连载",
+      body: result.reply,
+      ...(tokenUsage ? { tokenUsage } : {}),
+      ...(keep > 0 && pendingTrace ? { contextTrace: pendingTrace } : {}),
+      ...(requestOutlines?.length ? { requestOutlines } : {}),
+    });
+    s.messages = pruneContextTraces(s.messages, keep);
+    s.runtime.enterDictateIntake(
+      result.softStop
+        ? "本段已告一段落。输入「下一波」或「收工」，或一句意见改向。"
+        : "继续听/读，或说「继续」补货；不满意直接一句意见。",
+    );
+  }
+
+  /** 听书：标记已消费字数（阅读进度） */
+  markListenSerialConsumed(
+    sessionId: string,
+    consumedChars: number,
+  ): SessionView {
+    const s = this.require(sessionId);
+    if (!this.isListenSerialMode(s)) {
+      throw new Error("当前不是听书连载模式");
+    }
+    markListenConsumed(s.runtime.getBlackboard(), consumedChars);
+    if (s.bookId) this.persist(s);
+    return this.toView(sessionId);
+  }
+
+  /** 听书：按节合成语音（默认 Edge） */
+  async synthesizeListenSection(
+    sessionId: string,
+    sectionId: string,
+  ): Promise<TtsSynthesizeResult & { sectionId: string; title: string }> {
+    const s = this.require(sessionId);
+    if (!this.isListenSerialMode(s)) {
+      throw new Error("当前不是听书连载模式");
+    }
+    const id = sectionId.trim();
+    if (!id) throw new Error("需要 sectionId");
+    const state = readListenState(s.runtime.getBlackboard());
+    const section = state.sections.find((x) => x.id === id);
+    if (!section?.text?.trim()) {
+      throw new Error("未找到该节正文");
+    }
+    const spoken = `【${section.title}】\n${section.text}`.trim();
+    const result = await synthesizeSpeech({
+      text: spoken,
+      cacheKey: `${sessionId}:${id}`,
+    });
+    return { ...result, sectionId: id, title: section.title };
   }
 
   private listDictateProducts(s: ManagedSession): DictateProduct[] {
@@ -897,11 +1083,10 @@ export class SessionManager {
           if (dictateProductFamily(tag) === OPENING_PRODUCT_FAMILY) {
             const split = splitOpeningDocument(content);
             if (split.persona) {
-              ensureProtagonistFromPersona(
-                board,
-                split.persona,
-                protagonistTagForOpeningSlot(tag),
-              );
+              const personaTag = protagonistTagForOpeningSlot(tag);
+              ensureProtagonistFromPersona(board, split.persona, personaTag, {
+                overwrite: personaTag !== PROTAGONIST_TAG,
+              });
             }
             // 仅有用户角色 meta、无叙事：抬到主角设定，不污染开场白
             if (split.persona && !split.text.trim()) {
@@ -1009,6 +1194,15 @@ export class SessionManager {
       s.messages.length,
       this.captureCheckpoint(s),
     );
+    const keep = normalizeContextTraceKeepLatest(
+      loadAppSettings().contextTraceKeepLatest,
+    );
+    const requestOutlines = s.trackingRef.current.pendingOutlines;
+    const pendingTrace = s.trackingRef.current.pendingContextTrace;
+    const tokenUsage = s.trackingRef.current.pendingUsage;
+    s.trackingRef.current.pendingOutlines = undefined;
+    s.trackingRef.current.pendingContextTrace = undefined;
+    s.trackingRef.current.pendingUsage = undefined;
     s.messages.push({
       id: randomUUID(),
       role: "system",
@@ -1019,7 +1213,11 @@ export class SessionManager {
       title: "转述整理",
       body: result.reply,
       ...(thinking ? { thinking } : {}),
+      ...(tokenUsage ? { tokenUsage } : {}),
+      ...(keep > 0 && pendingTrace ? { contextTrace: pendingTrace } : {}),
+      ...(requestOutlines?.length ? { requestOutlines } : {}),
     });
+    s.messages = pruneContextTraces(s.messages, keep);
     s.runtime.enterDictateIntake();
   }
 
@@ -1494,6 +1692,7 @@ export class SessionManager {
       // 转述聊天常夹确认/建议，不能当开场白
       if (
         kind === "dictate_reply" ||
+        kind === "listen_reply" ||
         kind === "agent_tool" ||
         kind === "orchestrator_thinking" ||
         kind === "worker_questions"
@@ -1830,9 +2029,9 @@ export class SessionManager {
     );
   }
 
-  private playOpeningMessage(text: string): ChatMessage {
+  private playOpeningMessage(text: string, keepId?: string): ChatMessage {
     return {
-      id: randomUUID(),
+      id: keepId || randomUUID(),
       role: "system",
       text,
       createdAt: new Date().toISOString(),
@@ -1917,6 +2116,29 @@ export class SessionManager {
     return count;
   }
 
+  /**
+   * 切换/改了全局用户角色：游玩层开场按新 @玩家 重展开，并改用全局角色卡。
+   */
+  rebindPlayOpeningsForActivePersona(): number {
+    let count = 0;
+    for (const [sessionId, s] of this.sessions) {
+      if (!isPlayLayerActive(s.runtime.getSession().slots)) continue;
+      if (inferLifecycleStage(s.runtime.getSession()) !== "play") continue;
+      const aux = buildPlayAuxView(
+        s.runtime.getBlackboard(),
+        s.runtime.getSession().slots,
+      );
+      if (!aux.openings.length) continue;
+      try {
+        this.selectPlayOpening(sessionId, aux.selectedOpeningIndex, false);
+        count += 1;
+      } catch {
+        /* 单局失败不挡其它局 */
+      }
+    }
+    return count;
+  }
+
   async sendMessage(
     id: string,
     text: string,
@@ -1983,13 +2205,15 @@ export class SessionManager {
           const inPlay =
             isPlayLayerActive(sess.slots) ||
             inferLifecycleStage(sess) === "play";
-          if (
-            this.isDictateMode(s) &&
-            reason?.kind === "input" &&
-            !inPlay
-          ) {
-            await this.runDictateTurnForSession(s, trimmed || text);
-            return;
+          if (reason?.kind === "input" && !inPlay) {
+            if (this.isListenSerialMode(s)) {
+              await this.runListenSerialTurnForSession(s, trimmed || text);
+              return;
+            }
+            if (this.isDictateMode(s)) {
+              await this.runDictateTurnForSession(s, trimmed || text);
+              return;
+            }
           }
         }
         if (reason?.kind === "approve_step") {
@@ -2237,13 +2461,15 @@ export class SessionManager {
         const inPlay =
           isPlayLayerActive(sess.slots) ||
           inferLifecycleStage(sess) === "play";
-        if (
-          this.isDictateMode(s) &&
-          reason?.kind === "input" &&
-          !inPlay
-        ) {
-          await this.runDictateTurnForSession(s, trimmed);
-          return;
+        if (reason?.kind === "input" && !inPlay) {
+          if (this.isListenSerialMode(s)) {
+            await this.runListenSerialTurnForSession(s, trimmed);
+            return;
+          }
+          if (this.isDictateMode(s)) {
+            await this.runDictateTurnForSession(s, trimmed);
+            return;
+          }
         }
         await s.runtime.submitInput(trimmed);
       });
@@ -3100,6 +3326,7 @@ export class SessionManager {
         undefined;
       const pendingTrace = managed.trackingRef.current.pendingContextTrace;
       let contextTrace: LlmContextTrace | undefined;
+      let requestOutlines: RequestOutline[] | undefined;
       if (
         pendingTrace &&
         classified &&
@@ -3112,10 +3339,19 @@ export class SessionManager {
           contextTrace = pendingTrace;
         }
         managed.trackingRef.current.pendingContextTrace = undefined;
+        requestOutlines = managed.trackingRef.current.pendingOutlines;
+        managed.trackingRef.current.pendingOutlines = undefined;
       }
 
       managed.messages.push(
-        this.msg("system", text, usage, thinking, contextTrace),
+        this.msg(
+          "system",
+          text,
+          usage,
+          thinking,
+          contextTrace,
+          requestOutlines?.length ? requestOutlines : undefined,
+        ),
       );
       managed.messages = pruneContextTraces(
         managed.messages,
@@ -3405,6 +3641,7 @@ export class SessionManager {
     tokenUsage?: MessageTokenUsage,
     thinking?: string,
     contextTrace?: LlmContextTrace,
+    requestOutlines?: RequestOutline[],
   ): ChatMessage {
     const base = {
       id: randomUUID(),
@@ -3414,6 +3651,7 @@ export class SessionManager {
       ...(tokenUsage ? { tokenUsage } : {}),
       ...(thinking ? { thinking } : {}),
       ...(contextTrace ? { contextTrace } : {}),
+      ...(requestOutlines?.length ? { requestOutlines } : {}),
     };
     if (role === "user") {
       return {
@@ -3812,10 +4050,12 @@ export class SessionManager {
       lifecycleStage,
       { workerSetYaml },
     );
-    const shellAdapt = parseShellAdaptationFromReplyFormat(
+    const replyFormatRaw =
       s.runtime.getBlackboard().getContentByTag("设计.正文组成") ??
-        s.runtime.getBlackboard().getContentByTag("设计.回复格式"),
-    );
+      s.runtime.getBlackboard().getContentByTag("设计.0层正文组成") ??
+      s.runtime.getBlackboard().getContentByTag("设计.回复格式");
+    const shellAdapt = parseShellAdaptationFromReplyFormat(replyFormatRaw);
+    const replyContract = parseReplyDataContract(replyFormatRaw);
 
     return {
       id,
@@ -3831,9 +4071,12 @@ export class SessionManager {
       actions,
       pipeline: buildPipeline(session),
       lifecycleStage,
-      creationMode: this.isDictateMode(s) ? "dictate" : "recipe",
+      creationMode: this.creationIntakeMode(s),
       dictateProducts: this.isDictateMode(s)
         ? this.listDictateProducts(s)
+        : undefined,
+      listenSerial: this.isListenSerialMode(s)
+        ? toListenView(readListenState(s.runtime.getBlackboard()))
         : undefined,
       playLayerActive: isPlayLayerActive(session.slots),
       playReady: canEnterPlay(session),
@@ -3895,6 +4138,27 @@ export class SessionManager {
             ...shellAdapt.tweaks,
           }
         : undefined,
+      presentationFrontend: replyContract?.frontend,
+      presentationSlots: replyContract
+        ? [...replyContract.modelBlocks, ...replyContract.programBlocks].map((block) => ({
+            id: block.id,
+            type: block.type,
+          }))
+        : undefined,
+      presentationProjection: (() => {
+        if (!replyContract?.programBlocks.length) return undefined;
+        const board = s.runtime.getBlackboard();
+        const projected = projectPresentBlocks({
+          contract: replyContract,
+          statusBarRaw:
+            board.getContentByTag("设计.监控栏") ??
+            board.getContentByTag("设计.回复呈现"),
+          currentVarsRaw: board.getContentByTag("变量.当前"),
+          topologyRaw: board.getContentByTag("运行.拓扑"),
+          readTag: (tag) => board.getContentByTag(tag),
+        });
+        return Object.keys(projected).length ? projected : undefined;
+      })(),
       liveStream: this.buildLiveStreamView(id),
       agentThinking: this.agentThinkingLive.get(id),
       runActive: Boolean(s.runAbort),

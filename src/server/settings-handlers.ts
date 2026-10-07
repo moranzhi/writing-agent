@@ -613,8 +613,13 @@ export async function handleSettingsApi(
         activate: body.activate,
         creationDefault: body.creationDefault,
       });
+      const reboundSessions =
+        body.activate === false
+          ? 0
+          : sessionManager.rebindPlayOpeningsForActivePersona();
       json(res, 201, {
         ...personasPayload({ persona }),
+        reboundSessions,
       });
     } catch (e) {
       json(res, 400, {
@@ -634,8 +639,11 @@ export async function handleSettingsApi(
     if (activate && req.method === "POST") {
       try {
         const persona = setActivePersonaId(id);
+        const reboundSessions =
+          sessionManager.rebindPlayOpeningsForActivePersona();
         json(res, 200, {
           ...personasPayload({ persona, activeId: persona.id }),
+          reboundSessions,
         });
       } catch (e) {
         json(res, 404, {
@@ -653,8 +661,13 @@ export async function handleSettingsApi(
           creationDefault?: boolean;
         };
         const persona = updatePersona(id, body);
+        const reboundSessions =
+          getActivePersona()?.id === persona.id
+            ? sessionManager.rebindPlayOpeningsForActivePersona()
+            : 0;
         json(res, 200, {
           ...personasPayload({ persona }),
+          reboundSessions,
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -666,8 +679,11 @@ export async function handleSettingsApi(
     if (req.method === "DELETE") {
       try {
         deletePersona(id);
+        const reboundSessions =
+          sessionManager.rebindPlayOpeningsForActivePersona();
         json(res, 200, {
           ...personasPayload({ ok: true }),
+          reboundSessions,
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

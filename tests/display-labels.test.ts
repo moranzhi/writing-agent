@@ -18,6 +18,7 @@ describe("display-labels", () => {
   it("maps creation intake modes and recipe display names", () => {
     expect(displayCreationModeLabel("recipe")).toBe("工序编排");
     expect(displayCreationModeLabel("dictate")).toBe("对话落盘");
+    expect(displayCreationModeLabel("listen_serial")).toBe("听书连载");
     expect(displaySkillPackLabel("world-simulator")).toBe("回合推演");
     expect(displaySkillPackLabel("快穿短局")).toBe("快穿短局");
   });

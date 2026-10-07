@@ -5,6 +5,7 @@ const SECTION_LABELS = {
   principles: "原则",
   probe: "追问",
   output: "产物形状",
+  score: "评分",
   checklist: "自检",
   examples: "示例",
 };
@@ -16,6 +17,7 @@ const SECTION_ORDER = [
   "principles",
   "probe",
   "output",
+  "score",
   "checklist",
   "examples",
 ];
@@ -27,8 +29,20 @@ const STATUS_LABELS = {
   missing: "缺文件",
 };
 
+const PRESENT_LABELS = {
+  message: "普通楼层",
+  zero_layer: "0 层卡",
+};
+
+const LAYER_LABELS = {
+  intermediate: "中间产物",
+  final: "最终产物",
+};
+
 /** @type {Array<any>} */
 let modulesCache = [];
+/** @type {Array<{id: string, label: string, hint: string}>} */
+let groupsCache = [];
 let activeId = "";
 let statusFilter = "";
 let searchQuery = "";
@@ -62,23 +76,64 @@ function filteredModules() {
   });
 }
 
+function rowTags(module) {
+  const tags = [];
+  const mode = PRESENT_LABELS[module.presentMode];
+  if (mode) tags.push(mode);
+  if (module.repeatable) tags.push("可反复");
+  if (module.closer) tags.push("收口");
+  if (module.priorArtifact) tags.push("先验产物");
+  return tags;
+}
+
 function renderList() {
   const list = document.getElementById("mod-list");
   const items = filteredModules();
+  const count = document.getElementById("pack-label");
+  count.textContent =
+    items.length === modulesCache.length
+      ? `${modulesCache.length} 个节点`
+      : `显示 ${items.length} / ${modulesCache.length}`;
+
   if (items.length === 0) {
-    list.innerHTML = `<p class="mod-empty" style="padding:8px">无匹配项</p>`;
+    list.innerHTML = `<p class="mod-empty">没有符合条件的节点</p>`;
     return;
   }
-  list.innerHTML = items
-    .map(
-      (m) => `<button type="button" class="mod-item${m.id === activeId ? " active" : ""}" data-id="${escapeHtml(m.id)}">
+
+  const byGroup = new Map(groupsCache.map((group) => [group.id, []]));
+  for (const module of items) {
+    const bucket = byGroup.get(module.group);
+    if (bucket) bucket.push(module);
+  }
+
+  list.innerHTML = groupsCache
+    .map((group) => {
+      const rows = byGroup.get(group.id) ?? [];
+      if (rows.length === 0) return "";
+      const buttons = rows
+        .map((module) => {
+          const tags = rowTags(module);
+          const tagHtml = tags.length
+            ? `<span class="mod-item-tags">${tags
+                .map((tag) => `<span class="mod-tag">${escapeHtml(tag)}</span>`)
+                .join("")}</span>`
+            : "";
+          return `<button type="button" class="mod-item${module.id === activeId ? " active" : ""}" data-id="${escapeHtml(module.id)}">
         <span class="mod-item-name">
-          <span>${escapeHtml(m.name)}</span>
-          <span class="mod-dot ${escapeHtml(m.status)}" title="${escapeHtml(STATUS_LABELS[m.status] ?? m.status)}"></span>
+          <span>${escapeHtml(module.name)}</span>
+          <span class="mod-dot ${escapeHtml(module.status)}" title="${escapeHtml(STATUS_LABELS[module.status] ?? module.status)}"></span>
         </span>
-        <p class="mod-item-decl">${escapeHtml(m.declaration)}</p>
-      </button>`,
-    )
+        <p class="mod-item-decl">${escapeHtml(module.declaration)}</p>
+        ${tagHtml}
+      </button>`;
+        })
+        .join("");
+      return `<section class="mod-group" aria-labelledby="grp-${escapeHtml(group.id)}">
+        <h2 class="mod-group-label" id="grp-${escapeHtml(group.id)}">${escapeHtml(group.label)}</h2>
+        <p class="mod-group-hint">${escapeHtml(group.hint)}</p>
+        ${buttons}
+      </section>`;
+    })
     .join("");
 }
 
@@ -86,6 +141,10 @@ function metaField(meta, key) {
   if (!meta || meta[key] == null) return "";
   const v = meta[key];
   return typeof v === "string" ? v.trim() : String(v);
+}
+
+function groupLabel(id) {
+  return groupsCache.find((group) => group.id === id)?.label ?? "";
 }
 
 function renderDetail(detail) {
@@ -96,7 +155,8 @@ function renderDetail(detail) {
   const host = document.getElementById("mod-detail");
 
   title.textContent = detail.name;
-  sub.textContent = `${detail.id} · ${detail.artifact}`;
+  const group = groupLabel(detail.group);
+  sub.textContent = group ? `${group} · ${detail.artifact}` : detail.artifact;
 
   badge.hidden = false;
   badge.className = `mod-badge ${detail.status}`;
@@ -108,10 +168,15 @@ function renderDetail(detail) {
   metaBar.hidden = !(when || whenNot || boundary);
   if (!metaBar.hidden) {
     const bits = [];
-    if (when) bits.push(`<strong>何时选用</strong> ${escapeHtml(when).replace(/\n/g, "<br>")}`);
-    if (whenNot) bits.push(`<strong>何时不选</strong> ${escapeHtml(whenNot).replace(/\n/g, "<br>")}`);
-    if (boundary) bits.push(`<strong>边界</strong> ${escapeHtml(boundary).replace(/\n/g, "<br>")}`);
-    metaBar.innerHTML = bits.join("<hr style='border:none;border-top:1px solid var(--st-border);margin:10px 0'>");
+    if (when) bits.push(["何时选用", when]);
+    if (whenNot) bits.push(["何时不选", whenNot]);
+    if (boundary) bits.push(["边界", boundary]);
+    metaBar.innerHTML = bits
+      .map(
+        ([label, text]) =>
+          `<div class="mod-meta-row"><strong>${escapeHtml(label)}</strong><p>${escapeHtml(text).replace(/\n/g, "<br>")}</p></div>`,
+      )
+      .join("");
   }
 
   const present = SECTION_ORDER.filter((id) => detail.sections?.[id]);
@@ -135,12 +200,28 @@ function renderDetail(detail) {
     })
     .join("");
 
+  const facts = [
+    ["产物", `<code>${escapeHtml(detail.artifact)}</code>`],
+    ["节点", `<code>${escapeHtml(detail.id)}</code>`],
+  ];
+  if (LAYER_LABELS[detail.layer]) facts.push(["产物层", escapeHtml(LAYER_LABELS[detail.layer])]);
+  const tags = rowTags(detail);
+  if (detail.programSide) tags.push("程序编译");
+  if (tags.length) facts.push(["标记", escapeHtml(tags.join(" · "))]);
+  if (detail.libraries?.length) {
+    facts.push(["绑定库", escapeHtml(detail.libraries.join("、"))]);
+  }
+  if (detail.land) facts.push(["落盘", escapeHtml(detail.land)]);
+  facts.push([
+    "已有块",
+    escapeHtml(present.map((id) => SECTION_LABELS[id] ?? id).join(" · ") || "—"),
+  ]);
+
   host.innerHTML = `
     <div class="mod-summary">
       <p class="mod-decl">${escapeHtml(detail.declaration)}</p>
       <dl>
-        <dt>产物 tag</dt><dd><code>${escapeHtml(detail.artifact)}</code></dd>
-        <dt>已有块</dt><dd>${present.map((id) => SECTION_LABELS[id] ?? id).join(" · ") || "—"}</dd>
+        ${facts.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`).join("")}
       </dl>
     </div>
     ${nav}
@@ -192,19 +273,22 @@ async function boot() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     modulesCache = data.modules || [];
-    document.getElementById("pack-label").textContent =
-      `配方包 · ${data.skillPackId || "—"} · ${modulesCache.length} 项`;
+    groupsCache = data.groups || [];
     renderList();
 
     const fromHash = decodeURIComponent((location.hash || "").replace(/^#/, ""));
     const initial =
       (fromHash && modulesCache.find((m) => m.id === fromHash)?.id) ||
-      modulesCache.find((m) => m.status === "ready")?.id ||
+      modulesCache.find((m) => m.group === "content" && m.status === "ready")?.id ||
+      modulesCache.find((m) => m.group === "content")?.id ||
       modulesCache[0]?.id;
     if (initial) await selectModule(initial);
+    else document.getElementById("pack-label").textContent = "没有节点";
   } catch (err) {
     setError(err instanceof Error ? err.message : String(err));
     document.getElementById("pack-label").textContent = "加载失败";
+    document.getElementById("mod-list").innerHTML =
+      `<p class="mod-empty">节点目录没有加载出来</p>`;
   }
 }
 

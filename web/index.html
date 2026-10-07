@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css?v=20260930-present-preview" />
+    <link rel="stylesheet" href="/styles.css?v=20261002-context-system" />
     <script>
       (function () {
         try {
@@ -196,11 +196,19 @@
     <dialog id="dialog-new-book" class="dialog">
       <form method="dialog" id="form-new-book">
         <h2>新建作品</h2>
-        <p class="dialog-desc">创建后直接说你想写什么；助手会在对话中判断合适的创作路径。</p>
+        <p class="dialog-desc" id="dialog-new-book-desc">填写名称即可创建。</p>
         <label class="field">
           名称
           <input id="input-book-title" type="text" placeholder="未命名作品" maxlength="80" autofocus />
         </label>
+        <label class="field" id="field-creation-mode" hidden>
+          创作方式
+          <select id="input-creation-mode">
+            <option value="dictate" selected>对话落盘（可玩规格）</option>
+            <option value="listen_serial">听书连载（连续消费）</option>
+          </select>
+        </label>
+        <input type="hidden" id="input-creation-mode-locked" value="" />
         <div class="dialog-actions">
           <button type="button" class="btn" value="cancel" id="btn-cancel-new">取消</button>
           <button type="submit" class="btn btn-primary" id="btn-create-book">创建</button>
@@ -235,6 +243,7 @@
     </menu>
 
     <menu id="msg-action-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" id="msg-menu-raw" data-msg-menu-action="view-raw">查看原文</button>
       <button type="button" class="context-menu-item" id="msg-menu-context" data-msg-menu-action="view-context" hidden>查看上下文</button>
       <button type="button" class="context-menu-item" id="msg-menu-compare" data-msg-menu-action="compare" hidden>对比</button>
       <button type="button" class="context-menu-item" id="msg-menu-edit" data-msg-menu-action="edit">编辑</button>
@@ -291,9 +300,19 @@
 
     <dialog id="dialog-context-trace" class="dialog dialog-wide" aria-labelledby="context-trace-title">
       <form method="dialog" class="context-trace-form">
-        <h2 id="context-trace-title">上下文调用日志</h2>
+        <h2 id="context-trace-title">请求分段</h2>
         <p class="dialog-desc" id="context-trace-meta"></p>
-        <pre id="context-trace-body" class="context-trace-body"></pre>
+        <div class="context-trace-scroll" id="context-trace-scroll">
+          <section class="context-trace-system" id="context-trace-system">
+            <p class="context-trace-kicker">系统信息</p>
+            <p class="dialog-desc" id="context-trace-system-note">用量、断点、分段标签和哈希只给你对照，这段文字本身不会发给模型。「工具」是单独的 tools 字段，不在消息正文里。</p>
+            <pre id="context-trace-outline" class="context-trace-body context-trace-outline"></pre>
+          </section>
+          <section id="context-trace-messages">
+            <p class="context-trace-kicker">发给模型的消息</p>
+            <pre id="context-trace-body" class="context-trace-body"></pre>
+          </section>
+        </div>
         <div class="dialog-actions">
           <button type="button" class="btn" id="btn-copy-context">复制全文</button>
           <button type="submit" class="btn btn-primary" value="close">关闭</button>
@@ -324,6 +343,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260928-session-restore"></script>
+    <script type="module" src="/app.js?v=20261007-view-raw"></script>
   </body>
 </html>

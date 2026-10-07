@@ -9,7 +9,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import type { BookProject, BookSummary } from "../types/book.js";
+import type {
+  BookCreationMode,
+  BookProject,
+  BookSummary,
+} from "../types/book.js";
+
+function normalizeBookCreationMode(
+  raw: string | undefined | null,
+): BookCreationMode {
+  if (raw === "listen_serial" || raw === "recipe" || raw === "dictate") {
+    return raw;
+  }
+  return "dictate";
+}
 import type { PersistedBookSession } from "../types/book-session.js";
 import type { RunSnapshot } from "../types/run-snapshot.js";
 import { ensureUserDataDirs, getUserDataDir } from "../config/user-data-dir.js";
@@ -57,6 +70,7 @@ export function listBooks(): BookSummary[] {
       title: b.title,
       activeSkillId: b.activeSkillId ?? b.orchestratorId,
       activeSkillName: b.activeSkillName ?? b.orchestratorName,
+      creationMode: normalizeBookCreationMode(b.creationMode),
       preview: b.preview,
       updatedAt: b.updatedAt,
       orchestratorId: b.orchestratorId,
@@ -67,19 +81,27 @@ export function listBooks(): BookSummary[] {
 export function getBook(id: string): BookProject | null {
   try {
     const raw = readFileSync(bookPath(id), "utf8");
-    return JSON.parse(raw) as BookProject;
+    const book = JSON.parse(raw) as BookProject;
+    return {
+      ...book,
+      creationMode: normalizeBookCreationMode(book.creationMode),
+    };
   } catch {
     return null;
   }
 }
 
-export function createBook(input: { title?: string }): BookProject {
+export function createBook(input: {
+  title?: string;
+  creationMode?: BookCreationMode;
+}): BookProject {
   ensureUserDataDirs();
   mkdirSync(booksDir(), { recursive: true });
   const now = new Date().toISOString();
   const book: BookProject = {
     id: randomUUID(),
     title: input.title?.trim() || "未命名作品",
+    creationMode: normalizeBookCreationMode(input.creationMode),
     preview: "新建作品，描述你想创作什么…",
     sessionIds: [],
     createdAt: now,
@@ -100,6 +122,7 @@ export function updateBook(
       | "activeSessionId"
       | "activeSkillId"
       | "activeSkillName"
+      | "creationMode"
       | "orchestratorId"
       | "orchestratorName"
     >

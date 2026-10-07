@@ -60,6 +60,7 @@ export function displayCreationModeLabel(id) {
   const map = {
     recipe: "工序编排",
     dictate: "对话落盘",
+    listen_serial: "听书连载",
   };
   return map[id] ?? id;
 }
