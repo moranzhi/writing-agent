@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DICTATE_MODULE_READ_STATE_TAG,
+  DICTATE_REMEDIATE_TAG,
   buildDictateContext,
+  clipDictateDialogue,
   parseDictateModuleReadState,
+  parseDictateRemediate,
   runDictateTurn,
   type DictateModuleReadPayload,
 } from "../src/dictate/index.js";
@@ -179,7 +182,37 @@ describe("dictate planned round", () => {
     expect(selectBody.indexOf("第一句")).toBeLessThan(selectBody.indexOf("改成细雨"));
   });
 
-  it("injects the spec, stamps the read credential, and rewrites only the missing tag", async () => {
+  it("clips earlier dialogue to the configured history turn window", () => {
+    const dialogue = [
+      { role: "user" as const, text: "零" },
+      { role: "assistant" as const, text: "零回" },
+      { role: "user" as const, text: "一" },
+      { role: "assistant" as const, text: "一回" },
+      { role: "user" as const, text: "二" },
+      { role: "assistant" as const, text: "二回" },
+      { role: "user" as const, text: "本轮" },
+    ];
+    expect(clipDictateDialogue(dialogue, 2).map((item) => item.text)).toEqual([
+      "一",
+      "一回",
+      "二",
+      "二回",
+      "本轮",
+    ]);
+    const built = buildDictateContext({
+      systemPrompt: "规则",
+      products: [],
+      dialogue,
+      phase: "select",
+      historyTurns: 2,
+    });
+    const body = built.messages[1]?.content ?? "";
+    expect(body).not.toContain("【用户】\n零");
+    expect(body).toContain("一");
+    expect(body).toContain("本轮");
+  });
+
+  it("injects the spec, stamps the read credential, and writes on the single fill", async () => {
     const products: Array<{ tag: string; content: string }> = [];
     const tags = new Map<string, string>();
     const result = await runDictateTurn({
@@ -189,7 +222,6 @@ describe("dictate planned round", () => {
           inserts: [{ tag: "设计.氛围", module_id: "mood" }],
           deletes: [],
         },
-        { products: [], reply: "还没写" },
         {
           products: [{ tag: "设计.氛围", content: "细雨" }],
           reply: "已写成细雨",
@@ -223,6 +255,7 @@ describe("dictate planned round", () => {
     expect(result.reply).toContain("已写成细雨");
     const state = parseDictateModuleReadState(tags.get(DICTATE_MODULE_READ_STATE_TAG));
     expect(state.modules.mood).toBe("v-test");
+    expect(tags.get(DICTATE_REMEDIATE_TAG) ?? "").toBe("");
   });
 
   it("stops after the select step when the plan is a clarification", async () => {
@@ -501,7 +534,7 @@ describe("dictate planned round", () => {
     expect(seen[0]).not.toContain("declare_variable");
     expect(seen[1]).toContain("写成细雨");
     expect(seen[1]).toContain("写氛围");
-    expect(seen[1]).toContain("第一轮选定的节点：mood");
+    expect(seen[1]).toContain("本轮选定的节点：mood");
     expect(seen[1]).toContain("还可能缺哪些节点");
     expect(result.wroteTags).toEqual(["设计.氛围"]);
     expect(result.reply).toContain("可能还缺主角设定");
@@ -617,16 +650,18 @@ describe("dictate planned round", () => {
       },
     });
 
+    expect(seen).toHaveLength(2);
     expect(seen[1]).toContain("self_score 维度（这次写入必填，name 必须一致）：短句");
-    expect(seen[2]?.startsWith(seen[1] ?? "")).toBe(true);
-    expect(seen[2]).toContain("还有未通过");
     expect(products).toHaveLength(0);
+    expect(result.reply).toContain("失败待补（下轮继续）");
     expect(result.reply).toContain("self_score 必填");
     expect(result.reply).toContain("短句");
     expect(result.reply).not.toContain("未给出");
+    const remediate = parseDictateRemediate(tags.get(DICTATE_REMEDIATE_TAG));
+    expect(remediate.items.map((item) => item.tag)).toEqual(["设计.氛围"]);
   });
 
-  it("keeps the node table and refuses to rewrite a tag that already passed", async () => {
+  it("defers failed tags to the next turn instead of same-turn fill-retry", async () => {
     const narration: DictateModuleReadPayload = {
       ...modulePayload,
       module_id: "narration",
@@ -643,24 +678,11 @@ describe("dictate planned round", () => {
       [
         { id: "a", name: "insert", arguments: JSON.stringify({ position: "设计.氛围", content: "细雨" }) },
         { id: "b", name: "insert", arguments: JSON.stringify({ position: "设计.旁白", content: "旁白" }) },
-        { id: "r1", name: "reply_user", arguments: JSON.stringify({ text: "都写了" }) },
+        { id: "r1", name: "reply_user", arguments: JSON.stringify({ text: "氛围先落下" }) },
       ],
-      [
-        { id: "a2", name: "insert", arguments: JSON.stringify({ position: "设计.氛围", content: "改掉细雨" }) },
-        {
-          id: "b2",
-          name: "insert",
-          arguments: JSON.stringify({
-            position: "设计.旁白",
-            content: "旁白",
-            self_score: { dims: [{ name: "一句", score: 4 }] },
-          }),
-        },
-      ],
-      [{ id: "r2", name: "reply_user", arguments: JSON.stringify({ text: "旁白补上了" }) }],
     ];
     let index = 0;
-    await runDictateTurn({
+    const result = await runDictateTurn({
       llm: {
         async complete() {
           throw new Error("对话落盘走工具，不走纯文本完成");
@@ -700,9 +722,94 @@ describe("dictate planned round", () => {
       },
     });
 
-    expect(seen[2]?.startsWith(seen[1] ?? "")).toBe(true);
-    expect(seen[2]).toContain("写旁白");
-    expect(writes).toEqual(["设计.氛围:细雨", "设计.旁白:旁白"]);
+    expect(seen).toHaveLength(2);
+    expect(writes).toEqual(["设计.氛围:细雨"]);
+    expect(result.reply).toContain("失败待补（下轮继续）");
+    expect(result.reply).toContain("设计.旁白");
+    const remediate = parseDictateRemediate(tags.get(DICTATE_REMEDIATE_TAG));
+    expect(remediate.items).toEqual([
+      expect.objectContaining({ tag: "设计.旁白", kind: "insert" }),
+    ]);
+  });
+
+  it("merges prior失败待补 into the next fill even if select omits them", async () => {
+    const tags = new Map<string, string>([
+      [
+        DICTATE_REMEDIATE_TAG,
+        JSON.stringify({
+          schema: "dictate-remediate.v1",
+          items: [{ tag: "设计.氛围", moduleId: "mood", error: "self_score 必填", kind: "insert" }],
+        }),
+      ],
+    ]);
+    const products: Array<{ tag: string; content: string }> = [];
+    const seen: string[] = [];
+    const steps = [
+      { nodes: [{ module_id: "narration" }] },
+      {
+        products: [
+          { tag: "设计.氛围", content: "细雨" },
+          { tag: "设计.旁白", content: "旁白" },
+        ],
+        reply: "都补上了",
+      },
+    ];
+    let index = 0;
+    const result = await runDictateTurn({
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools(messages) {
+          seen.push(messages.map((message) => message.content ?? "").join("\n"));
+          const body = steps[index++] ?? {};
+          return {
+            content: null,
+            toolCalls: toToolCalls(body, index === 1),
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "继续" }],
+      moduleCatalog: {
+        modules: [
+          ...catalog.modules,
+          { id: "narration", name: "旁白", artifact: "设计.旁白", declaration: "旁白" },
+        ],
+      } as ModuleCatalog,
+      moduleReadIndex: new Map([
+        ["mood", modulePayload],
+        [
+          "narration",
+          {
+            ...modulePayload,
+            module_id: "narration",
+            artifact: "设计.旁白",
+            task: "写旁白",
+          },
+        ],
+      ]),
+      handlers: {
+        listProducts: () => products,
+        writeProduct: (tag, content) => {
+          products.push({ tag, content });
+        },
+        deleteProduct: () => false,
+        readTag: (tag) => tags.get(tag),
+        writeTag: (tag, content) => {
+          tags.set(tag, content);
+        },
+        deleteTag: (tag) => tags.delete(tag),
+        clearDialogue: () => undefined,
+      },
+    });
+
+    expect(seen[0]).toContain("失败待补");
+    expect(seen[1]).toContain("设计.氛围");
+    expect(seen[1]).toContain("写氛围");
+    expect(result.wroteTags).toEqual(expect.arrayContaining(["设计.氛围", "设计.旁白"]));
+    expect(tags.has(DICTATE_REMEDIATE_TAG)).toBe(false);
+    expect(result.reply).toContain("都补上了");
   });
 
   it("puts reply_user guidance early in the fill prompt and does not mention a fallback reply step", async () => {

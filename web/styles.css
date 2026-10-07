@@ -1457,6 +1457,12 @@ body.design-workspace[data-design-surface="dictate"] .panel-feed,
 body.design-workspace[data-design-surface="listen"] .panel-feed {
   overflow: hidden;
 }
+.listen-rail-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  opacity: 0.72;
+  line-height: 1.4;
+}
 .listen-rail {
   display: flex;
   flex-direction: column;

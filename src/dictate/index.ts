@@ -11,6 +11,20 @@ export {
   extractDictateDialogue,
 } from "./context.js";
 export {
+  DEFAULT_DICTATE_HISTORY_TURNS,
+  clipDictateDialogue,
+  resolveDictateHistoryTurns,
+} from "./history-window.js";
+export {
+  DICTATE_REMEDIATE_TAG,
+  DICTATE_REMEDIATE_SCHEMA,
+  parseDictateRemediate,
+  serializeDictateRemediate,
+  formatRemediateChecklist,
+  type DictateRemediateDoc,
+  type DictateRemediateItem,
+} from "./remediate.js";
+export {
   CREATION_INTAKE_MODE_TAG,
   DICTATE_MODE_VALUE,
   DICTATE_LAYER_META_KEY,

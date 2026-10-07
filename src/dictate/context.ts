@@ -1,5 +1,9 @@
 import type { ChatMessage } from "../llm/client.js";
 import {
+  clipDictateDialogue,
+  resolveDictateHistoryTurns,
+} from "./history-window.js";
+import {
   effectiveDictateOrder,
   sortDictateProducts,
   type DictateChatTurn,
@@ -25,7 +29,7 @@ export type DictateBuiltContext = {
 /**
  * 创作请求的块顺序：固定规则、更早的对话、全部产物、本轮注入、末尾。
  * 选题不带产物正文和本轮注入。回复步只带本轮刚落盘产物与末句用户话。
- * 更早对话只追加，最后一轮用户输入放在末尾。
+ * 更早对话按 historyTurns 裁剪（默认 2 轮），最后一轮用户输入放在末尾。
  */
 export function buildDictateContext(params: {
   systemPrompt: string;
@@ -34,12 +38,18 @@ export function buildDictateContext(params: {
   phase?: DictateContextPhase;
   injected?: string;
   tail?: string;
+  /** 更早对话保留轮数；默认见 resolveDictateHistoryTurns */
+  historyTurns?: number;
 }): DictateBuiltContext {
   const phase = params.phase ?? "fill";
   if (phase === "reply") {
     return buildReplyContext(params);
   }
-  const { earlier, lastUser } = splitEarlierDialogue(params.dialogue);
+  const clipped = clipDictateDialogue(
+    params.dialogue,
+    resolveDictateHistoryTurns(params.historyTurns),
+  );
+  const { earlier, lastUser } = splitEarlierDialogue(clipped);
   const history = formatEarlierDialogue(earlier);
   const products =
     phase === "fill" ? formatProducts(sortDictateProducts(params.products)) : "";
@@ -138,6 +148,7 @@ export function buildDictateMessages(params: {
   phase?: DictateContextPhase;
   injected?: string;
   tail?: string;
+  historyTurns?: number;
 }): ChatMessage[] {
   return buildDictateContext(params).messages;
 }

@@ -1,13 +1,14 @@
 /**
  * 一句用户话：先用 select_nodes 定目标节点，程序注入这些节点的写法，
- * 再在同一条消息前缀上循环 insert。已通过的不再覆盖。
+ * 再单次 fill 写入。已通过的不再覆盖。
+ * 同轮不再 fill-retry：失败项记入「失败待补」，下轮继续。
  * 没有未通过项时，同一次请求里的 reply_user 才给用户。
  * 填写步若未调用 reply_user，程序再打一轮瘦回复（只带本轮刚落盘产物）；填写提示不提及此事。
  */
 import { randomUUID } from "node:crypto";
 import type { DriverStepOutcome, DriverToolCall } from "../runtime/driver.js";
 import type { AgentDriver } from "../runtime/driver.js";
-import type { ChatMessage, LlmProvider, UsageDetail, UsageSink } from "../llm/client.js";
+import type { LlmProvider, UsageDetail, UsageSink } from "../llm/client.js";
 import { DICTATE_REPLY_TOOL, DICTATE_SELECT_TOOL, DICTATE_WRITE_LOOP_TOOLS } from "./tools.js";
 import { buildDictateContext, type DictateSegmentChars } from "./context.js";
 import {
@@ -18,6 +19,7 @@ import {
   parseCreationPlan,
 } from "./creation-plan.js";
 import { isDictateOpeningTag } from "./experience-anchor.js";
+import { resolveDictateHistoryTurns } from "./history-window.js";
 import {
   buildDictateReplyPrompt,
   buildDictateSelectPrompt,
@@ -32,6 +34,14 @@ import {
   DICTATE_MODULE_READ_STATE_TAG,
   type DictateModuleReadPayload,
 } from "./read-module.js";
+import {
+  DICTATE_REMEDIATE_SCHEMA,
+  DICTATE_REMEDIATE_TAG,
+  formatRemediateChecklist,
+  parseDictateRemediate,
+  serializeDictateRemediate,
+  type DictateRemediateItem,
+} from "./remediate.js";
 import { resolveModuleForInsertTag } from "./insert-feedback.js";
 import type { DictateChatTurn, DictateProduct } from "./types.js";
 import { isAllowedProductTag } from "./types.js";
@@ -55,6 +65,7 @@ export type PlannedRoundParams = {
     listProducts: () => DictateProduct[];
     readTag: (tag: string) => string | undefined;
     writeTag: (tag: string, content: string) => void;
+    deleteTag?: (tag: string) => boolean;
     prepareOpening?: () => void;
     /** 本轮刚写入 tag 的能力回复口径（探测/原则/自评关注） */
     lookupInsertFeedback?: (tag: string) => string | undefined;
@@ -68,6 +79,8 @@ export type PlannedRoundParams = {
   recipeName?: string;
   recipeBrief?: string;
   systemPrompt?: string;
+  /** 更早对话保留轮数；默认 2，见 resolveDictateHistoryTurns */
+  historyTurns?: number;
 };
 
 type PlanInsert = {
@@ -87,10 +100,7 @@ type SelectPlan = {
 };
 
 
-type ItemFailure = { tag: string; error: string };
-
-
-const INSERT_ATTEMPTS = 4;
+type ItemFailure = { tag: string; error: string; moduleId?: string; kind?: "insert" | "delete" };
 
 export function createPlannedDictateDriver(params: PlannedRoundParams): AgentDriver {
   return {
@@ -106,15 +116,23 @@ async function runPlannedDictateRound(
   apply: Apply,
 ): Promise<{ text: string; modelCalls: number }> {
   const turnId = randomUUID();
+  const historyTurns = resolveDictateHistoryTurns(params.historyTurns);
   const fillSystem = params.systemPrompt?.trim() || buildDictateSystemPrompt();
+  const remediations = parseDictateRemediate(params.handlers.readTag(DICTATE_REMEDIATE_TAG));
+  const remediateChecklist = formatRemediateChecklist(remediations.items);
   const tailOpts = tailState(params);
-  const selectTail = formatDictateRoundTail({ ...tailOpts, phase: "select" });
+  const selectTail = formatDictateRoundTail({
+    ...tailOpts,
+    phase: "select",
+    checklist: remediateChecklist,
+  });
   const selectCtx = buildDictateContext({
     systemPrompt: buildDictateSelectPrompt(),
     products: params.handlers.listProducts(),
     dialogue: params.dialogue,
     phase: "select",
     tail: selectTail,
+    historyTurns,
   });
   const selected = await params.llm.completeWithTools(selectCtx.messages, {
     caller: "dictate_agent",
@@ -127,7 +145,12 @@ async function runPlannedDictateRound(
   if (selected.reasoning?.trim()) params.handlers.onThinkingDone?.(selected.reasoning.trim());
   const selectCall = selected.toolCalls.find((call) => call.name === "select_nodes") ?? selected.toolCalls[0];
   const plan = parseSelect(selectCall ? safeJson(selectCall.arguments) : {}, params);
-  if (plan.clarify.length >= 2 && plan.inserts.length === 0 && plan.deletes.length === 0) {
+  mergeRemediationsIntoPlan(plan, remediations.items, params);
+  if (
+    plan.clarify.length >= 2 &&
+    plan.inserts.length === 0 &&
+    plan.deletes.length === 0
+  ) {
     return {
       modelCalls: 1,
       text: plan.clarify.map((item, index) => `${index + 1}. ${item}`).join("\n"),
@@ -150,10 +173,23 @@ async function runPlannedDictateRound(
   );
   if (openings.length > 0) params.handlers.prepareOpening?.();
   const injected = injectGroup(params, [...rest, ...openings]);
+  const priorFailures = remediations.items.filter((item) =>
+    [...rest, ...openings].some((row) => row.tag === item.tag) ||
+    plan.deletes.includes(item.tag),
+  );
   const tail = formatDictateRoundTail({
     ...tailOpts,
     phase: "fill",
-    checklist: formatChecklist([...rest, ...openings], plan.deletes, []),
+    checklist: formatChecklist(
+      [...rest, ...openings],
+      plan.deletes,
+      priorFailures.map((item) => ({
+        tag: item.tag,
+        error: item.error,
+        moduleId: item.moduleId,
+        kind: item.kind,
+      })),
+    ),
   });
   const ctx = buildDictateContext({
     systemPrompt: fillSystem,
@@ -162,8 +198,8 @@ async function runPlannedDictateRound(
     phase: "fill",
     injected: injected.text,
     tail,
+    historyTurns,
   });
-  const messages: ChatMessage[] = [...ctx.messages];
   const passed = new Set<string>();
   const pending = new Set([...rest, ...openings].map((item) => item.tag));
   const pendingDeletes = new Set(plan.deletes);
@@ -172,39 +208,46 @@ async function runPlannedDictateRound(
   let lastProse = "";
   let modelCalls = 1;
 
-  for (let attempt = 0; attempt < INSERT_ATTEMPTS && (pending.size > 0 || pendingDeletes.size > 0); attempt++) {
-    const step = attempt === 0 ? "fill" : "fill-retry";
-    const filled = await params.llm.completeWithTools(messages, {
+  // 单次 fill：失败记入待补，留给下轮，不再同轮 fill-retry。
+  if (pending.size > 0 || pendingDeletes.size > 0) {
+    const filled = await params.llm.completeWithTools(ctx.messages, {
       caller: "dictate_agent",
-      label: attempt === 0 ? "对话落盘 填写" : "对话落盘 重写",
+      label: "对话落盘 填写",
       tools: DICTATE_WRITE_LOOP_TOOLS,
       toolChoice: "required",
       usageDetail: {
-        ...detail(turnId, step, attempt, ctx.segmentChars),
+        ...detail(turnId, "fill", 0, ctx.segmentChars),
         plannedTags: [...pending, ...pendingDeletes],
       },
-      usageSink: sinkFor(turnId, step),
+      usageSink: sinkFor(turnId, "fill"),
     });
     modelCalls += 1;
     if (filled.reasoning?.trim()) params.handlers.onThinkingDone?.(filled.reasoning.trim());
     const prose = filled.content?.trim() ?? "";
     if (prose) lastProse = prose;
     const calls: DriverToolCall[] = filled.toolCalls.map((call, index) => ({
-      id: call.id || `call-${attempt}-${index}`,
+      id: call.id || `call-0-${index}`,
       name: call.name,
       arguments: call.arguments,
     }));
-    if (calls.length === 0) break;
-    const settled = await settleWriteStep(params, apply, calls, passed, pending, pendingDeletes, errors);
-    messages.push(assistantToolMessage(filled.content, calls));
-    for (const item of settled.results) {
-      messages.push({ role: "tool", content: item.content, tool_call_id: item.callId });
-    }
-    if (pending.size === 0 && pendingDeletes.size === 0) {
-      replyFromTool = settled.reply;
-      break;
+    if (calls.length > 0) {
+      const settled = await settleWriteStep(params, apply, calls, passed, pending, pendingDeletes, errors);
+      if (pending.size === 0 && pendingDeletes.size === 0) {
+        replyFromTool = settled.reply;
+      }
     }
   }
+
+  const moduleByTag = new Map(
+    [...rest, ...openings].map((item) => [item.tag, item.moduleId] as const),
+  );
+  persistRemediations(params, {
+    pending,
+    pendingDeletes,
+    errors,
+    moduleByTag,
+    prior: remediations.items,
+  });
 
   let reply = replyFromTool;
   if (
@@ -224,7 +267,12 @@ async function runPlannedDictateRound(
   );
   const pendingLines = [...blockedLines, ...failed];
   const text = pendingLines.length
-    ? [reply, `尚未完成：${pendingLines.join("、")}。`].filter(Boolean).join("\n")
+    ? [
+        reply,
+        `失败待补（下轮继续）：${pendingLines.join("、")}。`,
+      ]
+        .filter(Boolean)
+        .join("\n")
     : reply;
   return { text, modelCalls };
 }
@@ -301,18 +349,6 @@ async function runLeanReply(
     if (text) return text;
   }
   return filled.content?.trim() || fallbackProse;
-}
-
-function assistantToolMessage(content: string | null, calls: DriverToolCall[]): ChatMessage {
-  return {
-    role: "assistant",
-    content,
-    tool_calls: calls.map((call) => ({
-      id: call.id,
-      type: "function" as const,
-      function: { name: call.name, arguments: call.arguments },
-    })),
-  };
 }
 
 async function settleWriteStep(
@@ -665,15 +701,95 @@ function canonicalProductTag(
 
 function formatChecklist(group: PlanInsert[], deletes: string[], errors: ItemFailure[]): string {
   const nodes = group.map((item) => item.moduleId || item.tag).filter(Boolean);
+  const failedTags = new Set(errors.map((item) => item.tag));
+  const pendingWrite = group.filter((item) => !failedTags.has(item.tag)).map((item) => item.tag);
+  const pendingDelete = deletes.filter((tag) => !failedTags.has(tag));
   const lines = [
-    nodes.length ? `第一轮选定的节点：${nodes.join("、")}` : "",
-    group.length ? `本轮写入：${group.map((item) => item.tag).join("、")}` : "",
-    deletes.length ? `本轮删除：${deletes.join("、")}` : "",
+    nodes.length ? `本轮选定的节点：${nodes.join("、")}` : "",
+    pendingWrite.length ? `待写：${pendingWrite.join("、")}` : "",
+    pendingDelete.length ? `待删：${pendingDelete.join("、")}` : "",
     errors.length
-      ? `只重写未成功项：\n${errors.map((item) => `- ${item.tag}：${item.error}`).join("\n")}`
+      ? `失败待补：\n${errors.map((item) => `- ${item.tag}：${item.error}`).join("\n")}`
       : "",
+    "状态说明：待写/待删=本轮目标；失败待补=上轮或本轮未通过，须补上；已落的产物以黑板为准，不要无故整份重写。",
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+function mergeRemediationsIntoPlan(
+  plan: SelectPlan,
+  items: readonly DictateRemediateItem[],
+  params: PlannedRoundParams,
+): void {
+  for (const item of items) {
+    if (item.kind === "delete") {
+      if (!plan.deletes.includes(item.tag) && isAllowedProductTag(item.tag)) {
+        plan.deletes.push(item.tag);
+      }
+      continue;
+    }
+    if (plan.inserts.some((row) => row.tag === item.tag || row.tag === `!${item.tag}`)) {
+      continue;
+    }
+    const canonical = canonicalProductTag(item.tag, item.moduleId ?? "", params.moduleCatalog);
+    const tag = canonical?.tag ?? item.tag;
+    if (!isAllowedProductTag(tag) && tag !== VARIABLE_CATALOG_TAG && tag !== VALUE_MAP_TAG) {
+      continue;
+    }
+    plan.inserts.push({
+      tag,
+      moduleId: canonical?.moduleId || item.moduleId || "",
+      entryIds: [],
+      reason: item.error ? `失败待补：${item.error}` : "失败待补",
+    });
+  }
+}
+
+function persistRemediations(
+  params: PlannedRoundParams,
+  state: {
+    pending: Set<string>;
+    pendingDeletes: Set<string>;
+    errors: Map<string, string>;
+    moduleByTag: Map<string, string>;
+    prior: readonly DictateRemediateItem[];
+  },
+): void {
+  const priorByKey = new Map(
+    state.prior.map((item) => [`${item.kind}:${item.tag}`, item] as const),
+  );
+  const next: DictateRemediateItem[] = [];
+  for (const tag of state.pending) {
+    const prev = priorByKey.get(`insert:${tag}`);
+    next.push({
+      tag,
+      kind: "insert",
+      error: state.errors.get(tag) ?? prev?.error ?? "尚未通过",
+      ...(state.moduleByTag.get(tag) || prev?.moduleId
+        ? { moduleId: state.moduleByTag.get(tag) || prev?.moduleId }
+        : {}),
+    });
+  }
+  for (const tag of state.pendingDeletes) {
+    const prev = priorByKey.get(`delete:${tag}`);
+    next.push({
+      tag,
+      kind: "delete",
+      error: state.errors.get(tag) ?? prev?.error ?? "尚未通过",
+    });
+  }
+  if (next.length === 0) {
+    if (params.handlers.deleteTag) {
+      params.handlers.deleteTag(DICTATE_REMEDIATE_TAG);
+    } else {
+      params.handlers.writeTag(DICTATE_REMEDIATE_TAG, "");
+    }
+    return;
+  }
+  params.handlers.writeTag(
+    DICTATE_REMEDIATE_TAG,
+    serializeDictateRemediate({ schema: DICTATE_REMEDIATE_SCHEMA, items: next }),
+  );
 }
 
 function asItemList(value: unknown): unknown[] {

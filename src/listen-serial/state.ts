@@ -6,6 +6,7 @@ import {
   LISTEN_CONSUMED_CHARS_TAG,
   LISTEN_OUTLINE_TAG,
   LISTEN_PHASE_TAG,
+  LISTEN_PLAY_LAYER_TAG,
   LISTEN_SECTIONS_TAG,
   LISTEN_STRUCTURE_TAG,
   LISTEN_SUMMARIES_TAG,
@@ -33,12 +34,21 @@ function parsePhase(raw: string | undefined): ListenPhase {
   if (
     v === "intake" ||
     v === "awaiting_confirm" ||
+    v === "ready" ||
     v === "running" ||
     v === "soft_stop"
   ) {
     return v;
   }
   return "intake";
+}
+
+export function isListenPlayActive(board: Blackboard): boolean {
+  return (board.getContentByTag(LISTEN_PLAY_LAYER_TAG) ?? "").trim() === "1";
+}
+
+export function setListenPlayActive(board: Blackboard, on: boolean): void {
+  writeTag(board, LISTEN_PLAY_LAYER_TAG, on ? "1" : "0");
 }
 
 export function readListenState(board: Blackboard): ListenSerialState {
@@ -122,9 +132,13 @@ export function unreadChars(state: ListenSerialState): number {
   return Math.max(0, total - state.consumedChars);
 }
 
-export function toListenView(state: ListenSerialState): ListenSerialView {
+export function toListenView(
+  state: ListenSerialState,
+  playActive = false,
+): ListenSerialView {
   return {
     phase: state.phase,
+    playActive,
     thrill: state.thrill,
     world: state.world,
     structure: state.structure,

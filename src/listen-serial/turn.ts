@@ -147,19 +147,104 @@ function formatOutlineLine(state: ListenSerialState): string {
 /**
  * 听书连载单轮：开书 / 确认 / 补货 / 插嘴 / 软停续波。
  */
+/**
+ * 进入播放层时：若尚无大纲/正文，则生成到缓冲。
+ */
+export async function ensureListenPlayContent(params: {
+  llm: LlmProvider;
+  board: Blackboard;
+}): Promise<ListenSerialTurnResult> {
+  const { llm, board } = params;
+  ensureBufferTarget(board);
+  let state = readListenState(board);
+  if (!state.thrill || !state.world) {
+    throw new Error("请先在创作里确认核心爽点与一句世界");
+  }
+  if (
+    state.phase === "running" ||
+    state.phase === "soft_stop"
+  ) {
+    if (state.outline.length && unreadChars(state) > 0) {
+      return {
+        reply: [
+          "继续播放。",
+          formatOutlineLine(state),
+          formatUnreadLine(state),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        softStop: state.phase === "soft_stop",
+      };
+    }
+  }
+  if (!state.outline.some((o) => o.status === "pending" || o.status === "done")) {
+    const outlined = await llmOutline(llm, state);
+    const outline = makeOutlineItems(outlined.titles, outlined.payoffTitle);
+    state = persistState(board, state, { outline, phase: "running" });
+    const filled = await fillBuffer(llm, board, state);
+    state = filled.state;
+    return {
+      reply: [
+        outlined.reply,
+        formatOutlineLine(state),
+        filled.notes.join("\n"),
+        formatUnreadLine(state),
+        filled.softStop
+          ? "本段已兑现。可「下一波」或「收工」。"
+          : "不满意就直接一句意见，我改后面的走向。",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      softStop: filled.softStop,
+    };
+  }
+  const filled = await fillBuffer(llm, board, state);
+  state = filled.state;
+  return {
+    reply: [
+      filled.notes.join("\n") || "已进入播放。",
+      formatOutlineLine(state),
+      formatUnreadLine(state),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    softStop: filled.softStop || state.phase === "soft_stop",
+  };
+}
+
 export async function runListenSerialTurn(params: {
   llm: LlmProvider;
   board: Blackboard;
   dialogue: ListenChatTurn[];
   userText: string;
+  /** 是否在播放层；创作层只允许开书/确认 */
+  inPlay?: boolean;
 }): Promise<ListenSerialTurnResult> {
   const { llm, board, dialogue, userText } = params;
+  const inPlay = Boolean(params.inPlay);
   ensureBufferTarget(board);
   let state = readListenState(board);
   const text = userText.trim();
 
+  // 创作层：已进播放态的正文不在这里改；ready 时可空提或改 brief
+  if (!inPlay && (state.phase === "running" || state.phase === "soft_stop")) {
+    return {
+      reply: "大纲与正文在「播放」里。请从目录点「播放」继续听/改向。",
+      softStop: state.phase === "soft_stop",
+    };
+  }
+  if (!inPlay && state.phase === "ready") {
+    if (!text || isConfirmText(text)) {
+      return {
+        reply:
+          "本局已确认。请点「播放」开始写大纲与正文；想改爽点直接说新需求。",
+      };
+    }
+    // 有新需求 → 重新提案
+  }
+
   // —— 软停：收工 / 下一波 ——
-  if (state.phase === "soft_stop") {
+  if (inPlay && state.phase === "soft_stop") {
     if (isEndText(text)) {
       return {
         reply: "本局收工。想再开可以新建作品，或再说「下一波」。",
@@ -208,33 +293,21 @@ export async function runListenSerialTurn(params: {
         structure: intake.structure,
       });
       return {
-        reply: `${intake.reply}\n\n【核心爽点】${intake.thrill}\n【一句世界】${intake.world}\n【结构】${intake.structure}\n\n回复「确认」开始生成大纲与正文。`,
+        reply: `${intake.reply}\n\n【核心爽点】${intake.thrill}\n【一句世界】${intake.world}\n【结构】${intake.structure}\n\n回复「确认」锁定本局；确认后点「播放」写大纲与正文。`,
       };
     }
 
-    const outlined = await llmOutline(llm, state);
-    const outline = makeOutlineItems(outlined.titles, outlined.payoffTitle);
-    state = persistState(board, state, { outline, phase: "running" });
-    const filled = await fillBuffer(llm, board, state);
-    state = filled.state;
+    state = persistState(board, state, { phase: "ready" });
     return {
-      reply: [
-        outlined.reply,
-        formatOutlineLine(state),
-        filled.notes.join("\n"),
-        formatUnreadLine(state),
-        filled.softStop
-          ? "本段已兑现。可「下一波」或「收工」。"
-          : "不满意某桥段就直接说一句意见，我会改后面的走向。",
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      softStop: filled.softStop,
+      reply: `已确认本局。\n\n【核心爽点】${state.thrill}\n【一句世界】${state.world}\n【结构】${state.structure}\n\n请点「播放」开始生成大纲与正文。`,
     };
   }
 
-  // —— 连载中：空输入/继续 = 补货；有意见 = 改向 ——
-  if (state.phase === "running" || state.phase === "soft_stop") {
+  // —— 播放层连载：继续 = 补货；有意见 = 改向 ——
+  if (inPlay && (state.phase === "running" || state.phase === "soft_stop" || state.phase === "ready")) {
+    if (state.phase === "ready" || !state.outline.length) {
+      return ensureListenPlayContent({ llm, board });
+    }
     const isContinue =
       !text ||
       /^(继续|接着写|补货|下一节)([！!。．\s]*)$/u.test(text);
@@ -319,7 +392,7 @@ export async function runListenSerialTurn(params: {
     structure: intake.structure || "三段式：铺垫冲突 → 对抗升级 → 爽点兑现",
   });
   return {
-    reply: `${intake.reply}\n\n【核心爽点】${intake.thrill}\n【一句世界】${intake.world}\n【结构】${state.structure}\n\n回复「确认」开始生成大纲与正文。`,
+    reply: `${intake.reply}\n\n【核心爽点】${intake.thrill}\n【一句世界】${intake.world}\n【结构】${state.structure}\n\n回复「确认」锁定本局；确认后点「播放」写大纲与正文。`,
   };
 }
 

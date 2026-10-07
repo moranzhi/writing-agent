@@ -250,6 +250,18 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "POST" && sub === "/listen/play") {
+        try {
+          const view = await sessionManager.enterListenPlay(sessionId);
+          json(res, 200, view);
+        } catch (err) {
+          json(res, 400, {
+            error: err instanceof Error ? err.message : "无法进入播放",
+          });
+        }
+        return;
+      }
+
       if (req.method === "GET" && sub === "/listen/tts") {
         const sectionId = (url.searchParams.get("sectionId") ?? "").trim();
         if (!sectionId) {

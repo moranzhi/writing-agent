@@ -2,6 +2,7 @@ export {
   DEFAULT_BUFFER_TARGET_CHARS,
   LISTEN_SERIAL_MODE_VALUE,
   LISTEN_PHASE_TAG,
+  LISTEN_PLAY_LAYER_TAG,
   LISTEN_THRILL_TAG,
   LISTEN_WORLD_TAG,
   LISTEN_STRUCTURE_TAG,
@@ -31,10 +32,13 @@ export {
   writeListenPhase,
   writeListenSections,
   writeListenSummaries,
+  isListenPlayActive,
+  setListenPlayActive,
 } from "./state.js";
 
 export {
   runListenSerialTurn,
+  ensureListenPlayContent,
   markListenConsumed,
   type ListenChatTurn,
   type ListenSerialTurnResult,

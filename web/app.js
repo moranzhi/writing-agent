@@ -10,7 +10,12 @@ import {
 } from "./agent-ui.js";
 import { downloadMarkdown, sessionToMarkdown } from "./export.js";
 import { renderIntakePanel } from "./intake-ui.js";
-import { displaySkillPackLabel, isFlowPlanReview, reviewComposerCopy } from "./display-labels.js";
+import {
+  displayCreationModeLabel,
+  displaySkillPackLabel,
+  isFlowPlanReview,
+  reviewComposerCopy,
+} from "./display-labels.js";
 import {
   clearQuestionCardState,
   collectQuestionAnswers,
@@ -235,6 +240,33 @@ function resolveUserTask(view, loading) {
   const wr = view.waitingReason;
   const hasQuestions = Boolean(getActiveQuestions(view)?.questions?.length);
   const moduleOpening = isModuleOpeningWaiting(view);
+
+  if (view.creationMode === "listen_serial") {
+    const ls = view.listenSerial;
+    if (ls?.playActive) {
+      return {
+        id: "speak",
+        label: "播放",
+        title: ls.phase === "soft_stop" ? "本段已兑现" : "听书播放",
+        hint:
+          ls.phase === "soft_stop"
+            ? "「下一波」或「收工」，或一句意见改向。"
+            : "说「继续」补货；不满意直接一句意见。",
+      };
+    }
+    const phase = ls?.phase;
+    return {
+      id: "speak",
+      label: "听书",
+      title: displayCreationModeLabel("listen_serial"),
+      hint:
+        phase === "awaiting_confirm"
+          ? "回复「确认」锁定本局；确认后点「播放」。"
+          : phase === "ready"
+            ? "点「播放」写大纲与正文；也可继续改爽点。"
+            : "用几句话描述题材与爽点。",
+    };
+  }
 
   if (isPlayView(view)) {
     return {
@@ -489,6 +521,31 @@ function resolveComposer(view, loading) {
       taskHint: task.hint,
       placeholder: send?.placeholder ?? "说明后重试，或直接发送继续…",
       hint: null,
+    };
+  }
+
+  if (view.creationMode === "listen_serial") {
+    const send = view.actions?.find((a) => a.type === "send_message");
+    const ls = view.listenSerial;
+    let placeholder = "描述你想写什么…";
+    if (ls?.playActive) {
+      placeholder =
+        ls.phase === "soft_stop"
+          ? "下一波 / 收工 / 一句改向…"
+          : "继续 / 一句意见改向…";
+    } else if (ls?.phase === "awaiting_confirm") {
+      placeholder = "确认 / 或继续改需求…";
+    } else if (ls?.phase === "ready") {
+      placeholder = "继续改爽点，或点右侧「播放」…";
+    }
+    return {
+      mode: "input",
+      task,
+      taskTitle: task.title || displayCreationModeLabel("listen_serial"),
+      taskHint: task.hint,
+      placeholder: send?.placeholder ?? placeholder,
+      hint: null,
+      submitLabel: "发送",
     };
   }
 
@@ -1990,11 +2047,22 @@ function showEnterPicker(bookId, anchorEl) {
     el.classList.remove("is-picking");
   });
   anchorEl.classList.add("is-picking");
+  const book = books.find((b) => b.id === bookId);
+  const listen = bookCreationMode(book) === "listen_serial";
+  const designBtn = pop.querySelector("[data-enter=design]");
+  if (designBtn) designBtn.textContent = "创作";
   const playBtn = pop.querySelector("[data-enter=play]");
   const ready = bookPlayReady(bookId);
   if (playBtn) {
-    playBtn.disabled = !ready;
-    playBtn.title = ready ? "进入游玩" : "验收后可游玩";
+    playBtn.textContent = listen ? "播放" : "游玩";
+    playBtn.disabled = listen ? false : !ready;
+    playBtn.title = listen
+      ? ready
+        ? "进入播放，写大纲与正文"
+        : "确认本局后可播放（未确认会提示）"
+      : ready
+        ? "进入游玩"
+        : "验收后可游玩";
   }
   pop.hidden = false;
   const rect = anchorEl.getBoundingClientRect();
@@ -2149,6 +2217,9 @@ function getNavBook() {
 
 function catalogBookMeta(book) {
   if (bookCreationMode(book) === "listen_serial") {
+    if (lastView?.bookId === book.id && lastView.playReady) {
+      return lastView.playLayerActive ? "播放中" : "可播放";
+    }
     return "听书";
   }
   const saves = playSavesByBook.get(book.id);
@@ -2582,7 +2653,6 @@ function renderBookList() {
 
   for (const book of modeBooks) {
     const selected = selectedBookIds.has(book.id);
-    const listen = bookCreationMode(book) === "listen_serial";
     list.appendChild(
       renderExplorerRow({
         name: book.title,
@@ -2597,10 +2667,6 @@ function renderBookList() {
             return;
           }
           e.stopPropagation();
-          if (listen) {
-            void openBook(book.id);
-            return;
-          }
           if (enterPickerBookId === book.id) {
             hideEnterPicker();
             return;
@@ -2884,9 +2950,15 @@ async function openBookDesign(bookId) {
 
 async function openCurrentPlay(bookId) {
   hideEnterPicker();
-  const instanceId = playingInstanceIdForBook({ id: bookId });
-  if (instanceId) ensureSpecExpanded(bookId, instanceId);
-  else navigateToBook(bookId);
+  const book = books.find((b) => b.id === bookId);
+  const listen = bookCreationMode(book) === "listen_serial";
+  if (!listen) {
+    const instanceId = playingInstanceIdForBook({ id: bookId });
+    if (instanceId) ensureSpecExpanded(bookId, instanceId);
+    else navigateToBook(bookId);
+  } else {
+    navigateToBook(bookId);
+  }
   const alreadyHere =
     activeBookId === bookId &&
     isPlayNow() &&
@@ -2899,6 +2971,11 @@ async function openCurrentPlay(bookId) {
   }
   if (activeBookId !== bookId || !sessionId) {
     await openBook(bookId);
+  }
+  if (listen) {
+    activePlaySaveId = null;
+    await enterListenPlay();
+    return;
   }
   if (activePlaySaveId && lastView?.playLayerActive) {
     try {
@@ -2923,10 +3000,15 @@ function renderHeader(view, loading) {
   document.title = `${title} · Writing Agent`;
   $("status-dot").className = `status-dot ${st.cls}`;
   $("status-text").textContent = st.text;
+  const listenMode = view.creationMode === "listen_serial";
   const showSavePlay = Boolean(
-    view.bookId && view.playReady && view.lifecycleStage === "play" && view.playLayerActive,
+    !listenMode &&
+      view.bookId &&
+      view.playReady &&
+      view.lifecycleStage === "play" &&
+      view.playLayerActive,
   );
-  const showSaveInstance = Boolean(view.bookId && view.playReady);
+  const showSaveInstance = Boolean(!listenMode && view.bookId && view.playReady);
   const btnPlay = $("btn-save-play");
   if (btnPlay) btnPlay.hidden = !showSavePlay;
   const btnInst = $("btn-save-instance");
@@ -3030,6 +3112,23 @@ function isStaleUiRequest(seq) {
   return seq !== inflightSeq;
 }
 
+/** 真值 / 程序投影指纹：旁观改表后即使消息条数不变也要刷正文壳 */
+function sessionTruthSig(view) {
+  const rows = view?.playAux?.table?.rows;
+  if (Array.isArray(rows) && rows.length) {
+    return rows.map((r) => `${r.key}:${r.rev ?? 0}`).join(",");
+  }
+  const projected = view?.presentationProjection;
+  if (projected && typeof projected === "object") {
+    try {
+      return `p:${JSON.stringify(projected).length}:${Object.keys(projected).sort().join(",")}`;
+    } catch {
+      return "p:?";
+    }
+  }
+  return "";
+}
+
 function sessionStructuralSig(view) {
   const messages = view?.messages ?? [];
   const last = messages[messages.length - 1];
@@ -3042,6 +3141,8 @@ function sessionStructuralSig(view) {
     view?.phase ?? "",
     view?.waitingReason?.kind ?? "",
     view?.runActive ? "1" : "0",
+    // 副 LLM 填表落后于主世界出稿；表 rev / 投影变了必须重渲染 present
+    sessionTruthSig(view),
   ].join("|");
 }
 
@@ -3173,13 +3274,23 @@ function startLivePoll() {
         return;
       }
 
+      // 结构未变时仍并入真值投影，避免 lastView 卡在旁观改表前的旧壳数据
+      const truthChanged = sessionTruthSig(view) !== sessionTruthSig(lastView);
       lastView = {
         ...lastView,
         liveStream: view.liveStream,
         agentThinking: view.agentThinking,
         runActive: view.runActive,
         dictateProducts: view.dictateProducts ?? lastView.dictateProducts,
+        playAux: view.playAux ?? lastView.playAux,
+        presentationProjection:
+          view.presentationProjection ?? lastView.presentationProjection,
       };
+      if (truthChanged) {
+        livePollStructuralSig = sessionStructuralSig(view);
+        renderSession(view, true);
+        return;
+      }
       updateLiveStreamPanel(view);
     } catch {
       livePollFailCount += 1;
@@ -3247,6 +3358,7 @@ function renderSession(view, loading = false) {
     onSpawnCreationStep: (moduleName) => runAction("spawn_step", { moduleName }),
     onLeaveCreationStep: () => runAction("leave_step"),
     onEnterPlay: () => enterPlayNow(),
+    onLeaveListenPlay: () => void setLifecycle("design"),
     onSaveProduct: () => void saveCurrentInstance(),
     onPatchTable: (tag, cells) => void patchPlayTable(tag, cells),
     onSelectOpening: (index, usePersona) => void selectPlayOpening(index, usePersona),
@@ -3546,6 +3658,10 @@ async function runAction(action, extra = {}) {
 }
 
 function enterPlayNow() {
+  if (lastView?.creationMode === "listen_serial") {
+    void enterListenPlay();
+    return;
+  }
   if (activeBookId) {
     void openCurrentPlay(activeBookId);
     return;
@@ -3553,6 +3669,25 @@ function enterPlayNow() {
   void (async () => {
     await setLifecycle("play");
   })();
+}
+
+async function enterListenPlay() {
+  if (!sessionId) return;
+  const seq = beginUiRequest();
+  try {
+    renderSession(lastView, true);
+    const view = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/listen/play`,
+      { method: "POST", body: "{}" },
+    );
+    if (isStaleUiRequest(seq)) return;
+    if (activeBookId) navigateToBook(activeBookId);
+    renderSession(view, false);
+  } catch (err) {
+    if (isStaleUiRequest(seq)) return;
+    alert(err.message || "无法进入播放");
+    if (lastView) renderSession({ ...lastView, hints: [err.message] }, false);
+  }
 }
 
 async function patchPlayTable(tag, cells) {
@@ -3598,6 +3733,13 @@ async function selectPlayOpening(index, usePersona) {
 
 async function setLifecycle(stage, opts) {
   if (!sessionId) return;
+  if (lastView?.creationMode === "listen_serial") {
+    if (stage === "play") {
+      await enterListenPlay();
+      return;
+    }
+    // design：离开播放层
+  }
   if (stage === lastView?.lifecycleStage) {
     if (stage === "design") return;
     if (
@@ -3608,7 +3750,13 @@ async function setLifecycle(stage, opts) {
       return;
     }
   }
-  if (stage === "play" && !lastView?.playReady && !canOfferEnterPlay(lastView) && !lastView?.hasProduct) {
+  if (
+    stage === "play" &&
+    lastView?.creationMode !== "listen_serial" &&
+    !lastView?.playReady &&
+    !canOfferEnterPlay(lastView) &&
+    !lastView?.hasProduct
+  ) {
     alert("请先保存产物，或完成收口后再开玩");
     return;
   }
@@ -3629,7 +3777,9 @@ async function setLifecycle(stage, opts) {
       navigateToBook(activeBookId);
     }
     renderSession(view, false);
-    if (activeBookId) void fetchPlaySavesForBook(activeBookId, true);
+    if (activeBookId && lastView?.creationMode !== "listen_serial") {
+      void fetchPlaySavesForBook(activeBookId, true);
+    }
   } catch (err) {
     alert(err.message || "无法切换阶段");
     if (lastView) renderSession(lastView, false);
@@ -3657,26 +3807,16 @@ function resolveNewBookCreationMode(opts = {}) {
 function openNewBookDialog(opts = {}) {
   $("input-book-title").value = "";
   const locked = resolveNewBookCreationMode(opts);
-  const modeField = $("field-creation-mode");
-  const modeSel = $("input-creation-mode");
+  if (!locked) {
+    alert("请先进入「对话落盘」或「听书连载」文件夹，再新建作品。");
+    return;
+  }
   const lockedInput = $("input-creation-mode-locked");
   const desc = $("dialog-new-book-desc");
-
-  if (locked) {
-    if (modeField) modeField.hidden = true;
-    if (lockedInput) lockedInput.value = locked;
-    if (modeSel) modeSel.value = locked;
-    if (desc) {
-      desc.textContent = `将创建到「${creationModeFolderLabel(locked)}」，填写名称即可。`;
-    }
-  } else {
-    // 仍在目录根：须先选方式，或临时露出下拉
-    if (modeField) modeField.hidden = false;
-    if (lockedInput) lockedInput.value = "";
-    if (modeSel) modeSel.value = "dictate";
-    if (desc) desc.textContent = "先选创作方式，再填写名称。";
+  if (lockedInput) lockedInput.value = locked;
+  if (desc) {
+    desc.textContent = `将创建到「${creationModeFolderLabel(locked)}」，填写名称即可。`;
   }
-
   $("dialog-new-book").showModal();
   $("input-book-title").focus();
 }
@@ -3684,9 +3824,9 @@ function openNewBookDialog(opts = {}) {
 async function createBook() {
   const title = $("input-book-title").value.trim() || "未命名作品";
   const locked = ($("input-creation-mode-locked")?.value || "").trim();
+  const fromNav = resolveNewBookCreationMode();
   const creationMode =
-    locked === "listen_serial" ||
-    $("input-creation-mode")?.value === "listen_serial"
+    locked === "listen_serial" || fromNav === "listen_serial"
       ? "listen_serial"
       : "dictate";
   $("btn-create-book").disabled = true;
@@ -4277,14 +4417,7 @@ $("lifecycle-toggle")?.addEventListener("click", (e) => {
   if (stage === "play") enterPlayNow();
   else if (stage === "design") void setLifecycle("design");
 });
-$("btn-new-book")?.addEventListener("click", () => {
-  const locked = resolveNewBookCreationMode();
-  if (!locked && sidebarNav.level === "root") {
-    alert("请先进入「对话落盘」或「听书连载」文件夹，再新建作品。");
-    return;
-  }
-  openNewBookDialog(locked ? { presetMode: locked } : {});
-});
+$("btn-new-book")?.addEventListener("click", () => openNewBookDialog());
 $("btn-cancel-new")?.addEventListener("click", () => $("dialog-new-book").close());
 $("book-enter-pop")?.addEventListener("click", (e) => {
   e.stopPropagation();

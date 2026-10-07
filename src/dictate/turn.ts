@@ -171,6 +171,8 @@ export async function runDictateTurn(params: {
   moduleReadIndex?: ReadonlyMap<string, DictateModuleReadPayload>;
   /** catalog 中 repeatable 能力的 artifact 基名（设计.生成规则 等） */
   repeatableFamilies?: ReadonlySet<string> | readonly string[];
+  /** 更早对话保留轮数；默认 2，可用 DICTATE_HISTORY_TURNS 覆盖 */
+  historyTurns?: number;
   driver?: AgentDriver;
 }): Promise<DictateTurnResult> {
   const driver =
@@ -182,6 +184,7 @@ export async function runDictateTurn(params: {
         listProducts: params.handlers.listProducts,
         readTag: params.handlers.readTag,
         writeTag: params.handlers.writeTag,
+        deleteTag: params.handlers.deleteTag,
         prepareOpening: params.handlers.prepareOpening,
         lookupInsertFeedback: params.handlers.lookupInsertFeedback,
         onThinkingDelta: params.handlers.onThinkingDelta,
@@ -194,6 +197,7 @@ export async function runDictateTurn(params: {
       recipeName: params.recipeName,
       recipeBrief: params.recipeBrief,
       systemPrompt: params.systemPrompt,
+      historyTurns: params.historyTurns,
     });
   const wroteTags: string[] = [];
   const deletedTags: string[] = [];

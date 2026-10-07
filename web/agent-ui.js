@@ -134,7 +134,9 @@ export function canOfferSaveProduct(view) {
 
 export function canOfferEnterPlay(view) {
   if (!view || isPlayView(view)) return false;
-  if (view.creationMode === "listen_serial") return false;
+  if (view.creationMode === "listen_serial") {
+    return Boolean(view.playReady);
+  }
   return canOfferSaveProduct(view) || Boolean(view.hasProduct);
 }
 
@@ -1618,10 +1620,23 @@ function syncCoordRailChrome() {
   const title = document.getElementById("coord-rail-title");
   const products = coordRailMode === "products";
   const listen = coordRailMode === "listen";
+  const listenPlay = listen && rail?.dataset.listenPlay === "1";
   document.body.classList.toggle("coord-rail-collapsed", coordRailCollapsed);
   document.body.dataset.coordRailMode = coordRailMode;
-  const shortLabel = listen ? "正文" : products ? "产物" : "对话";
-  const longLabel = listen ? "大纲与正文" : products ? "已持久化" : "此前对话";
+  const shortLabel = listen
+    ? listenPlay
+      ? "正文"
+      : "本局"
+    : products
+      ? "产物"
+      : "对话";
+  const longLabel = listen
+    ? listenPlay
+      ? "大纲与正文"
+      : "本局设定"
+    : products
+      ? "已持久化"
+      : "此前对话";
   if (toggleLabel) toggleLabel.textContent = shortLabel;
   if (title) title.textContent = longLabel;
   if (toggle) {
@@ -5736,10 +5751,11 @@ function getRollbackMessageId(messages, messageId) {
 
 /** @returns {"speak"|"answer"|"review"|"busy"|"dictate"|"listen"|null} */
 function resolveDesignSurface(view, loading) {
+  // 听书：创作/播放都用同一壳；播放层右侧才写大纲与正文
+  if (view.creationMode === "listen_serial") return "listen";
   if (isPlayView(view)) return null;
   if (view.phase === "done") return null;
-  // 听书 / 转述：主面始终是对话流；右侧为大纲正文或产物
-  if (view.creationMode === "listen_serial") return "listen";
+  // 转述：主面始终是对话流；右侧为产物
   if (view.creationMode === "dictate") return "dictate";
   const busy = Boolean(loading || (view.phase === "running" && !view.waitingReason));
   if (busy) return "busy";
@@ -5973,20 +5989,24 @@ function renderSpeakWorkspace(view) {
       title = displayCreationModeLabel("listen_serial");
       const ls = view.listenSerial;
       const phase = ls?.phase;
-      if (phase === "awaiting_confirm") {
-        hint = "回复「确认」开始生成大纲与正文；或继续改需求。";
-      } else if (phase === "soft_stop") {
-        hint = "本段已兑现。输入「下一波」或「收工」，或一句意见改向。";
-      } else if (phase === "running") {
-        hint =
-          view.hints?.[0] ||
-          wr.message ||
-          "说「继续」补货；不满意直接一句意见改后面。";
+      if (ls?.playActive) {
+        if (phase === "soft_stop") {
+          hint = "本段已兑现。输入「下一波」或「收工」，或一句意见改向。";
+        } else {
+          hint =
+            view.hints?.[0] ||
+            wr.message ||
+            "说「继续」补货；不满意直接一句意见改后面。";
+        }
+      } else if (phase === "awaiting_confirm") {
+        hint = "回复「确认」锁定本局；确认后点「播放」写大纲与正文。";
+      } else if (phase === "ready") {
+        hint = "本局已确认。点「播放」生成大纲与正文；也可继续改爽点。";
       } else {
         hint =
           view.hints?.[0] ||
           wr.message ||
-          "用几句话描述题材与爽点；右侧是大纲与正文。";
+          "用几句话描述题材与爽点；确认后进「播放」写大纲与正文。";
       }
     } else if (view.creationMode === "dictate") {
       title = displayCreationModeLabel("dictate");
@@ -6029,7 +6049,13 @@ function renderSpeakWorkspace(view) {
         }
         <button type="button" class="btn${
           canOfferSaveProduct(view) ? "" : " btn-primary"
-        }" data-enter-play>${view.hasProduct ? "用产物开玩" : "开玩"}</button>
+        }" data-enter-play>${
+          view.creationMode === "listen_serial"
+            ? "播放"
+            : view.hasProduct
+              ? "用产物开玩"
+              : "开玩"
+        }</button>
       </div>`
     : "";
   return `<section class="workspace-intent">
@@ -6174,7 +6200,7 @@ function fillCoordRailProducts(view) {
 function renderListenSerialRail(view) {
   const ls = view.listenSerial;
   if (!ls) {
-    return `<p class="coord-empty">确认开书后，这里显示大纲与正文缓冲。</p>`;
+    return `<p class="coord-empty">开书后，这里显示本局爽点与世界。</p>`;
   }
   const brief = [
     ls.thrill ? `<p class="listen-brief"><strong>爽点</strong> ${esc(ls.thrill)}</p>` : "",
@@ -6183,6 +6209,28 @@ function renderListenSerialRail(view) {
       ? `<p class="listen-brief"><strong>结构</strong> ${esc(ls.structure)}</p>`
       : "",
   ].join("");
+
+  // 创作层：只展示 brief，大纲/正文/TTS 在播放层
+  if (!ls.playActive) {
+    const ready = Boolean(view.playReady);
+    const phaseHint =
+      ls.phase === "awaiting_confirm"
+        ? "回复「确认」锁定本局。"
+        : ls.phase === "ready"
+          ? "本局已确认，可进播放写大纲与正文。"
+          : "先定爽点与世界，确认后再播放。";
+    return `<div class="listen-rail listen-rail--design">
+      <p class="listen-meta">创作 · 阶段 ${esc(ls.phase)}</p>
+      ${brief || `<p class="coord-empty">尚无本局设定</p>`}
+      <p class="listen-rail-hint">${esc(phaseHint)}</p>
+      <div class="listen-rail-actions">
+        <button type="button" class="btn-sm btn-primary" data-enter-play ${
+          ready ? "" : "disabled"
+        } title="${ready ? "进入播放，生成大纲与正文" : "确认本局后可播放"}">播放</button>
+      </div>
+    </div>`;
+  }
+
   const outline = (ls.outline ?? [])
     .map((o) => {
       const mark = o.status === "done" ? "✓" : o.status === "cut" ? "×" : "·";
@@ -6206,12 +6254,13 @@ function renderListenSerialRail(view) {
   const consumed = Number(ls.consumedChars) || 0;
   const total = (ls.sections ?? []).reduce((n, s) => n + String(s.text || "").length, 0);
   const hasSections = (ls.sections ?? []).length > 0;
-  return `<div class="listen-rail">
+  return `<div class="listen-rail listen-rail--play">
     <p class="listen-meta">未读约 ${unread} 字 / 缓冲目标 ${target} 字 · 阶段 ${esc(ls.phase)} · Edge TTS</p>
     ${brief}
-    ${outline ? `<ul class="listen-outline">${outline}</ul>` : ""}
+    ${outline ? `<ul class="listen-outline">${outline}</ul>` : `<p class="coord-empty">正在准备大纲…</p>`}
     <div class="listen-sections">${sections || `<p class="coord-empty">尚无正文</p>`}</div>
     <div class="listen-rail-actions">
+      <button type="button" class="btn-sm" data-listen-leave-design="1" title="回到创作改爽点">回创作</button>
       <button type="button" class="btn-sm" data-listen-tts-chain="1" ${hasSections ? "" : "disabled"} title="从第一节连续播放">连续听</button>
       <button type="button" class="btn-sm" data-listen-tts-stop="1" title="停止播放">停</button>
       <button type="button" class="btn-sm" data-listen-consume="all" ${total <= consumed ? "disabled" : ""}>标记全部已读</button>
@@ -6229,12 +6278,24 @@ function fillCoordRailListen(view, handlers) {
     coordRailMode = "listen";
     coordRailCollapsed = false;
   }
+  const playActive = Boolean(view.listenSerial?.playActive);
+  coordRail.dataset.listenPlay = playActive ? "1" : "0";
   coordRail.hidden = false;
   if (drawerBody) {
     drawerBody.innerHTML = renderListenSerialRail(view);
     if (!drawerBody.dataset.listenConsumeWired) {
       drawerBody.dataset.listenConsumeWired = "1";
       drawerBody.addEventListener("click", (e) => {
+        const enterBtn = e.target.closest("[data-enter-play]");
+        if (enterBtn && drawerBody.contains(enterBtn) && !enterBtn.disabled) {
+          handlers?.onEnterPlay?.();
+          return;
+        }
+        const leaveBtn = e.target.closest("[data-listen-leave-design]");
+        if (leaveBtn && drawerBody.contains(leaveBtn)) {
+          handlers?.onLeaveListenPlay?.();
+          return;
+        }
         const stopBtn = e.target.closest("[data-listen-tts-stop]");
         if (stopBtn && drawerBody.contains(stopBtn)) {
           handlers?.onListenStop?.();
@@ -6270,8 +6331,14 @@ function fillCoordRailListen(view, handlers) {
   }
   const n = view.listenSerial?.sections?.length ?? 0;
   if (drawerCount) {
-    drawerCount.textContent = n ? String(n) : "";
-    drawerCount.title = n ? `${n} 节正文` : "尚无正文";
+    if (playActive) {
+      drawerCount.textContent = n ? String(n) : "";
+      drawerCount.title = n ? `${n} 节正文` : "尚无正文";
+    } else {
+      const hasBrief = Boolean(view.listenSerial?.thrill || view.listenSerial?.world);
+      drawerCount.textContent = hasBrief ? "·" : "";
+      drawerCount.title = hasBrief ? "本局设定" : "尚无本局设定";
+    }
   }
   syncCoordRailChrome();
 }
@@ -6282,17 +6349,19 @@ function fillCoordRail(visible, view, handlers) {
   const drawerCount = document.getElementById("coord-drawer-count");
   if (!coordRail) return;
 
-  if (view.creationMode === "listen_serial" && !isPlayView(view)) {
+  if (view.creationMode === "listen_serial") {
     fillCoordRailListen(view, handlers);
     return;
   }
 
   // 转述产物栏只在创作层；游玩层与配方开玩一样走回合历史
   if (view.creationMode === "dictate" && !isPlayView(view)) {
+    delete coordRail.dataset.listenPlay;
     fillCoordRailProducts(view);
     return;
   }
 
+  delete coordRail.dataset.listenPlay;
   if (coordRailMode !== "history") {
     coordRailMode = "history";
     coordRailCollapsed = true;
@@ -6553,9 +6622,13 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         surface === "dictate" && view.selectedRecipe?.name
           ? esc(view.selectedRecipe.name)
           : "";
-      const kicker = displayCreationModeLabel(
-        surface === "listen" ? "listen_serial" : "dictate",
-      );
+      const listenPlay = surface === "listen" && Boolean(view.listenSerial?.playActive);
+      const kicker =
+        surface === "listen"
+          ? listenPlay
+            ? "听书播放"
+            : displayCreationModeLabel("listen_serial")
+          : displayCreationModeLabel("dictate");
       const head = recipeName
         ? `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${kicker}</span><span class="dictate-stage-recipe">配方 · ${recipeName}</span></header>`
         : `<header class="dictate-stage-bar"><span class="workspace-surface-kicker">${kicker}</span></header>`;
@@ -6566,7 +6639,9 @@ export function renderMessageFeed(view, loading, handlers = {}) {
         appendMessagesToFeed(dictateFeed, visible, view, handlers, activeQuestions, {
           emptyText:
             surface === "listen"
-              ? "用几句话描述题材与爽点。确认后我会写大纲和正文；右侧可看缓冲与大纲。"
+              ? listenPlay
+                ? "右侧是大纲与正文。说「继续」补货，或一句意见改向。"
+                : "用几句话描述题材与爽点。确认本局后点「播放」写大纲与正文。"
               : "直接说你想要的体验与设定。我会整理进右侧产物，并在回复里跟你确认、建议补充。",
           loading,
         });
@@ -6578,7 +6653,11 @@ export function renderMessageFeed(view, loading, handlers = {}) {
           const label =
             live?.label ??
             view.focus?.action ??
-            (surface === "listen" ? "连载中" : "整理中");
+            (surface === "listen"
+              ? listenPlay
+                ? "写稿中"
+                : "定局中"
+              : "整理中");
           pending.innerHTML = `
             <div class="msg-bubble">
               <header class="msg-head"><span class="msg-tag">${esc(label)}</span><span class="msg-live-indicator">流式输出中</span>${renderRetryRunButton()}</header>

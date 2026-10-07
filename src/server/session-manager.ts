@@ -187,10 +187,13 @@ import {
 } from "../dictate/index.js";
 import {
   LISTEN_SERIAL_MODE_VALUE,
+  ensureListenPlayContent,
+  isListenPlayActive,
   isListenSerialModeValue,
   markListenConsumed,
   readListenState,
   runListenSerialTurn,
+  setListenPlayActive,
   toListenView,
   type ListenSerialView,
 } from "../listen-serial/index.js";
@@ -343,7 +346,8 @@ export type SessionView = {
   /** 正文组成数据契约里的区。格式化时按 id 填进对应 data-block。 */
   presentationSlots?: Array<{ id: string; type: string }>;
   /**
-   * 程序投影块（来自 变量.当前 等）。前端灌 present 时与消息正文合并，随真值刷新。
+   * 程序投影块（来自 变量.当前 等）。前端灌 present 时与消息正文合并。
+   * 每轮 toView 现算：旁观副 LLM 改表后会变，供主列气泡 patch 重渲染（主世界出稿时投影必然偏旧）。
    */
   presentationProjection?: Record<string, unknown>;
   /** 总管正在输出的思维链（流式，轮询用） */
@@ -504,6 +508,14 @@ export class SessionManager {
     opts?: { useOpeningPersona?: boolean },
   ): SessionView {
     const s = this.require(sessionId);
+    if (this.isListenSerialMode(s)) {
+      if (stage === "play") {
+        throw new Error("听书请用「播放」入口（会生成大纲与正文）");
+      }
+      this.leaveListenPlay(s);
+      if (s.bookId) this.persist(s);
+      return this.toView(sessionId);
+    }
     if (stage === "play") {
       s.runtime.prepareEnterPlay();
       if (!canEnterPlay(s.runtime.getSession())) {
@@ -518,6 +530,62 @@ export class SessionManager {
     }
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
+  }
+
+  /** 听书：进入播放层，必要时生成大纲与正文 */
+  async enterListenPlay(sessionId: string): Promise<SessionView> {
+    const s = this.require(sessionId);
+    if (!this.isListenSerialMode(s)) {
+      throw new Error("当前不是听书连载");
+    }
+    const board = s.runtime.getBlackboard();
+    const state = readListenState(board);
+    if (!state.thrill?.trim() || !state.world?.trim()) {
+      throw new Error("请先在创作里确认核心爽点与一句世界");
+    }
+    if (state.phase === "intake" || state.phase === "awaiting_confirm") {
+      throw new Error("请先回复「确认」锁定本局，再进入播放");
+    }
+    setListenPlayActive(board, true);
+    s.runtime.setLifecycleStage("play");
+    const llm = createDefaultMainAgentLlm(s.trackingRef, () =>
+      this.personaForManaged(s),
+    );
+    const result = await ensureListenPlayContent({ llm, board });
+    const keep = normalizeContextTraceKeepLatest(
+      loadAppSettings().contextTraceKeepLatest,
+    );
+    const tokenUsage = s.trackingRef.current.pendingUsage;
+    s.trackingRef.current.pendingUsage = undefined;
+    s.trackingRef.current.pendingOutlines = undefined;
+    s.trackingRef.current.pendingContextTrace = undefined;
+    s.messages.push({
+      id: randomUUID(),
+      role: "system",
+      text: result.reply,
+      createdAt: new Date().toISOString(),
+      kind: "listen_reply",
+      actor: "orchestrator",
+      title: "听书播放",
+      body: result.reply,
+      ...(tokenUsage ? { tokenUsage } : {}),
+    });
+    s.messages = pruneContextTraces(s.messages, keep);
+    s.runtime.enterDictateIntake(
+      result.softStop
+        ? "本段已告一段落。输入「下一波」或「收工」，或一句意见改向。"
+        : "继续听/读，或说「继续」补货；不满意直接一句意见。",
+    );
+    if (s.bookId) this.persist(s);
+    return this.toView(sessionId);
+  }
+
+  private leaveListenPlay(s: ManagedSession): void {
+    setListenPlayActive(s.runtime.getBlackboard(), false);
+    s.runtime.setLifecycleStage("design");
+    s.runtime.enterDictateIntake(
+      "听书创作：可继续改爽点与设定；确认后点「播放」写大纲正文。",
+    );
   }
 
   /** 用户手改黑板 tag（创作期改设定/表；尊重后续 worker 的表 rev 合并） */
@@ -892,11 +960,13 @@ export class SessionManager {
       this.personaForManaged(s),
     );
     const dialogue = this.extractListenDialogue(s.messages);
+    const board = s.runtime.getBlackboard();
     const result = await runListenSerialTurn({
       llm,
-      board: s.runtime.getBlackboard(),
+      board,
       dialogue,
       userText,
+      inPlay: isListenPlayActive(board),
     });
     const keep = normalizeContextTraceKeepLatest(
       loadAppSettings().contextTraceKeepLatest,
@@ -4040,7 +4110,18 @@ export class SessionManager {
         }),
       }),
     );
-    const lifecycleStage = inferLifecycleStage(session);
+    const listenMode = this.isListenSerialMode(s);
+    const listenState = listenMode
+      ? readListenState(s.runtime.getBlackboard())
+      : null;
+    const listenPlay = listenMode
+      ? isListenPlayActive(s.runtime.getBlackboard())
+      : false;
+    const lifecycleStage: LifecycleStage = listenMode
+      ? listenPlay
+        ? "play"
+        : "design"
+      : inferLifecycleStage(session);
     const skillPackId =
       sessionSkillPackId(session) ?? (book ? bookSkillPackId(book) : undefined);
     const workerSetYaml = readWorkerSetYaml(s.runtime.getBlackboard());
@@ -4056,6 +4137,13 @@ export class SessionManager {
       s.runtime.getBlackboard().getContentByTag("设计.回复格式");
     const shellAdapt = parseShellAdaptationFromReplyFormat(replyFormatRaw);
     const replyContract = parseReplyDataContract(replyFormatRaw);
+    const listenPlayReady = Boolean(
+      listenState?.thrill &&
+        listenState.world &&
+        (listenState.phase === "ready" ||
+          listenState.phase === "running" ||
+          listenState.phase === "soft_stop"),
+    );
 
     return {
       id,
@@ -4075,11 +4163,13 @@ export class SessionManager {
       dictateProducts: this.isDictateMode(s)
         ? this.listDictateProducts(s)
         : undefined,
-      listenSerial: this.isListenSerialMode(s)
-        ? toListenView(readListenState(s.runtime.getBlackboard()))
+      listenSerial: listenState
+        ? toListenView(listenState, listenPlay)
         : undefined,
-      playLayerActive: isPlayLayerActive(session.slots),
-      playReady: canEnterPlay(session),
+      playLayerActive: listenMode
+        ? listenPlay
+        : isPlayLayerActive(session.slots),
+      playReady: listenMode ? listenPlayReady : canEnterPlay(session),
       hasProduct: Boolean(
         s.bookId &&
           this.listGameSnapshots(s.bookId).some((item) => item.kind === "instance"),

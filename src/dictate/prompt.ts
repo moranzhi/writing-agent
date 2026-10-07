@@ -26,6 +26,7 @@ export function buildDictateSelectPrompt(): string {
   return `你只做选题。对照能力目录和用户这句话，调用 select_nodes，选出已经够写的节点。
 
 nodes 里的 module_id 必须来自目录。通常选这段话已经说清的 2～4 个。尚无本局方案、且这句话已经给出核心体验时，把 creation-plan 放进 nodes。
+若末尾 checklist 标了「失败待补」，这些节点必须再次纳入 nodes（可与新选的一起）。
 用户的体验目标、举例和比方只说明要追求什么、像什么。范围还没和用户确认时，不为把它推成世界常态而选舞台骨架或实现机制。
 这一步不写产物正文，不回复用户。`;
 }

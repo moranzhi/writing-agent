@@ -50,8 +50,10 @@ describe("listen-serial state", () => {
     expect(state.outline).toHaveLength(3);
     expect(state.outline[2]?.payoff).toBe(true);
     expect(unreadChars(state)).toBe(100);
-    const view = toListenView(state);
+    const view = toListenView(state, true);
     expect(view.unreadChars).toBe(100);
+    expect(view.playActive).toBe(true);
+    expect(toListenView(state).playActive).toBe(false);
   });
 
   it("applyRedirectCut drops unconsumed sections and keeps consumed", () => {

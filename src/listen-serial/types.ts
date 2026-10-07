@@ -11,6 +11,8 @@ export const LISTEN_SECTIONS_TAG = "听书.正文节";
 export const LISTEN_SUMMARIES_TAG = "听书.小总结";
 export const LISTEN_BUFFER_TARGET_TAG = "听书.缓冲目标字数";
 export const LISTEN_CONSUMED_CHARS_TAG = "听书.已消费字数";
+/** 播放层开关：创作只定 brief，播放层才写大纲/正文 */
+export const LISTEN_PLAY_LAYER_TAG = "听书.播放层";
 
 /** 默认未读/未听缓冲目标（字）——实现默认值，可后续调 */
 export const DEFAULT_BUFFER_TARGET_CHARS = 4000;
@@ -22,6 +24,8 @@ export const MAX_SUMMARIES_IN_CONTEXT = 8;
 export type ListenPhase =
   | "intake"
   | "awaiting_confirm"
+  /** 创作已确认，等待进入播放写大纲正文 */
+  | "ready"
   | "running"
   | "soft_stop";
 
@@ -59,6 +63,8 @@ export type ListenSerialState = {
 
 export type ListenSerialView = {
   phase: ListenPhase;
+  /** 是否在播放层（大纲/正文/TTS） */
+  playActive: boolean;
   thrill: string;
   world: string;
   structure: string;
