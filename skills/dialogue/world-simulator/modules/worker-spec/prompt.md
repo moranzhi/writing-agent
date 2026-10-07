@@ -14,7 +14,7 @@ artifact: 设计.worker规格
 declaration: >
   程序根据前面已经确认的写作、维护和秘密隔离需求，整理本局需要启用的固定执行单元
 when: |
-  落档或开玩时自动执行；从叙事、维护复杂度、信息隔离和写作路径中推导固定槽位。
+  落档或开玩时自动执行；从叙事、信息隔离、写作路径推导固定槽位；有变量真值时程序固定开旁观填表。
 when_not: |
   前置语义尚未确定时沿用安全默认值，不向用户重复询问。
 boundary: |
@@ -57,7 +57,8 @@ boundary: |
 2. 默认世界模拟：`gm: true, narrator: false, auditor: false, perspective: false`；
    调度序 gm → perspective? → narrator? → auditor?；
    主世界层必开（用户明确只要旁观/写手路径除外）；
-   要独立文风改写才 narrator true；有变量设计/表维护需求 → auditor true；
+   要独立文风改写才 narrator true；
+   **旁观填表由程序固定**：有「设计.变量设计与更新规则」真值时落档会开 `auditor=true`，本步不必猜；手写 play_slots 时旁观与之对齐即可。
    仅信息隔离才开 perspective。
 3. 写手路径：`outline` + `chapter-writer` 默认都开；用户明确只要正文则可关 outline。
 4. 可写简短 `mount_notes`（哪类上游产物挂哪槽），不粘贴长文。
@@ -70,8 +71,8 @@ boundary: |
 
 ```principles
 1. 只勾选，不发明：ref 必须在白名单内；无机遇裁定槽。
-2. 默认：世界模拟 = 仅主世界层；转述/旁观/perspective 默认关。主世界层必要。
-3. 要独立文风层再开转述；有变量/表/规则要盯再开旁观。
+2. 默认：世界模拟 = 仅主世界层；转述/perspective 默认关。主世界层必要。
+3. 要独立文风层再开转述。表维护固定旁观副 LLM：有变量真值即 auditor true，不再按 inline 建议关旁观。
 4. 变量 / Data / Progressive 不是执行单元；旁观维护只出 maintain.v1，不写真相。
 5. 删掉检验仍适用：关某个槽要说得清损失什么。
 6. 本步不输出完整 Worker 集、不写 tables 全文、不写随机范围表（交给细化终稿 / 变量设计 / 随机范围整理）。
@@ -85,10 +86,9 @@ boundary: |
 
 - 是否必须独立转述改写正文？（要才 narrator=true；默认不要，主世界层原文即终稿）
 - 是否有「主世界层不该知道的角色秘密」？（有才 perspective=true）
-- 有变量/表要盯却关了旁观？或无状态却硬开旁观？
 - 扩写：要不要先验大纲再写章？
 
-不要问「还想加什么 Worker」；不要问要不要机遇裁定。
+不要问「还想加什么 Worker」；不要问要不要机遇裁定；旁观开否由程序按有无变量真值固定。
 ```
 
 ## output
@@ -123,7 +123,7 @@ boundary: |
 - `path=writing` 时必须有 `writing_slots`；`play_slots` 可省略。
 - `play_slots.gm` 世界模拟路径下应为 true。
 - `narrator` 缺省按 false（主世界层兼呈现）；仅用户明确要独立文风层时 true。
-- `auditor` 缺省按 false；有变量/表维护意图才 true。
+- `auditor` 缺省按 false；有变量真值时落档程序固定为 true（旁观副 LLM 填表）。对话落盘不必本步猜。
 - 不要输出 `chance` 字段；旧产物若有 `chance: true`，本步改为 false/删除，并指向「随机范围整理」。
 - 不要输出自造 `actors[]` / 自由 `workers[]`。
 - 旧产物若含 `actors[]`：本步应改写为槽位勾选，不再追加自定义 ref。
@@ -132,8 +132,8 @@ boundary: |
 
 ```checklist
 - [ ] 是否只有白名单槽，无自造 ref、无机遇裁定？
-- [ ] 主世界层是否开启（世界模拟路径）？旁观是否与变量需求一致？
-- [ ] auditor / perspective / 只要正文等非常规选择是否有理由？
+- [ ] 主世界层是否开启（世界模拟路径）？有变量真值时旁观是否按程序约定开启？
+- [ ] perspective / 只要正文等非常规选择是否有理由？
 - [ ] 是否误把变量管理做成槽？是否误交完整 设计.worker集？
 ```
 

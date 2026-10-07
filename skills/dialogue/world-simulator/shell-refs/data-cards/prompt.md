@@ -25,7 +25,7 @@ id: data-cards
 ## note
 
 ```note
-不替换：数据区在抬头下一直展开。正文在其下较宽的一栏，篇幅仍是数百字。窄栏在较窄的一栏。选项在两栏之下，直接可见。窄屏时宽栏在上。
+不替换：外壳铺满宿主宽度；数据区在抬头下一直展开。正文在其下较宽的一栏，篇幅仍是数百字。窄栏在较窄的一栏。选项在两栏之下，直接可见。窄屏时宽栏在上。
 可替换：数据项的名称、条数和当前值，窄栏的标题和条目，配色和字体。本局没有窄栏时删掉窄栏，正文占回整宽。
 ```
 
@@ -34,21 +34,21 @@ id: data-cards
 ```sample
 html:
 <div id="app">
-  <p id="heading"></p>
+  <p id="heading" data-block="heading"></p>
   <div id="cards"></div>
   <div class="pair">
-    <article id="body"></article>
+    <article id="body" data-block="body"></article>
     <aside class="side">
-      <p id="side-title"></p>
+      <p id="side-title" data-block="side_title"></p>
       <div id="side"></div>
     </aside>
   </div>
-  <ol id="options"></ol>
+  <ol id="options" data-block="options"></ol>
 </div>
 
 css:
 :root { color: #1c2420; background: #d5ddd4; }
-#app { max-width: 52rem; margin: 0 auto; padding: 1rem; font: 15px/1.75 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+#app { width: 100%; box-sizing: border-box; margin: 0; padding: 1rem; font: 15px/1.75 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 #heading { margin: 0 0 0.6rem; font-size: 13px; }
 #cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.45rem; margin-bottom: 0.75rem; }
 #cards.stack { grid-template-columns: 1fr; }
@@ -66,19 +66,9 @@ css:
 js:
 present.onData(function (data) {
   var blocks = (data && data.blocks) || {};
-  putText("heading", blocks.heading);
-  putText("side-title", blocks.side_title);
-  putText("body", blocks.body);
   putCards("cards", blocks.cards);
   putLines("side", blocks.side);
-  putList("options", blocks.options);
 });
-function putText(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  if (value == null || value === "") { el.remove(); return; }
-  el.textContent = String(value);
-}
 function putCards(id, value) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -109,17 +99,6 @@ function putLines(id, value) {
     var p = document.createElement("p");
     p.textContent = String(line && line.text != null ? line.text : line);
     el.appendChild(p);
-  });
-}
-function putList(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.replaceChildren();
-  if (!Array.isArray(value) || !value.length) { el.remove(); return; }
-  value.forEach(function (line) {
-    var li = document.createElement("li");
-    li.textContent = String(line);
-    el.appendChild(li);
   });
 }
 ```

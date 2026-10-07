@@ -23,8 +23,8 @@ id: paged
 ## note
 
 ```note
-不替换：同时只显示一页。页用一行标签切换。抬头在标签之外。
-可替换：每个标签的短名、页内文字和数据项、配色和字体。本局未启用的页不建标签。
+不替换：外壳铺满宿主宽度；同时只显示一页。页用一行标签切换。抬头在标签之外。
+可替换：每个标签的短名、页内文字和数据项、配色和字体、页内正文柱行长上限。本局未启用的页不建标签。
 ```
 
 ## sample
@@ -32,14 +32,15 @@ id: paged
 ```sample
 html:
 <div id="app">
-  <p id="heading"></p>
+  <p id="heading" data-block="heading"></p>
   <div id="tabs"></div>
-  <div id="page"></div>
+  <div id="page" data-block="page"></div>
 </div>
 
 css:
 :root { color: #1c1915; background: #f7f3ea; }
-#app { max-width: 44rem; margin: 0 auto; padding: 1.25rem; font: 16px/1.65 "Segoe UI", "Source Han Sans SC", sans-serif; }
+#app { width: 100%; box-sizing: border-box; margin: 0; padding: 1.25rem; font: 16px/1.65 "Segoe UI", "Source Han Sans SC", sans-serif; }
+#heading, #tabs, #page { max-width: 44rem; margin-inline: auto; }
 #tabs { display: flex; gap: 0.4rem; margin-bottom: 0.9rem; }
 #tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 0.35rem 0.6rem; font: inherit; color: inherit; }
 #tabs button[aria-current="true"] { border-bottom-color: #8a5a2b; }
@@ -49,7 +50,6 @@ var pages = [];
 var current = 0;
 present.onData(function (data) {
   var blocks = (data && data.blocks) || {};
-  putText("heading", blocks.heading);
   pages = Array.isArray(blocks.pages) ? blocks.pages : [];
   current = 0;
   drawTabs();
@@ -73,12 +73,7 @@ function drawTabs() {
 }
 function drawPage() {
   var el = document.getElementById("page");
-  el.textContent = pages[current] ? pages[current].text : "";
-}
-function putText(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  if (value == null || value === "") { el.remove(); return; }
-  el.textContent = String(value);
+  var text = pages[current] ? pages[current].text : "";
+  el.innerHTML = text ? present.markdown(String(text)) : "";
 }
 ```

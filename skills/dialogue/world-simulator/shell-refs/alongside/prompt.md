@@ -23,7 +23,7 @@ id: alongside
 ## note
 
 ```note
-不替换：正文和结构同屏。窄屏改为上下。选项在最下，直接可见。结构用创作时固定的绘图器，游玩灌入拓扑。
+不替换：外壳铺满宿主宽度；正文和结构同屏。窄屏改为上下。选项在最下，直接可见。结构用创作时固定的绘图器，游玩灌入拓扑。
 可替换：两栏谁更宽、抬头文字、结构块的短名、配色和字体。本局没有结构时改用阅读或正文为主。
 ```
 
@@ -32,19 +32,19 @@ id: alongside
 ```sample
 html:
 <div id="app">
-  <p id="heading"></p>
+  <p id="heading" data-block="heading"></p>
   <div class="pair">
-    <article id="body"></article>
+    <article id="body" data-block="body"></article>
     <section id="structure">
-      <div id="graph"></div>
+      <div id="graph" data-block="structure"></div>
     </section>
   </div>
-  <ol id="options"></ol>
+  <ol id="options" data-block="options"></ol>
 </div>
 
 css:
 :root { color: #1c1915; background: #f7f3ea; }
-#app { max-width: 56rem; margin: 0 auto; padding: 1.25rem; font: 16px/1.6 "Palatino Linotype", "Songti SC", serif; }
+#app { width: 100%; box-sizing: border-box; margin: 0; padding: 1.25rem; font: 16px/1.6 "Palatino Linotype", "Songti SC", serif; }
 .pair { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 1rem; }
 #structure { border: 1px solid #d5cbb8; border-radius: 6px; padding: 0.8rem; background: #fffdf8; }
 #graph { min-height: 8rem; }
@@ -54,17 +54,8 @@ css:
 js:
 present.onData(function (data) {
   var blocks = (data && data.blocks) || {};
-  putText("heading", blocks.heading);
-  putText("body", blocks.body);
   putGraph("graph", blocks.structure);
-  putList("options", blocks.options);
 });
-function putText(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  if (value == null || value === "") { el.remove(); return; }
-  el.textContent = String(value);
-}
 function putGraph(id, value) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -109,16 +100,5 @@ function putGraph(id, value) {
     svg.appendChild(label);
   });
   el.appendChild(svg);
-}
-function putList(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.replaceChildren();
-  if (!Array.isArray(value) || !value.length) { el.remove(); return; }
-  value.forEach(function (line) {
-    var li = document.createElement("li");
-    li.textContent = String(line);
-    el.appendChild(li);
-  });
 }
 ```

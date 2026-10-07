@@ -13,7 +13,7 @@ id: piece
 主区: 一份成稿
 可加窄带: 文字选项
 摆放:
-  成稿: 居中。内部小节在创作时按范例重写
+  成稿: 外壳铺满宿主；成稿正文柱可限行长并水平居中
   文字选项: 成稿之后，始终直接可见
 未启用的区不留空位。
 ```
@@ -21,8 +21,8 @@ id: piece
 ## note
 
 ```note
-不替换：一份成稿容器居中。选项在容器之后，直接可见。
-可替换：容器内部的标记、分段、配色和字体。按本局这一份成品重写内部。样本内部与本局不同时整段替换，保留容器和选项的前后关系。
+不替换：外壳铺满宿主宽度；一份成稿容器。选项在容器之后，直接可见。
+可替换：容器内部的标记、分段、配色和字体、成稿柱行长上限。按本局这一份成品重写内部。样本内部与本局不同时整段替换，保留容器和选项的前后关系。
 ```
 
 ## sample
@@ -30,37 +30,19 @@ id: piece
 ```sample
 html:
 <div id="app">
-  <article id="piece"></article>
-  <ol id="options"></ol>
+  <article id="piece" data-block="piece"></article>
+  <ol id="options" data-block="options"></ol>
 </div>
 
 css:
 :root { color: #1c1916; background: #ebe6dc; }
-#app { max-width: 34rem; margin: 0 auto; padding: 1.6rem 1.25rem 2rem; font: 16px/1.65 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-#piece { margin: 0; }
-#options { margin: 1rem 0 0; padding-left: 1.15rem; }
+#app { width: 100%; box-sizing: border-box; margin: 0; padding: 1.6rem 1.25rem 2rem; font: 16px/1.65 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+#piece, #options { max-width: 34rem; margin-inline: auto; }
+#piece { margin: 0 auto; }
+#options { margin: 1rem auto 0; padding-left: 1.15rem; }
 
 js:
-present.onData(function (data) {
-  var blocks = (data && data.blocks) || {};
-  putText("piece", blocks.piece);
-  putList("options", blocks.options);
+present.onData(function () {
+  /* 成稿与选项由程序按 data-block 灌数 */
 });
-function putText(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  if (value == null || value === "") { el.remove(); return; }
-  el.textContent = String(value);
-}
-function putList(id, value) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.replaceChildren();
-  if (!Array.isArray(value) || !value.length) { el.remove(); return; }
-  value.forEach(function (line) {
-    var li = document.createElement("li");
-    li.textContent = String(line);
-    el.appendChild(li);
-  });
-}
 ```
