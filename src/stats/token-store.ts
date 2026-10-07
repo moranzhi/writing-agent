@@ -1,7 +1,8 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ensureUserDataDirs, getUserDataDir } from "../config/user-data-dir.js";
+import type { ContextSegment } from "../llm/context-outline.js";
 
 export type TokenUsageRecord = {
   id: string;
@@ -17,7 +18,25 @@ export type TokenUsageRecord = {
   totalTokens: number;
   cachedTokens?: number;
   cacheMissTokens?: number;
+  cacheWriteTokens?: number;
   messageId?: string;
+  turnId?: string;
+  step?: string;
+  retryIndex?: number;
+  segmentChars?: {
+    rules: number;
+    history: number;
+    products: number;
+    injected: number;
+    tail: number;
+  };
+  /** 有序标签与哈希，不含正文 */
+  segments?: ContextSegment[];
+  plannedTags?: string[];
+  succeededTags?: string[];
+  failedTags?: string[];
+  finish?: string;
+  latencyMs?: number;
 };
 
 /** Token usage attached to a chat message in SessionView */
@@ -97,7 +116,18 @@ export function recordTokenUsage(
     totalTokens: partial.totalTokens,
     cachedTokens: partial.cachedTokens,
     cacheMissTokens: partial.cacheMissTokens,
+    cacheWriteTokens: partial.cacheWriteTokens,
     messageId: partial.messageId,
+    turnId: partial.turnId,
+    step: partial.step,
+    retryIndex: partial.retryIndex,
+    segmentChars: partial.segmentChars,
+    segments: partial.segments,
+    plannedTags: partial.plannedTags,
+    succeededTags: partial.succeededTags,
+    failedTags: partial.failedTags,
+    finish: partial.finish,
+    latencyMs: partial.latencyMs,
   };
   appendFileSync(dayFile(new Date(record.at)), `${JSON.stringify(record)}\n`, "utf8");
   return record;
@@ -236,6 +266,39 @@ export function getSessionTokenTotals(sessionId: string): {
     last: records[0],
     records,
   };
+}
+
+export function patchTokenUsage(
+  id: string,
+  patch: Partial<
+    Pick<
+      TokenUsageRecord,
+      "plannedTags" | "succeededTags" | "failedTags" | "finish"
+    >
+  >,
+): void {
+  if (!id) return;
+  const files = listStatFiles();
+  for (let i = files.length - 1; i >= 0; i--) {
+    const file = files[i]!;
+    const lines = readFileSync(file, "utf8").split(/\r?\n/);
+    let changed = false;
+    const next = lines.map((line) => {
+      if (!line.trim()) return line;
+      try {
+        const record = JSON.parse(line) as TokenUsageRecord;
+        if (record.id !== id) return line;
+        changed = true;
+        return JSON.stringify({ ...record, ...patch });
+      } catch {
+        return line;
+      }
+    });
+    if (changed) {
+      writeFileSync(file, next.join("\n"), "utf8");
+      return;
+    }
+  }
 }
 
 export function toMessageTokenUsage(record: TokenUsageRecord): MessageTokenUsage {

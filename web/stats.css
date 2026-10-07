@@ -396,6 +396,26 @@
   border-bottom: none;
 }
 
+.stats-table tbody tr.stats-call {
+  cursor: pointer;
+}
+.stats-table tbody tr.stats-detail td {
+  padding-top: 8px;
+  padding-bottom: 12px;
+  white-space: normal;
+}
+.stats-table .stats-system-note {
+  margin: 0 0 6px;
+  color: var(--st-muted, var(--muted, #6b7280));
+  font-size: 12px;
+}
+.stats-table .stats-segments {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .stats-table tbody tr:hover td {
   background: color-mix(in srgb, var(--st-surface) 58%, var(--st-bg));
 }

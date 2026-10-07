@@ -14,6 +14,7 @@ import {
   SUGGESTED_PRICING_DOCS,
 } from "../stats/pricing.js";
 import { attachRecordCost, buildCostReport } from "../stats/pricing-cost.js";
+import { annotateCacheBreaks } from "../llm/context-outline.js";
 
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -77,6 +78,7 @@ export async function handleStatsApi(
     const records = readRecords({ ...query, limit: query.limit ?? 100 });
     const catalog = resolveRateCatalog();
     const cost = buildCostReport(summaryRecords, catalog);
+    const breaks = annotateCacheBreaks(summaryRecords);
     json(res, 200, {
       summary: {
         ...summarizeRecords(summaryRecords),
@@ -92,6 +94,7 @@ export async function handleStatsApi(
           ...r,
           estimatedCost: priced.cost,
           unmatchedRate: priced.unmatched,
+          cacheBreak: breaks.get(r.id) ?? null,
         };
       }),
     });

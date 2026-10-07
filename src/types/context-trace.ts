@@ -1,3 +1,4 @@
+import type { ContextSegment } from "../llm/context-outline.js";
 import type { GenerationParameters } from "./preset.js";
 
 /** 一次 LLM 调用实际发送的上下文（全量，供右键观察） */
@@ -11,6 +12,8 @@ export type LlmContextTrace = {
   caller: string;
   createdAt: string;
   messages: LlmContextMessage[];
+  /** 有序标签，供查看排列和缓存断点；不含正文 */
+  segments?: ContextSegment[];
   /** 便于列表展示 */
   charCount: number;
   model?: string;
@@ -57,6 +60,7 @@ export function buildContextTrace(params: {
   }>;
   model?: string;
   generation?: GenerationParameters;
+  segments?: ContextSegment[];
 }): LlmContextTrace {
   const messages = snapshotRequestMessages(params.messages);
   const charCount = messages.reduce((n, m) => n + m.content.length, 0);
@@ -64,6 +68,7 @@ export function buildContextTrace(params: {
     caller: params.caller,
     createdAt: new Date().toISOString(),
     messages,
+    ...(params.segments?.length ? { segments: params.segments } : {}),
     charCount,
     model: params.model,
     ...(params.generation && Object.keys(params.generation).length

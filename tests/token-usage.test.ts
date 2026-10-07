@@ -44,6 +44,16 @@ describe("parseUsage", () => {
     expect(usage?.cacheMissTokens).toBe(100);
   });
 
+  it("parses cache write tokens when the provider returns them", () => {
+    const usage = parseUsage({
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      total_tokens: 110,
+      cache_creation_input_tokens: 40,
+    });
+    expect(usage?.cacheWriteTokens).toBe(40);
+  });
+
   it("returns undefined for empty usage", () => {
     expect(parseUsage(null)).toBeUndefined();
     expect(parseUsage({})).toBeUndefined();
@@ -52,8 +62,10 @@ describe("parseUsage", () => {
 
 describe("TokenTrackingProvider", () => {
   it("stores pending usage with cache fields on context", async () => {
+    let seenSession: string | undefined;
     const inner: LlmProvider = {
-      async complete(): Promise<CompleteResult> {
+      async complete(_messages, options): Promise<CompleteResult> {
+        seenSession = options?.sessionId;
         return {
           content: "ok",
           model: "test-model",
@@ -71,6 +83,7 @@ describe("TokenTrackingProvider", () => {
     const ctx: LlmTrackingContext = { sessionId: "sess-1" };
     const provider = new TokenTrackingProvider(inner, () => ctx);
     await provider.complete([], { caller: "worker:write-rules" });
+    expect(seenSession).toBe("sess-1");
 
     expect(ctx.pendingUsage).toMatchObject({
       totalTokens: 15,

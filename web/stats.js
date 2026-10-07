@@ -187,6 +187,57 @@ function renderModels(rows) {
     .join("");
 }
 
+function uncachedTokens(record) {
+  if (record.cacheMissTokens != null) return record.cacheMissTokens;
+  if (record.promptTokens != null && record.cachedTokens != null) {
+    return Math.max(0, record.promptTokens - record.cachedTokens);
+  }
+  return null;
+}
+
+function breakLabel(info) {
+  if (!info) return "—";
+  if (info.cold) return "冷启动";
+  if (info.breakAt < 0) return "整段接上";
+  return info.tag || "断开";
+}
+
+function breakNote(record) {
+  const info = record.cacheBreak;
+  const segments = record.segments || [];
+  if (!segments.length) return "这次没有分段标签。";
+  if (!info || info.cold) {
+    return "本页没有更早的同会话请求可比。";
+  }
+  if (info.breakAt < 0) {
+    let note = "与上一条同会话请求的前缀整段相同。";
+    if (!record.cachedTokens) note += " 账单缓存是 0。";
+    return note;
+  }
+  const tag = segments[info.breakAt]?.tag || info.tag || "（上一条更长）";
+  let note = `前 ${info.matched ?? info.breakAt} 段与上一条相同，从「${tag}」起前缀不再一致。`;
+  if (!record.cachedTokens && info.breakAt > 0) {
+    note += " 账单缓存是 0。";
+  }
+  return note;
+}
+
+function segmentLines(record) {
+  const info = record.cacheBreak;
+  const segments = record.segments || [];
+  return segments
+    .map((seg, i) => {
+      let mark = "    ";
+      if (info && !info.cold) {
+        if (info.breakAt < 0 || i < info.breakAt) mark = "已接上";
+        else if (i === info.breakAt) mark = "断开  ";
+        else mark = "之后  ";
+      }
+      return `${String(i + 1).padStart(2, "0")}  ${mark}  ${escapeHtml(seg.tag)}  ${formatNum(seg.chars)}字  ${escapeHtml(seg.hash)}`;
+    })
+    .join("\n");
+}
+
 function renderRows(records) {
   const tbody = document.getElementById("rows");
   const empty = document.getElementById("empty");
@@ -206,15 +257,35 @@ function renderRows(records) {
       const cost = r.unmatchedRate || !r.estimatedCost
         ? `<span class="stats-unpriced">—</span>`
         : formatMoney(r.estimatedCost);
-      return `<tr>
+      const chars = r.segmentChars;
+      const charLine = chars
+        ? `规则 ${formatNum(chars.rules)} · 更早对话 ${formatNum(chars.history)} · 产物 ${formatNum(chars.products)} · 注入 ${formatNum(chars.injected)} · 末尾 ${formatNum(chars.tail)}`
+        : "";
+      const tags = [
+        r.turnId ? `turn ${escapeHtml(r.turnId)}` : "",
+        r.plannedTags?.length ? `计划 ${escapeHtml(r.plannedTags.join("、"))}` : "",
+        r.succeededTags?.length ? `已写入 ${escapeHtml(r.succeededTags.join("、"))}` : "",
+        r.failedTags?.length ? `未完成 ${escapeHtml(r.failedTags.join("、"))}` : "",
+      ].filter(Boolean).join(" · ");
+      return `<tr class="stats-call" data-call="${escapeHtml(r.id)}">
       <td class="col-time">${formatAt(r.at)}</td>
+      <td>${escapeHtml(r.step || "—")}</td>
       <td class="col-caller" title="${escapeHtml(r.caller || "")}">${escapeHtml(r.caller || "—")}</td>
       <td class="col-model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || "—")}</td>
       <td class="num">${formatNum(r.promptTokens ?? 0)}</td>
-      <td class="num">${formatNum(r.completionTokens ?? 0)}</td>
-      <td class="num col-total">${formatNum(r.totalTokens ?? 0)}</td>
+      <td class="num">${uncachedTokens(r) == null ? "—" : formatNum(uncachedTokens(r))}</td>
       <td class="num">${r.cachedTokens == null ? "—" : formatNum(r.cachedTokens)}</td>
+      <td class="col-break" title="相对本页更早的同会话请求">${escapeHtml(breakLabel(r.cacheBreak))}</td>
       <td class="num">${cost}</td>
+    </tr>
+    <tr class="stats-detail" hidden>
+      <td colspan="9">
+        <p class="stats-system-note">系统信息：断点、分段标签和哈希只给你对照，不会发给模型。「工具」是 tools 字段。</p>
+        <p>${escapeHtml(breakNote(r))} 写出 ${formatNum(r.completionTokens ?? 0)}。</p>
+        ${charLine ? `<p>${charLine}</p>` : ""}
+        ${tags ? `<p>${tags}</p>` : ""}
+        <pre class="stats-segments">${segmentLines(r) || "（无分段）"}</pre>
+      </td>
     </tr>`;
     })
     .join("");
@@ -392,6 +463,14 @@ document.getElementById("pricing-sources").addEventListener("click", async (ev) 
   } finally {
     setPricingBusy(false);
   }
+});
+
+document.getElementById("rows")?.addEventListener("click", (event) => {
+  const row = event.target.closest("tr.stats-call");
+  if (!row) return;
+  const detail = row.nextElementSibling;
+  if (!detail?.classList.contains("stats-detail")) return;
+  detail.hidden = !detail.hidden;
 });
 
 (() => {

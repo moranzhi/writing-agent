@@ -6,7 +6,15 @@ import type {
   LlmProvider,
   StreamCallbacks,
   TokenUsage,
+  ToolDefinition,
+  UsageDetail,
+  UsageSink,
 } from "./client.js";
+import {
+  outlineRequest,
+  type ContextSegment,
+  type RequestOutline,
+} from "./context-outline.js";
 import {
   recordTokenUsage,
   toMessageTokenUsage,
@@ -28,6 +36,9 @@ export type LlmTrackingContext = {
   pendingReasoning?: string;
   /** 全量请求上下文；挂到下一条「结果向」系统消息 */
   pendingContextTrace?: LlmContextTrace;
+  /** 本条回复之前的各次请求轮廓；查看时选题和填写都在 */
+  pendingOutlines?: RequestOutline[];
+  lastSegments?: ContextSegment[];
 };
 
 function capturePendingTrace(
@@ -41,12 +52,16 @@ function capturePendingTrace(
   caller: string | undefined,
   model?: string,
   generation?: CompleteOptions["generation"],
+  tools?: ToolDefinition[],
 ): void {
+  const segments = outlineRequest(messages, tools);
+  ctx.lastSegments = segments;
   ctx.pendingContextTrace = buildContextTrace({
     caller: caller ?? "unknown",
     messages,
     model,
     generation,
+    segments,
   });
 }
 
@@ -55,9 +70,13 @@ function recordUsage(
   caller: string | undefined,
   model: string | undefined,
   usage: TokenUsage | undefined,
+  meta?: { detail?: UsageDetail; latencyMs?: number; sink?: UsageSink },
 ): void {
-  if (!usage) return;
-  const record = recordTokenUsage({
+  const segments = ctx.lastSegments;
+  ctx.lastSegments = undefined;
+  const detail = meta?.detail;
+  const record = usage
+    ? recordTokenUsage({
     sessionId: ctx.sessionId,
     bookId: ctx.bookId,
     bookTitle: ctx.bookTitle,
@@ -69,8 +88,36 @@ function recordUsage(
     totalTokens: usage.totalTokens,
     cachedTokens: usage.cachedTokens,
     cacheMissTokens: usage.cacheMissTokens,
-  });
-  ctx.pendingUsage = toMessageTokenUsage(record);
+    cacheWriteTokens: usage.cacheWriteTokens,
+    turnId: detail?.turnId,
+    step: detail?.step,
+    retryIndex: detail?.retryIndex,
+    segmentChars: detail?.segmentChars,
+    plannedTags: detail?.plannedTags,
+    succeededTags: detail?.succeededTags,
+    failedTags: detail?.failedTags,
+    finish: detail?.finish,
+    latencyMs: meta?.latencyMs,
+    segments,
+  })
+    : undefined;
+  if (record && meta?.sink) meta.sink.recordId = record.id;
+  if (record) ctx.pendingUsage = toMessageTokenUsage(record);
+  if (!segments?.length && !record) return;
+  const outline: RequestOutline = {
+    at: record?.at ?? new Date().toISOString(),
+    caller: record?.caller ?? caller ?? "unknown",
+    step: detail?.step,
+    turnId: detail?.turnId,
+    model: record?.model ?? model,
+    promptTokens: record?.promptTokens,
+    completionTokens: record?.completionTokens,
+    cachedTokens: record?.cachedTokens,
+    cacheMissTokens: record?.cacheMissTokens,
+    cacheWriteTokens: record?.cacheWriteTokens,
+    segments: segments ?? [],
+  };
+  ctx.pendingOutlines = [...(ctx.pendingOutlines ?? []), outline];
 }
 
 export class TokenTrackingProvider implements LlmProvider {
@@ -78,6 +125,14 @@ export class TokenTrackingProvider implements LlmProvider {
     private readonly inner: LlmProvider,
     private readonly getContext: () => LlmTrackingContext,
   ) {}
+
+  /** 调用方未指定时，用本局会话 id，供 OpenRouter 粘滞路由。 */
+  private withSession<T extends CompleteOptions>(options?: T): T {
+    const sessionId = this.getContext().sessionId?.trim();
+    if (!sessionId) return (options ?? {}) as T;
+    if (options?.sessionId?.trim()) return options;
+    return { ...options, sessionId } as T;
+  }
 
   async complete(
     messages: Parameters<LlmProvider["complete"]>[0],
@@ -91,7 +146,8 @@ export class TokenTrackingProvider implements LlmProvider {
         messages,
       },
       async () => {
-        const result = await this.inner.complete(messages, options);
+        const started = Date.now();
+        const result = await this.inner.complete(messages, this.withSession(options));
         const ctx = this.getContext();
         capturePendingTrace(
           ctx,
@@ -100,7 +156,11 @@ export class TokenTrackingProvider implements LlmProvider {
           result.model,
           options?.generation,
         );
-        recordUsage(ctx, options?.caller, result.model, result.usage);
+        recordUsage(ctx, options?.caller, result.model, result.usage, {
+          detail: options?.usageDetail,
+          latencyMs: Date.now() - started,
+          sink: options?.usageSink,
+        });
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
         }
@@ -130,7 +190,8 @@ export class TokenTrackingProvider implements LlmProvider {
       },
       async () => {
         let reasoningBuf = "";
-        const result = await inner.completeStream!(messages, options, {
+        const started = Date.now();
+        const result = await inner.completeStream!(messages, this.withSession(options), {
           onReasoningDelta: (delta) => {
             reasoningBuf += delta;
             const ctx = this.getContext();
@@ -147,7 +208,11 @@ export class TokenTrackingProvider implements LlmProvider {
           result.model,
           options?.generation,
         );
-        recordUsage(ctx, options?.caller, result.model, result.usage);
+        recordUsage(ctx, options?.caller, result.model, result.usage, {
+          detail: options?.usageDetail,
+          latencyMs: Date.now() - started,
+          sink: options?.usageSink,
+        });
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
         }
@@ -169,7 +234,11 @@ export class TokenTrackingProvider implements LlmProvider {
         tools: options.tools,
       },
       async () => {
-        const result = await this.inner.completeWithTools(messages, options);
+        const started = Date.now();
+        const result = await this.inner.completeWithTools(
+          messages,
+          this.withSession(options),
+        );
         const ctx = this.getContext();
         capturePendingTrace(
           ctx,
@@ -177,8 +246,13 @@ export class TokenTrackingProvider implements LlmProvider {
           options.caller,
           result.model,
           options.generation,
+          options.tools,
         );
-        recordUsage(ctx, options.caller, result.model, result.usage);
+        recordUsage(ctx, options.caller, result.model, result.usage, {
+          detail: options.usageDetail,
+          latencyMs: Date.now() - started,
+          sink: options.usageSink,
+        });
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
         }
@@ -206,15 +280,20 @@ export class TokenTrackingProvider implements LlmProvider {
       },
       async () => {
         let reasoningBuf = "";
-        const result = await inner.completeWithToolsStream!(messages, options, {
-          onReasoningDelta: (delta) => {
-            reasoningBuf += delta;
-            const ctx = this.getContext();
-            ctx.pendingReasoning = reasoningBuf;
-            callbacks.onReasoningDelta?.(delta);
+        const started = Date.now();
+        const result = await inner.completeWithToolsStream!(
+          messages,
+          this.withSession(options),
+          {
+            onReasoningDelta: (delta) => {
+              reasoningBuf += delta;
+              const ctx = this.getContext();
+              ctx.pendingReasoning = reasoningBuf;
+              callbacks.onReasoningDelta?.(delta);
+            },
+            onContentDelta: callbacks.onContentDelta,
           },
-          onContentDelta: callbacks.onContentDelta,
-        });
+        );
         const ctx = this.getContext();
         capturePendingTrace(
           ctx,
@@ -222,8 +301,13 @@ export class TokenTrackingProvider implements LlmProvider {
           options.caller,
           result.model,
           options.generation,
+          options.tools,
         );
-        recordUsage(ctx, options.caller, result.model, result.usage);
+        recordUsage(ctx, options.caller, result.model, result.usage, {
+          detail: options.usageDetail,
+          latencyMs: Date.now() - started,
+          sink: options.usageSink,
+        });
         if (result.reasoning?.trim()) {
           ctx.pendingReasoning = result.reasoning.trim();
         }

@@ -29,6 +29,9 @@ function applyToolCallDelta(
       const f = fn as Record<string, unknown>;
       if (typeof f.name === "string") entry.name = f.name;
       if (typeof f.arguments === "string") entry.arguments += f.arguments;
+      else if (f.arguments && typeof f.arguments === "object" && !entry.arguments) {
+        entry.arguments = JSON.stringify(f.arguments);
+      }
     }
     acc.set(index, entry);
   }
@@ -36,10 +39,10 @@ function applyToolCallDelta(
 
 function toolCallsFromAccumulator(acc: ToolCallAccumulator): ParsedToolCall[] {
   const out: ParsedToolCall[] = [];
-  for (const [, entry] of [...acc.entries()].sort((a, b) => a[0] - b[0])) {
+  for (const [index, entry] of [...acc.entries()].sort((a, b) => a[0] - b[0])) {
     const name = entry.name?.trim();
-    const id = entry.id?.trim();
-    if (!name || !id) continue;
+    if (!name) continue;
+    const id = entry.id?.trim() || `call-${index}`;
     out.push({ id, name, arguments: entry.arguments || "{}" });
   }
   return out;

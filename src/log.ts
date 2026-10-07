@@ -98,6 +98,8 @@ const TOOL_LABEL: Record<string, string> = {
   review_blackboard: "审黑板",
   finish: "结束",
   insert: "写入产物",
+  reply_user: "回复用户",
+  select_nodes: "选定节点",
   write_product: "写入产物",
   delete: "删除产物",
   declare_variable: "声明变量",
@@ -214,6 +216,7 @@ export function labelCaller(caller: string | undefined): string {
   if (who === "main_agent" || who.startsWith("main_agent:")) return "总管";
   if (who === "intake_extract") return "需求抽取";
   if (who === "dictate_agent") return "对话落盘";
+  if (who.startsWith("listen_serial_")) return "听书连载";
   if (who === "preset-probe") return "预设探测";
   if (who.startsWith("model-compare:")) {
     return `模型对比 ${who.slice("model-compare:".length)}`;

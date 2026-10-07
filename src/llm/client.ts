@@ -57,7 +57,32 @@ export type TokenUsage = {
   cachedTokens?: number;
   /** Prompt tokens not served from cache (DeepSeek prompt_cache_miss_tokens) */
   cacheMissTokens?: number;
+  /** 上游若单独返回缓存写入 token（如 cache_creation_input_tokens） */
+  cacheWriteTokens?: number;
 };
+
+/** 用量行上的调度信息。不包含提示词或产物正文。 */
+export type DictateUsageStep = "select" | "fill" | "fill-retry" | "reply" | "play";
+
+export type UsageDetail = {
+  turnId?: string;
+  step?: DictateUsageStep;
+  retryIndex?: number;
+  segmentChars?: {
+    rules: number;
+    history: number;
+    products: number;
+    injected: number;
+    tail: number;
+  };
+  plannedTags?: string[];
+  succeededTags?: string[];
+  failedTags?: string[];
+  finish?: string;
+};
+
+/** complete 返回后由统计层写入 recordId，供补记成功或失败的 tag。 */
+export type UsageSink = { recordId?: string };
 
 export type CompleteResult = {
   content: string;
@@ -84,6 +109,14 @@ export type CompleteOptions = {
   label?: string;
   /** 取消进行中的 LLM 请求（停止并重试） */
   signal?: AbortSignal;
+  /**
+   * 本局会话 id。仅 OpenRouter 会写成请求体 `session_id`，用来粘住同一上游，
+   * 避免开头 message 一变就换缓存节点。其它渠道不发送。
+   */
+  sessionId?: string;
+  /** 统计补充。不进上游请求体。 */
+  usageDetail?: UsageDetail;
+  usageSink?: UsageSink;
 };
 
 export type ToolChoice =
@@ -132,6 +165,33 @@ export type LlmProvider = {
 };
 
 const JSON_OBJECT_HINT = "请用 JSON 对象回复。";
+const OPENROUTER_SESSION_ID_MAX = 256;
+
+/** OpenRouter 用 `session_id` 做粘滞路由；其它 OpenAI 兼容渠道不认识这个字段。 */
+export function isOpenRouterBaseUrl(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return false;
+  try {
+    const withProtocol = /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+    const host = new URL(withProtocol).hostname.toLowerCase();
+    return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
+  } catch {
+    return false;
+  }
+}
+
+/** 合法则返回要写入请求体的 session_id；非 OpenRouter 或空 id 则不写。 */
+export function openRouterSessionId(
+  baseUrl: string,
+  sessionId: string | undefined,
+): string | undefined {
+  if (!isOpenRouterBaseUrl(baseUrl)) return undefined;
+  const id = sessionId?.trim();
+  if (!id) return undefined;
+  return id.slice(0, OPENROUTER_SESSION_ID_MAX);
+}
 
 function messagesMentionJson(messages: ChatMessage[]): boolean {
   for (const message of messages) {
@@ -210,6 +270,9 @@ export function buildRequestBody(
     body.stream_options = { include_usage: true };
   }
 
+  const sessionId = openRouterSessionId(config.baseUrl, options?.sessionId);
+  if (sessionId) body.session_id = sessionId;
+
   return body;
 }
 
@@ -232,6 +295,20 @@ function readCacheMissTokens(u: Record<string, unknown>): number | undefined {
   return readFiniteNumber(u.prompt_cache_miss_tokens ?? u.promptCacheMissTokens);
 }
 
+function readCacheWriteTokens(u: Record<string, unknown>): number | undefined {
+  const details = u.prompt_tokens_details ?? u.promptTokensDetails;
+  if (details && typeof details === "object") {
+    const row = details as Record<string, unknown>;
+    const nested = readFiniteNumber(row.cache_write_tokens ?? row.cacheWriteTokens);
+    if (nested != null) return nested;
+  }
+  return readFiniteNumber(
+    u.cache_creation_input_tokens ??
+      u.cache_write_input_tokens ??
+      u.cacheWriteTokens,
+  );
+}
+
 /** Parse OpenAI-compatible usage object, including provider-specific cache fields. */
 export function parseUsage(raw: unknown): TokenUsage | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -243,6 +320,7 @@ export function parseUsage(raw: unknown): TokenUsage | undefined {
 
   const cachedTokens = readCachedTokens(u);
   const cacheMissTokens = readCacheMissTokens(u);
+  const cacheWriteTokens = readCacheWriteTokens(u);
 
   return {
     promptTokens: Number.isFinite(prompt) ? prompt : 0,
@@ -253,22 +331,66 @@ export function parseUsage(raw: unknown): TokenUsage | undefined {
         (Number.isFinite(completion) ? completion : 0),
     ...(cachedTokens != null ? { cachedTokens } : {}),
     ...(cacheMissTokens != null ? { cacheMissTokens } : {}),
+    ...(cacheWriteTokens != null ? { cacheWriteTokens } : {}),
   };
 }
 
-function extractMessageParts(message: Record<string, unknown> | undefined): {
+function stringifyToolArguments(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return "{}";
+}
+
+function toolCallFromRow(row: Record<string, unknown>, index: number): ParsedToolCall | null {
+  const fn = row.function;
+  const nested = fn && typeof fn === "object" ? (fn as Record<string, unknown>) : null;
+  const source = nested ?? row;
+  const name = typeof source.name === "string" ? source.name.trim() : "";
+  if (!name) return null;
+  const rawId = typeof row.id === "string" ? row.id.trim() : "";
+  return {
+    id: rawId || `call-${index}`,
+    name,
+    arguments: stringifyToolArguments(
+      source.arguments ?? source.args ?? row.arguments ?? row.args ?? row.input,
+    ),
+  };
+}
+
+function embeddedContent(raw: unknown): { text: string | null; calls: ParsedToolCall[] } {
+  if (typeof raw === "string") return { text: raw.trim() || null, calls: [] };
+  if (!Array.isArray(raw)) return { text: raw == null ? null : "", calls: [] };
+  const texts: string[] = [];
+  const calls: ParsedToolCall[] = [];
+  raw.forEach((part, index) => {
+    if (!part || typeof part !== "object") return;
+    const row = part as Record<string, unknown>;
+    if (typeof row.text === "string" && row.text.trim()) texts.push(row.text.trim());
+    const fn = row.functionCall ?? row.function_call;
+    if (row.type === "tool_use" || (fn && typeof fn === "object")) {
+      const nested = fn && typeof fn === "object" ? (fn as Record<string, unknown>) : row;
+      const parsed = toolCallFromRow(
+        {
+          id: row.id,
+          name: nested.name ?? row.name,
+          arguments: nested.args ?? nested.arguments ?? row.input ?? row.arguments,
+        },
+        index,
+      );
+      if (parsed) calls.push(parsed);
+    }
+  });
+  return { text: texts.join("\n").trim() || null, calls };
+}
+
+/** 从一条 assistant message 取出正文和工具调用。对象参数、缺 id、content 片段里的调用都收。 */
+export function extractMessageParts(message: Record<string, unknown> | undefined): {
   content: string | null;
   reasoning?: string;
   toolCalls: ParsedToolCall[];
 } {
   if (!message) return { content: "", toolCalls: [] };
-  const rawContent = message.content;
-  const content =
-    typeof rawContent === "string"
-      ? rawContent.trim() || null
-      : rawContent == null
-        ? null
-        : "";
+  const embedded = embeddedContent(message.content);
   const reasoningRaw =
     (typeof message.reasoning_content === "string" &&
       message.reasoning_content.trim()) ||
@@ -280,21 +402,18 @@ function extractMessageParts(message: Record<string, unknown> | undefined): {
   const toolCalls: ParsedToolCall[] = [];
   const rawCalls = message.tool_calls;
   if (Array.isArray(rawCalls)) {
-    for (const call of rawCalls) {
-      if (!call || typeof call !== "object") continue;
-      const c = call as Record<string, unknown>;
-      const fn = c.function;
-      if (!fn || typeof fn !== "object") continue;
-      const f = fn as Record<string, unknown>;
-      const name = typeof f.name === "string" ? f.name : "";
-      const id = typeof c.id === "string" ? c.id : "";
-      const args =
-        typeof f.arguments === "string" ? f.arguments : "{}";
-      if (name && id) {
-        toolCalls.push({ id, name, arguments: args });
-      }
+    rawCalls.forEach((call, index) => {
+      if (!call || typeof call !== "object") return;
+      const parsed = toolCallFromRow(call as Record<string, unknown>, index);
+      if (parsed) toolCalls.push(parsed);
+    });
+  }
+  for (const call of embedded.calls) {
+    if (!toolCalls.some((item) => item.id === call.id && item.name === call.name)) {
+      toolCalls.push(call);
     }
   }
+  const content = embedded.text;
 
   if (toolCalls.length > 0) {
     return { content, reasoning: reasoning || undefined, toolCalls };
