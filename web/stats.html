@@ -19,6 +19,7 @@
       <a class="st-brand" href="/">Writing Agent</a>
       <nav class="st-nav" aria-label="主导航">
         <a href="/">对话</a>
+        <a href="/chat.html">直聊</a>
         <a href="/modules.html">技能</a>
         <a href="/libraries.html">库</a>
         <a href="/stats.html" aria-current="page">Token</a>
@@ -31,7 +32,7 @@
         <header class="st-main-head">
           <div>
             <h1>Token 统计</h1>
-            <p class="st-sub">按时间筛选本机调用；花销按你指定的官方价目文档估算（<code>stats/*.jsonl</code>）</p>
+            <p class="st-sub">按时间筛选本机调用。OpenRouter 价格在下面手动拉取，只保留 DeepSeek、Claude、GLM、Gemini、GPT、Grok 的当前档。</p>
           </div>
         </header>
 
@@ -63,7 +64,7 @@
           <div class="stats-pricing-head">
             <p class="stats-section-label">价格来源</p>
             <p class="stats-pricing-hint">
-              粘贴厂商官方价目页，解析型号单价后按调用时间估算（含缓存命中与高峰/闲时，若文档有写）。
+              厂商官方价目（含高峰/闲时）仍可粘贴文档。OpenRouter 用下方按钮拉取。
             </p>
           </div>
           <form class="stats-pricing-add" id="pricing-form">
@@ -83,6 +84,54 @@
           <p class="stats-pricing-status" id="pricing-status" hidden aria-live="polite"></p>
         </section>
 
+        <section class="stats-compare" aria-label="模型价格对比">
+          <div class="stats-compare-head">
+            <div>
+              <p class="stats-section-label">价格对比</p>
+              <p class="stats-pricing-hint">
+                一行一个型号。前三列是每百万 token 的通常单价，最后一列是按最近 100 次调用重估的花费。
+              </p>
+            </div>
+            <button type="button" class="btn-primary" id="btn-pull-openrouter">拉取 OpenRouter 价格</button>
+          </div>
+          <div class="stats-table-wrap stats-compare-wrap">
+            <table class="stats-table stats-compare-table" id="compare-table">
+              <thead>
+                <tr>
+                  <th scope="col" aria-sort="none">
+                    <div class="stats-compare-model-col">
+                      <button type="button" class="stats-sort" data-sort="model" data-label="型号" title="按型号排序">型号</button>
+                      <input
+                        type="search"
+                        id="compare-filter"
+                        class="stats-compare-filter"
+                        placeholder="筛选型号"
+                        aria-label="按型号筛选"
+                        autocomplete="off"
+                        spellcheck="false"
+                      />
+                    </div>
+                  </th>
+                  <th scope="col" class="num" aria-sort="none">
+                    <button type="button" class="stats-sort" data-sort="input" data-label="输入" title="按输入单价排序">输入</button>
+                  </th>
+                  <th scope="col" class="num" aria-sort="none">
+                    <button type="button" class="stats-sort" data-sort="cached" data-label="缓存" title="按缓存单价排序">缓存</button>
+                  </th>
+                  <th scope="col" class="num" aria-sort="none">
+                    <button type="button" class="stats-sort" data-sort="output" data-label="输出" title="按输出单价排序">输出</button>
+                  </th>
+                  <th scope="col" aria-sort="ascending">
+                    <button type="button" class="stats-sort" data-sort="projected" data-label="近 100 次" title="按近 100 次花费排序">近 100 次 ↑</button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="compare-list"></tbody>
+            </table>
+          </div>
+          <p class="stats-compare-status" id="compare-status" hidden aria-live="polite"></p>
+        </section>
+
         <div class="stats-summary" id="summary" aria-live="polite"></div>
         <p class="stats-status" id="status" data-state="idle" aria-live="polite"></p>
 
@@ -97,15 +146,16 @@
                   <th scope="col" class="num">prompt</th>
                   <th scope="col" class="num">completion</th>
                   <th scope="col" class="num">cached</th>
+                  <th scope="col" class="num">当前单价</th>
                   <th scope="col" class="num">估算花销</th>
-                  <th scope="col">单价</th>
+                  <th scope="col">来源</th>
                 </tr>
               </thead>
               <tbody id="model-rows"></tbody>
             </table>
             <div class="stats-empty" id="model-empty" hidden>
               <strong>没有可汇总的型号</strong>
-              先查出调用记录，并添加官方价目文档。
+              先查出调用记录；OpenRouter 会自动同步单价，其他渠道可手动添加价目。
             </div>
           </div>
         </section>

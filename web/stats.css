@@ -258,6 +258,196 @@
   color: var(--st-danger);
 }
 
+.stats-compare {
+  margin: 0 24px 16px;
+  padding: 12px 14px;
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius);
+}
+
+.stats-compare .stats-section-label {
+  margin: 0;
+}
+
+.stats-compare-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+
+.stats-compare-head .btn-primary:focus-visible,
+.stats-compare-head .btn-primary:disabled {
+  outline: none;
+}
+
+.stats-compare-head .btn-primary:focus-visible {
+  box-shadow: 0 0 0 3px var(--st-accent-soft);
+}
+
+.stats-compare-head .btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.stats-compare .stats-table-wrap {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.stats-compare-table thead th {
+  vertical-align: middle;
+}
+
+.stats-compare-model-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stats-sort {
+  appearance: none;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.stats-table th.num .stats-sort {
+  width: 100%;
+  text-align: right;
+}
+
+.stats-sort:hover {
+  color: var(--st-text);
+}
+
+.stats-sort:focus-visible,
+.stats-compare-filter:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px var(--st-accent-soft);
+}
+
+.stats-compare-table thead th[aria-sort="ascending"] .stats-sort,
+.stats-compare-table thead th[aria-sort="descending"] .stats-sort {
+  color: var(--st-text);
+}
+
+.stats-compare-filter {
+  width: 9.5rem;
+  max-width: 36vw;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--st-border-strong);
+  border-radius: 6px;
+  background: var(--st-bg);
+  color: var(--st-text);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.stats-compare-filter::placeholder {
+  color: var(--st-muted);
+  font-family: "Noto Sans SC", sans-serif;
+}
+
+.stats-compare-filter:focus-visible {
+  border-color: var(--st-accent);
+}
+
+.stats-compare-none {
+  padding: 16px 12px;
+  color: var(--st-muted);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.stats-compare-table .stats-compare-name {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.stats-compare-estimate {
+  display: grid;
+  grid-template-columns: minmax(4rem, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 11rem;
+}
+
+.stats-compare-multiple {
+  min-width: 2.5rem;
+  font-size: 12px;
+  color: var(--st-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-compare-track {
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--st-border) 65%, transparent);
+  overflow: hidden;
+}
+
+.stats-compare-bar {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--st-accent);
+  min-width: 2px;
+}
+
+.stats-compare-money {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stats-compare-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: -4px;
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.stats-compare-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+.stats-compare-status[data-state="error"] {
+  color: var(--st-danger);
+}
+
+.stats-compare-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--st-muted);
+}
+
 .stats-section-label {
   margin: 0 24px 8px;
   font-size: 13px;
@@ -476,6 +666,7 @@
   .stats-main .st-main-head,
   .stats-toolbar,
   .stats-pricing,
+  .stats-compare,
   .stats-summary,
   .stats-status,
   .stats-section-label,
@@ -511,5 +702,18 @@
   .stats-toolbar-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .stats-compare-estimate {
+    min-width: 9rem;
+  }
+
+  .stats-compare-model-col {
+    flex-wrap: wrap;
+  }
+
+  .stats-compare-filter {
+    width: 100%;
+    max-width: none;
   }
 }

@@ -338,9 +338,10 @@ function parsePricingJson(text: string): ParsePricingResult {
       const cached = jsonPrice(pricing.input_cache_read ?? pricing.cached ?? pricing.inputCacheHit);
       // OpenRouter 等接口用「每个 token」；官方价目表通常是每 1M。
       const perToken = prompt > 0 && prompt < 1e-4;
+      // 保留完整 id（如 openai/gpt-4o），避免不同厂商短名互相覆盖。
       const rate: ModelRate = {
-        model: model.includes("/") ? model.split("/").pop()! : model,
-        aliases: model.includes("/") ? [model] : [],
+        model,
+        aliases: [],
         currency: "USD",
         unitTokens: UNIT_1M,
         inputCacheMiss: { offPeak: perToken ? prompt * UNIT_1M : prompt },
@@ -351,7 +352,15 @@ function parsePricingJson(text: string): ParsePricingResult {
       }
       rates.push(rate);
     }
-    return { rates: mergeRatesByModel(rates), warnings: rates.length ? [] : ["JSON 中没有单价"] };
+    const title =
+      rates.some((r) => r.model.includes("/")) && rates.length > 20
+        ? "OpenRouter Models & Pricing"
+        : undefined;
+    return {
+      title,
+      rates: mergeRatesByModel(rates),
+      warnings: rates.length ? [] : ["JSON 中没有单价"],
+    };
   } catch {
     return { rates: [], warnings: ["JSON 解析失败"] };
   }

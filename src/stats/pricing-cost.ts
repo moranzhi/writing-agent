@@ -17,6 +17,14 @@ export type RecordCost = {
   sourceName?: string;
 };
 
+export type ModelUnitPrice = {
+  currency: string;
+  unitTokens: number;
+  input: number;
+  output: number;
+  cached: number | null;
+};
+
 export type ModelCostRow = {
   model: string;
   calls: number;
@@ -29,7 +37,19 @@ export type ModelCostRow = {
   unmatched: boolean;
   sourceName?: string;
   sourceUrl?: string;
+  /** 匹配到的当前单价（每 unitTokens），便于不打开控制台也能对照花销 */
+  unitPrice?: ModelUnitPrice | null;
 };
+
+function unitPriceFromRate(rate: ResolvedRate): ModelUnitPrice {
+  return {
+    currency: rate.currency,
+    unitTokens: rate.unitTokens || 1_000_000,
+    input: rate.inputCacheMiss.offPeak,
+    output: rate.output.offPeak,
+    cached: rate.inputCacheHit?.offPeak ?? null,
+  };
+}
 
 export type CostReport = {
   total: Money | null;
@@ -137,6 +157,7 @@ export function buildCostReport(
       unmatched: !rate,
       sourceName: rate?.sourceName,
       sourceUrl: rate?.sourceUrl,
+      unitPrice: rate ? unitPriceFromRate(rate) : null,
     };
     prev.calls += 1;
     prev.promptTokens += record.promptTokens;
@@ -150,6 +171,11 @@ export function buildCostReport(
         prev.cost.amount += priced.amount;
       }
       prev.unmatched = false;
+    }
+    if (rate) {
+      prev.sourceName = rate.sourceName;
+      prev.sourceUrl = rate.sourceUrl;
+      prev.unitPrice = unitPriceFromRate(rate);
     }
     byModel.set(model, prev);
   }
@@ -173,4 +199,66 @@ export function buildCostReport(
     pricedCalls,
     byModel: rows,
   };
+}
+
+export type CompareUsage = {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+};
+
+export type CompareRow = {
+  model: string;
+  found: boolean;
+  sourceName?: string;
+  unitPrice: ModelUnitPrice | null;
+  projected: Money | null;
+};
+
+/** 把同一批调用的 token 按候选模型单价重估，便于换模型前对比。 */
+export function compareModelsOnRecords(
+  records: TokenUsageRecord[],
+  modelIds: string[],
+  catalog = resolveRateCatalog(),
+): { usage: CompareUsage; rows: CompareRow[] } {
+  const usage: CompareUsage = {
+    calls: records.length,
+    promptTokens: 0,
+    completionTokens: 0,
+    cachedTokens: 0,
+  };
+  for (const record of records) {
+    usage.promptTokens += record.promptTokens;
+    usage.completionTokens += record.completionTokens;
+    usage.cachedTokens += record.cachedTokens ?? 0;
+  }
+
+  const seen = new Set<string>();
+  const rows: CompareRow[] = [];
+  for (const raw of modelIds) {
+    const model = raw.trim();
+    const key = model.toLowerCase();
+    if (!model || seen.has(key)) continue;
+    seen.add(key);
+    const rate = findModelRate(model, catalog);
+    if (!rate) {
+      rows.push({ model, found: false, unitPrice: null, projected: null });
+      continue;
+    }
+    let amount = 0;
+    for (const record of records) {
+      amount += costForRecord(record, rate).amount;
+    }
+    rows.push({
+      model: rate.model,
+      found: true,
+      sourceName: rate.sourceName,
+      unitPrice: unitPriceFromRate(rate),
+      projected: records.length
+        ? { amount: Math.round(amount * 1e10) / 1e10, currency: rate.currency }
+        : { amount: 0, currency: rate.currency },
+    });
+  }
+  return { usage, rows };
 }

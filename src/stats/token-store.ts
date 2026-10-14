@@ -178,6 +178,23 @@ export function readRecords(query: TokenStatsQuery = {}): TokenUsageRecord[] {
   return records.sort((a, b) => b.at.localeCompare(a.at));
 }
 
+/** 最近调用里出现过的不同型号，按时间从新到旧。 */
+export function recentDistinctModels(limit = 2): string[] {
+  const cap = Math.min(Math.max(limit, 1), 8);
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const record of readRecords({ limit: 400 })) {
+    const model = record.model?.trim();
+    if (!model) continue;
+    const key = model.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    models.push(model);
+    if (models.length >= cap) break;
+  }
+  return models;
+}
+
 function accumulateCaller(
   map: Record<string, CallerTokenBreakdown>,
   caller: string,

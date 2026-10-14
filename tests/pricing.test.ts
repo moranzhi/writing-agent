@@ -7,7 +7,7 @@ import {
   parsePeakSchedule,
   parsePricingDocument,
 } from "../src/stats/pricing-parse.js";
-import { buildCostReport, costForRecord, isPeakAt, splitPromptTokens } from "../src/stats/pricing-cost.js";
+import { buildCostReport, compareModelsOnRecords, costForRecord, isPeakAt, splitPromptTokens } from "../src/stats/pricing-cost.js";
 import type { ResolvedRate } from "../src/stats/pricing.js";
 import type { TokenUsageRecord } from "../src/stats/token-store.js";
 
@@ -158,7 +158,7 @@ Prices per 1M tokens.
 });
 
 describe("parsePricingDocument JSON", () => {
-  it("converts OpenRouter per-token strings to per-million", () => {
+  it("converts OpenRouter per-token strings to per-million and keeps full id", () => {
     const parsed = parsePricingDocument(
       JSON.stringify({
         data: [
@@ -170,7 +170,7 @@ describe("parsePricingDocument JSON", () => {
       }),
       "application/json",
     );
-    expect(parsed.rates[0].model).toBe("deepseek-chat");
+    expect(parsed.rates[0].model).toBe("deepseek/deepseek-chat");
     expect(parsed.rates[0].inputCacheMiss.offPeak).toBeCloseTo(0.14);
     expect(parsed.rates[0].output.offPeak).toBeCloseTo(0.28);
   });
@@ -248,6 +248,141 @@ describe("normalizePricingUrl", () => {
   });
 });
 
+describe("trimOpenRouterUsualCatalog", () => {
+  it("keeps the newest tier in each family and drops the rest", async () => {
+    const { trimOpenRouterUsualCatalog, usualOpenRouterBucket } = await import(
+      "../src/stats/pricing.js"
+    );
+    expect(usualOpenRouterBucket("google/gemini-3.8-flash")).toBe("gemini-flash");
+    expect(usualOpenRouterBucket("google/gemini-2.5-pro")).toBe("gemini-pro");
+    expect(usualOpenRouterBucket("openai/gpt-4o:batch")).toBeNull();
+    const trimmed = JSON.parse(
+      trimOpenRouterUsualCatalog(
+        JSON.stringify({
+          data: [
+            {
+              id: "openai/gpt-5.6-luna",
+              created: 10,
+              pricing: { prompt: "0.0000002", completion: "0.000001" },
+            },
+            {
+              id: "openai/gpt-6-luna",
+              created: 20,
+              pricing: { prompt: "0.0000001", completion: "0.0000005" },
+            },
+            {
+              id: "anthropic/claude-haiku-5.5",
+              created: 30,
+              pricing: { prompt: "0.0000001", completion: "0.0000005" },
+            },
+            {
+              id: "x-ai/grok-4.7:batch",
+              created: 40,
+              pricing: { prompt: "0.000001", completion: "0.000003" },
+            },
+            {
+              id: "deepseek/deepseek-chat",
+              created: 50,
+              pricing: { prompt: "0.0000001", completion: "0.0000002" },
+            },
+          ],
+        }),
+      ),
+    ) as { data: Array<{ id: string }> };
+    expect(trimmed.data.map((row) => row.id).sort()).toEqual([
+      "anthropic/claude-haiku-5.5",
+      "openai/gpt-6-luna",
+    ]);
+    const pinned = JSON.parse(
+      trimOpenRouterUsualCatalog(
+        JSON.stringify({
+          data: [
+            {
+              id: "openai/gpt-4o-mini",
+              created: 1,
+              pricing: { prompt: "0.00000015", completion: "0.0000006" },
+            },
+          ],
+        }),
+        ["openai/gpt-4o-mini"],
+      ),
+    ) as { data: Array<{ id: string }> };
+    expect(pinned.data.map((row) => row.id)).toEqual(["openai/gpt-4o-mini"]);
+  });
+});
+
+describe("compareStoredPrices", () => {
+  it("marks a change against the previous snapshot", async () => {
+    const { compareStoredPrices } = await import("../src/stats/pricing.js");
+    const previous = [
+      {
+        model: "openai/gpt-6-luna",
+        aliases: [],
+        currency: "USD",
+        unitTokens: 1_000_000,
+        inputCacheMiss: { offPeak: 0.1 },
+        output: { offPeak: 0.5 },
+      },
+    ];
+    const current = [
+      {
+        ...previous[0],
+        inputCacheMiss: { offPeak: 0.2 },
+      },
+    ];
+    const [changed] = compareStoredPrices(previous, current, ["openai/gpt-6-luna"]);
+    expect(changed.status).toBe("changed");
+    expect(changed.previous?.input).toBe(0.1);
+    expect(changed.current?.input).toBe(0.2);
+    const [same] = compareStoredPrices(current, current, ["openai/gpt-6-luna"]);
+    expect(same.status).toBe("unchanged");
+    const [first] = compareStoredPrices([], current, ["openai/gpt-6-luna"]);
+    expect(first.status).toBe("baseline");
+  });
+});
+
+describe("refreshOpenRouterPricing", () => {
+  it("stores only the usual OpenRouter tiers", async () => {
+    process.env.WRITING_AGENT_DATA_DIR = mkdtempSync(
+      path.join(tmpdir(), "wa-openrouter-pricing-"),
+    );
+    const sample = {
+      data: [
+        {
+          id: "openai/gpt-6-luna-pro",
+          created: 2,
+          pricing: {
+            prompt: "0.0000001",
+            completion: "0.0000005",
+            input_cache_read: "0.00000001",
+          },
+        },
+        {
+          id: "openai/gpt-4o",
+          created: 1,
+          pricing: { prompt: "0.0000025", completion: "0.00001" },
+        },
+      ],
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(sample), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    try {
+      const { refreshOpenRouterPricing, findModelRate, listOpenRouterCompareModels } =
+        await import("../src/stats/pricing.js");
+      const source = await refreshOpenRouterPricing();
+      expect(source.rates.map((rate) => rate.model)).toEqual(["openai/gpt-6-luna-pro"]);
+      expect(findModelRate("openai/gpt-6-luna-pro")?.inputCacheMiss.offPeak).toBeCloseTo(0.1);
+      expect(listOpenRouterCompareModels()).toEqual(["openai/gpt-6-luna-pro"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("buildCostReport", () => {
   beforeAll(() => {
     process.env.WRITING_AGENT_DATA_DIR = mkdtempSync(
@@ -292,8 +427,61 @@ describe("buildCostReport", () => {
     expect(report.pricedCalls).toBe(1);
     expect(report.byModel[0].model).toBe("deepseek-v4-flash");
     expect(report.byModel[0].cost?.amount).toBeGreaterThan(0);
+    expect(report.byModel[0].unitPrice).toMatchObject({
+      currency: "USD",
+      input: 0.15,
+      output: 0.6,
+    });
     expect(report.byModel.find((r) => r.model === "mystery-model")?.unmatched).toBe(
       true,
     );
+  });
+});
+
+describe("compareModelsOnRecords", () => {
+  it("reprices the same tokens onto each candidate", () => {
+    const cheap = flashRate({
+      model: "anthropic/claude-haiku-5.5",
+      inputCacheMiss: { offPeak: 0.1 },
+      inputCacheHit: { offPeak: 0.01 },
+      output: { offPeak: 0.5 },
+      peakWindows: undefined,
+      peakWeekdays: undefined,
+    });
+    const dear = flashRate({
+      model: "x-ai/grok-4.7",
+      inputCacheMiss: { offPeak: 2 },
+      inputCacheHit: { offPeak: 0.5 },
+      output: { offPeak: 6 },
+      peakWindows: undefined,
+      peakWeekdays: undefined,
+    });
+    const catalog = {
+      byKey: new Map([
+        [cheap.model, cheap],
+        [dear.model, dear],
+      ]),
+      rates: [cheap, dear],
+    };
+    const compared = compareModelsOnRecords(
+      [
+        {
+          id: "a",
+          at: "2026-09-13T08:00:00.000Z",
+          caller: "x",
+          model: "something-else",
+          promptTokens: 1_000_000,
+          completionTokens: 200_000,
+          totalTokens: 1_200_000,
+          cachedTokens: 0,
+        },
+      ],
+      ["x-ai/grok-4.7", "anthropic/claude-haiku-5.5", "missing"],
+      catalog,
+    );
+    expect(compared.usage.calls).toBe(1);
+    expect(compared.rows[0].projected?.amount).toBeCloseTo(2 + 1.2);
+    expect(compared.rows[1].projected?.amount).toBeCloseTo(0.1 + 0.1);
+    expect(compared.rows[2].found).toBe(false);
   });
 });

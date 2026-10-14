@@ -8,12 +8,18 @@ import {
   addPricingSource,
   deletePricingSource,
   getPricingSource,
+  getPriceWatchStatus,
+  listOpenRouterCompareModels,
   listPricingSources,
+  readPriceWatchNotice,
+  RECENT_COMPARE_CALLS,
   refreshPricingSource,
+  syncOpenRouterPrices,
   resolveRateCatalog,
+  searchPricingModels,
   SUGGESTED_PRICING_DOCS,
 } from "../stats/pricing.js";
-import { attachRecordCost, buildCostReport } from "../stats/pricing-cost.js";
+import { attachRecordCost, buildCostReport, compareModelsOnRecords } from "../stats/pricing-cost.js";
 import { annotateCacheBreaks } from "../llm/context-outline.js";
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -110,6 +116,47 @@ export async function handleStatsApi(
       sources: listPricingSources().map(publicSource),
       suggested: SUGGESTED_PRICING_DOCS,
     });
+    return true;
+  }
+
+  if (pathname === "/api/stats/pricing/openrouter") {
+    if (req.method !== "GET" && req.method !== "POST") {
+      json(res, 405, { error: "Method Not Allowed" });
+      return true;
+    }
+    try {
+      const notice = await syncOpenRouterPrices();
+      const source = listPricingSources().find((item) => item.url.includes("openrouter.ai"));
+      json(res, 200, {
+        source: source ? publicSource(source) : null,
+        notice,
+      });
+    } catch (err) {
+      json(res, 400, { error: err instanceof Error ? err.message : "拉取失败" });
+    }
+    return true;
+  }
+
+  if (pathname === "/api/stats/pricing/notice" && req.method === "GET") {
+    json(res, 200, {
+      status: getPriceWatchStatus(),
+      notice: readPriceWatchNotice(),
+    });
+    return true;
+  }
+
+  if (pathname === "/api/stats/pricing/models" && req.method === "GET") {
+    const q = searchParams.get("q") ?? "";
+    const limit = searchParams.get("limit") ? Number(searchParams.get("limit")) : 12;
+    json(res, 200, { models: searchPricingModels(q, limit) });
+    return true;
+  }
+
+  if (pathname === "/api/stats/compare" && req.method === "GET") {
+    const models = listOpenRouterCompareModels();
+    const records = readRecords({ limit: RECENT_COMPARE_CALLS });
+    const compared = compareModelsOnRecords(records, models);
+    json(res, 200, compared);
     return true;
   }
 

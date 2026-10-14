@@ -49,6 +49,17 @@ function formatCostTotal(total, byCurrency) {
   return entries.map(([currency, amount]) => formatMoney({ amount, currency })).join(" + ");
 }
 
+function formatUnitPrice(unit) {
+  if (!unit || unit.input == null || unit.output == null) return "—";
+  const currency = unit.currency || "USD";
+  const inPrice = formatMoney({ amount: unit.input, currency });
+  const outPrice = formatMoney({ amount: unit.output, currency });
+  const cached =
+    unit.cached == null ? "" : ` · 缓存 ${formatMoney({ amount: unit.cached, currency })}`;
+  const per = unit.unitTokens === 1_000_000 ? "/1M" : `/${formatNum(unit.unitTokens)}`;
+  return `${inPrice} / ${outPrice}${per}${cached}`;
+}
+
 function setStatus(text, state = "idle") {
   const status = document.getElementById("status");
   status.textContent = text;
@@ -111,6 +122,7 @@ async function loadStats() {
       `共 ${formatNum(totalCalls)} 次调用 · 显示 ${formatNum(records.length)} 条${extra}`,
       "idle",
     );
+    loadCompare();
   } catch (err) {
     renderSummary(null);
     renderModels([]);
@@ -119,6 +131,7 @@ async function loadStats() {
       `加载失败：${err instanceof Error ? err.message : String(err)}`,
       "error",
     );
+    loadCompare();
   }
 }
 
@@ -171,6 +184,9 @@ function renderModels(rows) {
       const cost = r.unmatched || !r.cost
         ? `<span class="stats-unpriced">无报价</span>`
         : formatMoney(r.cost);
+      const unit = r.unmatched
+        ? `<span class="stats-unpriced">—</span>`
+        : escapeHtml(formatUnitPrice(r.unitPrice));
       const source = r.unmatched
         ? "—"
         : escapeHtml(r.sourceName || "官方文档");
@@ -180,6 +196,7 @@ function renderModels(rows) {
         <td class="num">${formatNum(r.promptTokens ?? 0)}</td>
         <td class="num">${formatNum(r.completionTokens ?? 0)}</td>
         <td class="num">${formatNum(r.cachedTokens ?? 0)}</td>
+        <td class="num col-unit" title="${unit}">${unit}</td>
         <td class="num col-total">${cost}</td>
         <td class="col-caller" title="${source}">${source}</td>
       </tr>`;
@@ -325,7 +342,7 @@ function renderSuggested(items, sources = []) {
     el.innerHTML = "";
     return;
   }
-  el.innerHTML = items
+  el.innerHTML = remaining
     .map(
       (s) =>
         `<button type="button" class="stats-suggest" data-url="${escapeHtml(s.url)}">${escapeHtml(s.name)}</button>`,
@@ -462,6 +479,193 @@ document.getElementById("pricing-sources").addEventListener("click", async (ev) 
     await loadPricing();
   } finally {
     setPricingBusy(false);
+  }
+});
+
+function setCompareStatus(text, state = "idle") {
+  const el = document.getElementById("compare-status");
+  if (!text) {
+    el.hidden = true;
+    el.textContent = "";
+    el.dataset.state = "idle";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  el.dataset.state = state;
+}
+
+function barWidth(value, max) {
+  if (!max || value == null || value <= 0) return 0;
+  return Math.max(2, Math.round((value / max) * 100));
+}
+
+function shortModelName(id) {
+  const slash = id.lastIndexOf("/");
+  return slash >= 0 ? id.slice(slash + 1) : id;
+}
+
+/** 默认按近 100 次从低到高；没有调用时这一列没有数，排序退回输入单价。 */
+let comparePayload = null;
+let compareSort = { key: "projected", dir: "asc" };
+
+function compareSortValue(row, key, usageCalls) {
+  const unit = row.unitPrice || {};
+  if (key === "model") return shortModelName(row.model || "").toLowerCase();
+  if (key === "input") return unit.input ?? null;
+  if (key === "cached") return unit.cached ?? null;
+  if (key === "output") return unit.output ?? null;
+  if (usageCalls > 0) return row.projected?.amount ?? null;
+  return unit.input ?? null;
+}
+
+function compareNullable(av, bv, dir) {
+  const aMissing = av == null || av === "";
+  const bMissing = bv == null || bv === "";
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  const cmp = typeof av === "string" ? av.localeCompare(bv, "en") : av - bv;
+  return dir === "desc" ? -cmp : cmp;
+}
+
+function syncCompareSortHeaders() {
+  for (const btn of document.querySelectorAll("#compare-table .stats-sort")) {
+    const key = btn.dataset.sort;
+    const th = btn.closest("th");
+    const active = compareSort.key === key;
+    th?.setAttribute(
+      "aria-sort",
+      active ? (compareSort.dir === "asc" ? "ascending" : "descending") : "none",
+    );
+    const label = btn.dataset.label || "";
+    btn.textContent = active ? `${label} ${compareSort.dir === "asc" ? "↑" : "↓"}` : label;
+  }
+}
+
+function renderCompare(data) {
+  const list = document.getElementById("compare-list");
+  const table = document.getElementById("compare-table");
+  const rows = (data?.rows || []).filter((row) => row.found && row.unitPrice);
+  const usageCalls = data?.usage?.calls ?? 0;
+  syncCompareSortHeaders();
+  if (!rows.length) {
+    table.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  table.hidden = false;
+  const query = (document.getElementById("compare-filter")?.value || "").trim().toLowerCase();
+  const matched = query
+    ? rows.filter((row) => {
+        const id = String(row.model || "").toLowerCase();
+        return id.includes(query) || shortModelName(id).includes(query);
+      })
+    : rows;
+  if (!matched.length) {
+    list.innerHTML = `<tr><td class="stats-compare-none" colspan="5">没有名称包含「${escapeHtml(query)}」的型号</td></tr>`;
+    return;
+  }
+  const ranked = [...matched].sort((a, b) =>
+    compareNullable(
+      compareSortValue(a, compareSort.key, usageCalls),
+      compareSortValue(b, compareSort.key, usageCalls),
+      compareSort.dir,
+    ),
+  );
+  const maxAmount = Math.max(0, ...rows.map((row) => row.projected?.amount || 0));
+  const cheapest = Math.min(...rows.map((row) => row.projected?.amount || 0).filter((n) => n > 0));
+  list.innerHTML = ranked
+    .map((row) => {
+      const unit = row.unitPrice;
+      const currency = unit.currency;
+      const cached = unit.cached == null ? "—" : formatMoney({ amount: unit.cached, currency });
+      const amount = row.projected?.amount || 0;
+      const multiple =
+        usageCalls > 0 && cheapest > 0 && amount > 0
+          ? `×${(amount / cheapest).toFixed(amount / cheapest >= 10 ? 0 : 1)}`
+          : "";
+      const estimate = usageCalls > 0
+        ? `<div class="stats-compare-estimate">
+            <div class="stats-compare-track" aria-hidden="true"><span class="stats-compare-bar" style="width:${barWidth(amount, maxAmount)}%"></span></div>
+            <span class="stats-compare-money">${escapeHtml(formatMoney(row.projected))}</span>
+            <span class="stats-compare-multiple">${escapeHtml(multiple)}</span>
+          </div>`
+        : "—";
+      return `<tr>
+        <td class="stats-compare-name" title="${escapeHtml(row.model)}">${escapeHtml(shortModelName(row.model))}</td>
+        <td class="num">${escapeHtml(formatMoney({ amount: unit.input, currency }))}</td>
+        <td class="num">${escapeHtml(cached)}</td>
+        <td class="num">${escapeHtml(formatMoney({ amount: unit.output, currency }))}</td>
+        <td>${estimate}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+document.querySelector("#compare-table thead")?.addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".stats-sort");
+  if (!btn) return;
+  const key = btn.dataset.sort;
+  if (!key) return;
+  if (compareSort.key === key) {
+    compareSort.dir = compareSort.dir === "asc" ? "desc" : "asc";
+  } else {
+    compareSort = { key, dir: "asc" };
+  }
+  if (comparePayload) renderCompare(comparePayload);
+  else syncCompareSortHeaders();
+});
+
+document.getElementById("compare-filter")?.addEventListener("input", () => {
+  if (comparePayload) renderCompare(comparePayload);
+});
+
+async function loadCompare() {
+  try {
+    const data = await api("/api/stats/compare");
+    comparePayload = data;
+    renderCompare(data);
+    const usage = data.usage || {};
+    const calls = usage.calls ?? 0;
+    if (!data.rows?.length) {
+      setCompareStatus("尚未拉取", "idle");
+      return;
+    }
+    if (!calls) {
+      setCompareStatus("通常单价已显示。最近没有调用，预估区为空。", "idle");
+      return;
+    }
+    const prompt = usage.promptTokens || 0;
+    const cached = usage.cachedTokens || 0;
+    const hit = prompt > 0 ? Math.round((cached / prompt) * 100) : 0;
+    setCompareStatus(
+      `最近 ${formatNum(calls)} 次：输入 ${formatNum(prompt)}（缓存命中 ${formatNum(cached)}，${hit}%）· 输出 ${formatNum(usage.completionTokens || 0)}`,
+      "idle",
+    );
+  } catch (err) {
+    comparePayload = null;
+    document.getElementById("compare-list").innerHTML = "";
+    document.getElementById("compare-table").hidden = true;
+    setCompareStatus(err instanceof Error ? err.message : String(err), "error");
+  }
+}
+
+document.getElementById("btn-pull-openrouter").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-pull-openrouter");
+  btn.disabled = true;
+  setCompareStatus("正在拉取 OpenRouter 价格…", "idle");
+  try {
+    const data = await api("/api/stats/pricing/openrouter", { method: "POST" });
+    await loadCompare();
+    await loadStats();
+    if (data.source?.fetchError) {
+      setCompareStatus(data.source.fetchError, "error");
+    }
+  } catch (err) {
+    setCompareStatus(err instanceof Error ? err.message : String(err), "error");
+  } finally {
+    btn.disabled = false;
   }
 });
 
