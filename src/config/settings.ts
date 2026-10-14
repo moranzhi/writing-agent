@@ -17,11 +17,18 @@ export type AppSettings = {
    * 游玩期每隔多少个用户回合尝试采集偏好候选。默认 10；0 = 关闭。
    */
   preferenceCollectEveryTurns?: number;
+  /**
+   * 对话落盘同一轮里，第一次填写失败后最多再补写几次。
+   * 0 = 只填一次，失败留给下一句用户消息。默认 0。
+   */
+  dictateFillRetries?: number;
 };
 
 const FILE_NAME = "settings.json";
 const DEFAULT_CONTEXT_TRACE_KEEP = 5;
 const DEFAULT_PREF_COLLECT_EVERY = 10;
+const DEFAULT_DICTATE_FILL_RETRIES = 0;
+const MAX_DICTATE_FILL_RETRIES = 12;
 
 function settingsPath(): string {
   return path.join(getUserDataDir(), FILE_NAME);
@@ -34,6 +41,7 @@ function defaultSettings(): AppSettings {
     activePresetId: null,
     contextTraceKeepLatest: DEFAULT_CONTEXT_TRACE_KEEP,
     preferenceCollectEveryTurns: DEFAULT_PREF_COLLECT_EVERY,
+    dictateFillRetries: DEFAULT_DICTATE_FILL_RETRIES,
   };
 }
 
@@ -47,6 +55,13 @@ export function normalizePreferenceCollectEveryTurns(raw: unknown): number {
   const n = typeof raw === "number" ? raw : Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_PREF_COLLECT_EVERY;
   return Math.min(100, Math.floor(n));
+}
+
+/** 同轮补写次数。0 = 只填一次；非法值回落到 0。 */
+export function normalizeDictateFillRetries(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_DICTATE_FILL_RETRIES;
+  return Math.min(MAX_DICTATE_FILL_RETRIES, Math.floor(n));
 }
 
 export function loadAppSettings(): AppSettings {
@@ -64,6 +79,9 @@ export function loadAppSettings(): AppSettings {
       ),
       preferenceCollectEveryTurns: normalizePreferenceCollectEveryTurns(
         parsed.preferenceCollectEveryTurns ?? DEFAULT_PREF_COLLECT_EVERY,
+      ),
+      dictateFillRetries: normalizeDictateFillRetries(
+        parsed.dictateFillRetries ?? DEFAULT_DICTATE_FILL_RETRIES,
       ),
     };
   } catch {

@@ -93,6 +93,7 @@ export {
   bindDictateProductsToPlaySpec,
   buildDictateContextOrder,
   collectDictateBindProducts,
+  isExcludedFromPlayBind,
   type DictatePlayBindResult,
 } from "./play-bind.js";
 export {

@@ -1,6 +1,7 @@
 import {
   catalogModulesForIntake,
   isDictateProgramModule,
+  moduleOwnsArtifactTag,
   type ModuleCatalog,
   type ModuleCatalogEntry,
 } from "../skills/creation-flow.js";
@@ -318,8 +319,8 @@ export function formatCreationPlanProgress(params: {
   for (const item of params.plan.items) {
     const module = modules.get(item.module_id);
     if (!module || !CREATION_PLAN_TIERS.includes(item.tier)) continue;
-    const landedTags = productTags.filter(
-      (tag) => tag === module.artifact || tag.startsWith(`${module.artifact}#`),
+    const landedTags = productTags.filter((tag) =>
+      moduleOwnsArtifactTag(module, tag),
     );
     const scores = landedTags
       .map((tag) => {
@@ -382,12 +383,11 @@ export function requiredCreationPlanGaps(params: {
   return plan.items
     .filter((item) => item.tier === "必须")
     .filter((item) => {
-      const artifact = modules.get(item.module_id)?.artifact;
+      const module = modules.get(item.module_id);
       return (
-        !artifact ||
-        !params.products.some(
-          (product) =>
-            product.tag === artifact || product.tag.startsWith(`${artifact}#`),
+        !module ||
+        !params.products.some((product) =>
+          moduleOwnsArtifactTag(module, product.tag),
         )
       );
     })

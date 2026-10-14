@@ -173,6 +173,8 @@ export async function runDictateTurn(params: {
   repeatableFamilies?: ReadonlySet<string> | readonly string[];
   /** 更早对话保留轮数；默认 2，可用 DICTATE_HISTORY_TURNS 覆盖 */
   historyTurns?: number;
+  /** 第一次填写失败后同轮最多再补写几次；缺省 0 */
+  fillRetries?: number;
   driver?: AgentDriver;
 }): Promise<DictateTurnResult> {
   const driver =
@@ -198,6 +200,7 @@ export async function runDictateTurn(params: {
       recipeBrief: params.recipeBrief,
       systemPrompt: params.systemPrompt,
       historyTurns: params.historyTurns,
+      fillRetries: params.fillRetries,
     });
   const wroteTags: string[] = [];
   const deletedTags: string[] = [];
@@ -1074,8 +1077,18 @@ function parseAndValidateSelfScore(
     expectedNames.some((name) => !actual.includes(name)) ||
     actual.some((name) => !expectedNames.includes(name))
   ) {
+    const kept = actual.filter((name) => expectedNames.includes(name));
+    const missing = expectedNames.filter((name) => !actual.includes(name));
+    const extra = actual.filter((name) => !expectedNames.includes(name));
     return {
-      error: `self_score 维度必须与能力 score 一致：${expectedNames.join("、")}`,
+      error: [
+        `self_score 维度必须与能力 score 一致：${expectedNames.join("、")}`,
+        kept.length ? `已接受、请原样保留：${kept.join("、")}` : "",
+        missing.length ? `缺少：${missing.join("、")}` : "",
+        extra.length ? `多余：${extra.join("、")}` : "",
+      ]
+        .filter(Boolean)
+        .join("；"),
     };
   }
   return { value: { dims: parsed } };

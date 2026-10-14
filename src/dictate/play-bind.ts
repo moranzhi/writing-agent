@@ -68,10 +68,32 @@ const SKIP_BIND_TAGS = new Set([
   MAINTENANCE_STRATEGY_TAG,
 ]);
 
+/**
+ * 创作中转（模块 meta `feeds: design_only`）。
+ * 只指导后续写作，不进游玩每轮投影。
+ */
+const DESIGN_ONLY_BIND_TAGS = new Set([
+  "设计.本局创作方案",
+  "设计.美学纲领与交互范式",
+  "设计.美学纲领",
+]);
+
+/**
+ * 呈现壳由程序持有：游玩读 frontend 灌 present.v1，
+ * 模型只经 `contractOutputInstruction` 看见数据契约，不把 html/css/js 塞进上下文。
+ */
+const REPLY_SHELL_BIND_TAGS = new Set([
+  "设计.正文组成",
+  "设计.0层正文组成",
+  "设计.回复格式",
+]);
+
 function shouldSkipBindTag(tag: string): boolean {
   const t = tag.trim();
   if (!t) return true;
   if (SKIP_BIND_TAGS.has(t)) return true;
+  if (DESIGN_ONLY_BIND_TAGS.has(t)) return true;
+  if (REPLY_SHELL_BIND_TAGS.has(t)) return true;
   if (t.startsWith("设计.开场白#")) return true;
   if (t.startsWith("输出.")) return true;
   if (t.startsWith("运行.")) return true;
@@ -79,9 +101,14 @@ function shouldSkipBindTag(tag: string): boolean {
   return false;
 }
 
-/** 偏文风/呈现/硬约束：有叙事转述时挂转述；否则仍挂主世界层 */
+/** 是否不应挂进游玩投影（创作中转、呈现壳、开场等） */
+export function isExcludedFromPlayBind(tag: string): boolean {
+  return shouldSkipBindTag(tag);
+}
+
+/** 偏文风/呈现/硬约束：有叙事转述时挂转述；否则仍挂主世界层（壳与 design_only 已在收集阶段剔除） */
 const STYLE_TAG_RE =
-  /叙事指南|故事推进|文风|美学|纲领|禁忌|用户约束|用户需求|示例|模仿|正文组成|回复呈现|回复格式|监控栏|篇幅|结构/;
+  /叙事指南|故事推进|文风|禁忌|用户约束|用户需求|示例|模仿|回复呈现|监控栏|篇幅|结构/;
 
 /** 这些配方开玩时刚需叙事转述（主世界出内容、转述出文风） */
 const RECIPES_REQUIRE_NARRATOR = new Set(["文本生成器"]);
@@ -100,6 +127,20 @@ export type DictatePlayBindResult = {
 
 function isStyleProductTag(tag: string): boolean {
   return STYLE_TAG_RE.test(tag);
+}
+
+/** 只挂旁观的产物。主世界层与转述不读。 */
+const AUDITOR_ONLY_TAG_RE = /画面与生图/;
+
+function isAuditorOnlyProduct(product: DictateProduct): boolean {
+  if (AUDITOR_ONLY_TAG_RE.test(product.tag)) return true;
+  const mounts = parseContextFragment(product.content)?.mount ?? [];
+  if (!mounts.length) return false;
+  const set = new Set(mounts);
+  const onAuditor = set.has("auditor");
+  const onGm = set.has("world-simulator") || set.has("gm");
+  const onNarrator = set.has("narrator");
+  return onAuditor && !onGm && !onNarrator;
 }
 
 function isFrequentlyChangingProduct(product: DictateProduct): boolean {
@@ -178,7 +219,9 @@ function buildGmInserts(params: {
   ];
   let o = 1;
   const included = params.products.filter(
-    (p) => params.includeStyle || !isStyleProductTag(p.tag),
+    (p) =>
+      (params.includeStyle || !isStyleProductTag(p.tag)) &&
+      !isAuditorOnlyProduct(p),
   );
   const stable = included.filter((p) => !isFrequentlyChangingProduct(p));
   const changing = included.filter(isFrequentlyChangingProduct);
@@ -243,7 +286,7 @@ function buildAuditorInserts(params: {
   ];
   let o = 1;
   for (const p of params.products) {
-    if (!/变量|生成规则/.test(p.tag)) continue;
+    if (!/变量|生成规则/.test(p.tag) && !isAuditorOnlyProduct(p)) continue;
     inserts.push(insert(o++, p.tag, "full"));
   }
   for (const tag of params.runtimeTags) {
@@ -263,6 +306,7 @@ export function buildDictateContextOrder(params: {
   runtimeTags?: string[];
 }): ContextOrderDoc {
   const runtimeTags = params.runtimeTags ?? [];
+  const products = params.products.filter((p) => !shouldSkipBindTag(p.tag));
   const slots: ContextOrderSlot[] = [];
 
   for (const slotId of enabledPlaySlotIds(params.playSlots)) {
@@ -272,7 +316,7 @@ export function buildDictateContextOrder(params: {
         ref,
         label: "主世界层",
         inserts: buildGmInserts({
-          products: params.products,
+          products,
           runtimeTags,
           // 主世界推进剧情：固定产物全挂（含文风）；有转述时转述另挂文风切片
           includeStyle: true,
@@ -284,7 +328,7 @@ export function buildDictateContextOrder(params: {
       slots.push({
         ref,
         label: "叙事转述",
-        inserts: buildNarratorInserts(params.products),
+        inserts: buildNarratorInserts(products),
       });
       continue;
     }
@@ -293,7 +337,7 @@ export function buildDictateContextOrder(params: {
         ref,
         label: "旁观维护",
         inserts: buildAuditorInserts({
-          products: params.products,
+          products,
           runtimeTags,
         }),
       });

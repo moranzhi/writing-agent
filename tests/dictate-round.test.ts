@@ -253,6 +253,7 @@ describe("dictate planned round", () => {
     expect(result.wroteTags).toEqual(["设计.氛围"]);
     expect(products).toEqual([{ tag: "设计.氛围", content: "细雨" }]);
     expect(result.reply).toContain("已写成细雨");
+    expect(result.iterations).toBe(2);
     const state = parseDictateModuleReadState(tags.get(DICTATE_MODULE_READ_STATE_TAG));
     expect(state.modules.mood).toBe("v-test");
     expect(tags.get(DICTATE_REMEDIATE_TAG) ?? "").toBe("");
@@ -287,10 +288,75 @@ describe("dictate planned round", () => {
     expect(result.reply).toContain("改成暖色");
   });
 
-  it("says the returned fields when the select plan writes nothing", async () => {
+  it("returns an answer without writing when the first call is reply_user", async () => {
+    let writes = 0;
+    let calls = 0;
     const result = await runDictateTurn({
-      llm: scriptedLlm([{ note: "看世界" }]),
-      dialogue: [{ role: "user", text: "超级英雄" }],
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools() {
+          calls += 1;
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: "reply",
+                name: "reply_user",
+                arguments: JSON.stringify({ text: "下风位最适合先改顾晚棠。" }),
+              },
+            ],
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "先不要落盘，告诉我该改谁" }],
+      handlers: {
+        listProducts: () => [],
+        writeProduct: () => {
+          writes += 1;
+        },
+        deleteProduct: () => false,
+        readTag: () => undefined,
+        writeTag: () => undefined,
+        deleteTag: () => false,
+        clearDialogue: () => undefined,
+      },
+    });
+    expect(writes).toBe(0);
+    expect(calls).toBe(1);
+    expect(result.wroteTags).toEqual([]);
+    expect(result.iterations).toBe(1);
+    expect(result.reply).toContain("顾晚棠");
+    expect(result.reply).not.toContain("没有写入产物");
+  });
+
+  it("returns a question without writing when the first call is reply_user", async () => {
+    let calls = 0;
+    const result = await runDictateTurn({
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools() {
+          calls += 1;
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: "reply",
+                name: "reply_user",
+                arguments: JSON.stringify({
+                  text: "先改顾晚棠，还是先改表世界的同辈？",
+                }),
+              },
+            ],
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "先讨论，不要落盘" }],
       handlers: {
         listProducts: () => [],
         writeProduct: () => undefined,
@@ -301,10 +367,10 @@ describe("dictate planned round", () => {
         clearDialogue: () => undefined,
       },
     });
+    expect(calls).toBe(1);
     expect(result.wroteTags).toEqual([]);
     expect(result.iterations).toBe(1);
-    expect(result.reply).toContain("note");
-    expect(result.reply).toContain("没有写入产物");
+    expect(result.reply).toContain("顾晚棠");
   });
 
   it("follows a select result with a fill request that carries specs and products", async () => {
@@ -972,5 +1038,243 @@ describe("dictate planned round", () => {
     expect(replyReq).not.toContain("旧舞台不应进入回复请求");
     expect(replyReq).not.toContain("#### task");
     expect(choices[2]).toEqual({ type: "function", function: { name: "reply_user" } });
+  });
+
+  it("retries a failed fill in the same turn and patches from the previous draft", async () => {
+    const products: Array<{ tag: string; content: string }> = [];
+    const tags = new Map<string, string>();
+    const seen: string[] = [];
+    const rounds = [
+      [{ id: "select", name: "select_nodes", arguments: JSON.stringify({ nodes: [{ module_id: "mood" }] }) }],
+      [
+        {
+          id: "a",
+          name: "insert",
+          arguments: JSON.stringify({
+            position: "设计.氛围",
+            content: "细雨连绵，石板发亮",
+            self_score: { dims: [{ name: "短句", score: 4 }] },
+          }),
+        },
+      ],
+      [
+        {
+          id: "b",
+          name: "insert",
+          arguments: JSON.stringify({
+            position: "设计.氛围",
+            content: "细雨连绵，石板发亮",
+            self_score: {
+              dims: [
+                { name: "短句", score: 4 },
+                { name: "画面", score: 5 },
+              ],
+            },
+          }),
+        },
+        { id: "r", name: "reply_user", arguments: JSON.stringify({ text: "氛围补上了" }) },
+      ],
+    ];
+    let index = 0;
+    const result = await runDictateTurn({
+      fillRetries: 1,
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools(messages) {
+          seen.push(JSON.stringify(messages));
+          return {
+            content: null,
+            toolCalls: rounds[index++] ?? [],
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "写成细雨" }],
+      moduleCatalog: catalog,
+      moduleReadIndex: new Map([
+        ["mood", { ...modulePayload, score_dimensions: ["短句", "画面"] }],
+      ]),
+      handlers: {
+        listProducts: () => products,
+        writeProduct: (tag, content) => {
+          products.push({ tag, content });
+        },
+        deleteProduct: () => false,
+        readTag: (tag) => tags.get(tag),
+        writeTag: (tag, content) => {
+          tags.set(tag, content);
+        },
+        deleteTag: (tag) => tags.delete(tag),
+        clearDialogue: () => undefined,
+      },
+    });
+
+    expect(seen).toHaveLength(3);
+    expect(seen[2]).toContain("同轮补写");
+    expect(seen[2]).toContain("细雨连绵，石板发亮");
+    expect(seen[2]).toContain("只改失败点");
+    expect(seen[2]).toContain("已接受、请原样保留：短句");
+    expect(products).toEqual([{ tag: "设计.氛围", content: "细雨连绵，石板发亮" }]);
+    expect(result.reply).toContain("氛围补上了");
+    expect(tags.has(DICTATE_REMEDIATE_TAG)).toBe(false);
+  });
+
+  it("keeps accepted self_score dims when a later attempt drops them", async () => {
+    const scores: unknown[] = [];
+    const rounds = [
+      [{ id: "select", name: "select_nodes", arguments: JSON.stringify({ nodes: [{ module_id: "mood" }] }) }],
+      [
+        {
+          id: "a",
+          name: "insert",
+          arguments: JSON.stringify({
+            position: "设计.氛围",
+            content: "细雨",
+            self_score: { dims: [{ name: "短句", score: 4 }] },
+          }),
+        },
+      ],
+      [
+        {
+          id: "b",
+          name: "insert",
+          arguments: JSON.stringify({
+            position: "设计.氛围",
+            content: "细雨",
+            self_score: { dims: [{ name: "画面", score: 5 }] },
+          }),
+        },
+        { id: "r", name: "reply_user", arguments: JSON.stringify({ text: "补上了" }) },
+      ],
+    ];
+    let index = 0;
+    const tags = new Map<string, string>();
+    await runDictateTurn({
+      fillRetries: 1,
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools() {
+          return {
+            content: null,
+            toolCalls: rounds[index++] ?? [],
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "写成细雨" }],
+      moduleCatalog: catalog,
+      moduleReadIndex: new Map([
+        ["mood", { ...modulePayload, score_dimensions: ["短句", "画面"] }],
+      ]),
+      handlers: {
+        listProducts: () => [],
+        writeProduct: (_tag, _content, _order, metadata) => {
+          scores.push(metadata?.selfScore);
+        },
+        deleteProduct: () => false,
+        readTag: (tag) => tags.get(tag),
+        writeTag: (tag, content) => {
+          tags.set(tag, content);
+        },
+        deleteTag: () => false,
+        clearDialogue: () => undefined,
+      },
+    });
+
+    expect(scores).toHaveLength(1);
+    const dims = (scores[0] as { dims: Array<{ name: string }> }).dims.map((dim) => dim.name).sort();
+    expect(dims).toEqual(["画面", "短句"]);
+  });
+
+  it("stores the failed draft and feeds it to the next turn", async () => {
+    const tags = new Map<string, string>();
+    const seen: string[] = [];
+    const first = [
+      [{ id: "select", name: "select_nodes", arguments: JSON.stringify({ nodes: [{ module_id: "mood" }] }) }],
+      [
+        {
+          id: "a",
+          name: "insert",
+          arguments: JSON.stringify({ position: "设计.氛围", content: "细雨连绵" }),
+        },
+      ],
+    ];
+    let index = 0;
+    const handlers = {
+      listProducts: () => [],
+      writeProduct: () => undefined,
+      deleteProduct: () => false,
+      readTag: (tag: string) => tags.get(tag),
+      writeTag: (tag: string, content: string) => {
+        tags.set(tag, content);
+      },
+      deleteTag: () => false,
+      clearDialogue: () => undefined,
+    };
+    const failed = await runDictateTurn({
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools() {
+          return {
+            content: null,
+            toolCalls: first[index++] ?? [],
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "写成细雨" }],
+      moduleCatalog: catalog,
+      moduleReadIndex: new Map([["mood", { ...modulePayload, score_dimensions: ["短句"] }]]),
+      handlers,
+    });
+    expect(failed.reply).toContain("失败待补（下轮继续）");
+    expect(failed.reply).not.toContain("已同轮补写");
+    const stored = parseDictateRemediate(tags.get(DICTATE_REMEDIATE_TAG));
+    expect(stored.items[0]?.draft).toBe("细雨连绵");
+
+    const second = [
+      [{ id: "select2", name: "select_nodes", arguments: JSON.stringify({ nodes: [] }) }],
+      [
+        {
+          id: "b",
+          name: "insert",
+          arguments: JSON.stringify({
+            position: "设计.氛围",
+            content: "细雨连绵",
+            self_score: { dims: [{ name: "短句", score: 4 }] },
+          }),
+        },
+        { id: "r2", name: "reply_user", arguments: JSON.stringify({ text: "补上了" }) },
+      ],
+    ];
+    index = 0;
+    await runDictateTurn({
+      llm: {
+        async complete() {
+          throw new Error("对话落盘走工具，不走纯文本完成");
+        },
+        async completeWithTools(messages) {
+          seen.push(messages.map((message) => message.content ?? "").join("\n"));
+          return {
+            content: null,
+            toolCalls: second[index++] ?? [],
+            usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 },
+          };
+        },
+      },
+      dialogue: [{ role: "user", text: "继续" }],
+      moduleCatalog: catalog,
+      moduleReadIndex: new Map([["mood", { ...modulePayload, score_dimensions: ["短句"] }]]),
+      handlers,
+    });
+    expect(seen[1]).toContain("底稿");
+    expect(seen[1]).toContain("细雨连绵");
+    expect(seen[1]).toContain("只改失败点");
   });
 });

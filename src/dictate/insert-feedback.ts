@@ -17,8 +17,12 @@ export const DICTATE_INSERT_TAG_ALIASES: Readonly<Record<string, string>> = {
   "设计.开场白": "opening-setup",
   "设计.开场白与开场变量": "opening-setup",
   "设计.美学纲领": "aesthetics-interaction",
+  "设计.美学纲领与交互范式": "aesthetics-interaction",
+  "设计.故事推进": "story-progression",
+  "设计.故事推进与交互范式": "story-progression",
   "设计.文风": "narrative-guide",
   "设计.监控栏": "status-bar",
+  "设计.实现机制": "mechanism",
 };
 
 /** 多模块同轮：写进每条 insert tool result 的 reply_hint */

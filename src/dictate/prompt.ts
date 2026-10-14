@@ -23,12 +23,13 @@ export type DictatePromptTailOpts = {
 
 /** 第一次请求：只从目录里点出这段话要填的节点，不写产物。 */
 export function buildDictateSelectPrompt(): string {
-  return `你只做选题。对照能力目录和用户这句话，调用 select_nodes，选出已经够写的节点。
+  return `你只做选题。对照能力目录和用户这句话，只调用一个工具。
 
-nodes 里的 module_id 必须来自目录。通常选这段话已经说清的 2～4 个。尚无本局方案、且这句话已经给出核心体验时，把 creation-plan 放进 nodes。
-若末尾 checklist 标了「失败待补」，这些节点必须再次纳入 nodes（可与新选的一起）。
-用户的体验目标、举例和比方只说明要追求什么、像什么。范围还没和用户确认时，不为把它推成世界常态而选舞台骨架或实现机制。
-这一步不写产物正文，不回复用户。`;
+这段话已经说清要落盘时，调用 select_nodes，nodes 里放目录中的 module_id，通常 2～4 个。尚无本局方案、且这句话已经给出核心体验时，把 creation-plan 放进 nodes。
+若末尾 checklist 标了「失败待补」，且用户这句仍在推进落盘，这些节点必须再次纳入 nodes（可与新选的一起）。
+用户只要讨论、核对，或明确先不要落盘时，调用 reply_user：直接回答，或写成 1～2 个问题，每个问题给 2～3 个可接着说的选项。这种一轮不落盘，也不把失败待补写回去。
+用户的体验目标、举例和比方只说明要追求什么、像什么。范围还没和用户确认时，不为把它推成世界常态而选舞台骨架或世界法则。
+select_nodes 不写产物正文。`;
 }
 
 export function buildDictateSystemPrompt(_opts?: DictatePromptTailOpts): string {
@@ -116,8 +117,8 @@ ${legacyExample}`;
 
   const phase =
     opts?.phase === "fill"
-      ? `本步先写「本轮节点表」里尚未通过的产物（有 self_score 维度时 insert 带上；已通过的以工具结果为准），写完后同一次请求必须调用 reply_user，正文按系统提示「用户可见回复」。`
-      : "本步是第一次请求。只调用 select_nodes：这段话用于填充哪些节点。这一步不写产物正文，不回复用户。";
+      ? `本步先写「本轮节点表」里尚未通过的产物（有 self_score 维度时 insert 带上；已通过的以工具结果为准）。失败待补若附了底稿，在底稿上只改失败点，已写对的段落、字段和已接受的 self_score 维度保持原样。写完后同一次请求必须调用 reply_user，正文按系统提示「用户可见回复」。`
+      : "本步只调用一个工具。要落盘就调用 select_nodes，只填 nodes。只要讨论或先不要落盘，就调用 reply_user 直接回答或提问。";
 
   // 填写时把收尾要求放在方案进度之前，避免被大段进度挤到注意力末尾。
   return opts?.phase === "fill"

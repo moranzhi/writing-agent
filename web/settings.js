@@ -62,6 +62,7 @@ const preferenceCollectEveryEl = document.getElementById("preference-collect-eve
 const activeSettingsBarEl = document.getElementById("active-settings-bar");
 const settingsToastEl = document.getElementById("settings-toast");
 const contextTraceKeepEl = document.getElementById("context-trace-keep");
+const dictateFillRetriesEl = document.getElementById("dictate-fill-retries");
 const probeDialog = document.getElementById("preset-probe-dialog");
 const probePresetNameEl = document.getElementById("probe-preset-name");
 const probeMessageEl = document.getElementById("probe-message");
@@ -193,7 +194,7 @@ function renderPanelHeader() {
     panelActionsEl.appendChild(btn);
   } else {
     panelTitleEl.textContent = "上下文";
-    panelSubtitleEl.textContent = "控制每个对话保留多少条完整 prompt 痕迹";
+    panelSubtitleEl.textContent = "上下文痕迹，以及对话落盘同轮补写次数";
   }
 }
 
@@ -775,6 +776,9 @@ async function loadAll() {
     contextTraceKeepEl.value = String(
       state.settings.contextTraceKeepLatest ?? 5,
     );
+  }
+  if (dictateFillRetriesEl) {
+    dictateFillRetriesEl.value = String(state.settings.dictateFillRetries ?? 0);
   }
   renderActiveBar();
   renderProfiles();
@@ -1795,6 +1799,24 @@ probeMessageEl?.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     sendProbe().catch((err) => showToast(err.message, true));
+  }
+});
+
+document.getElementById("btn-save-fill-retries")?.addEventListener("click", async () => {
+  try {
+    const n = Number(dictateFillRetriesEl?.value ?? 0);
+    const data = await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ dictateFillRetries: n }),
+    });
+    state.settings = data.settings;
+    if (dictateFillRetriesEl) {
+      dictateFillRetriesEl.value = String(data.settings.dictateFillRetries ?? 0);
+    }
+    const saved = data.settings.dictateFillRetries ?? 0;
+    showToast(saved === 0 ? "已保存：对话落盘只填一次" : `已保存：同轮最多再补写 ${saved} 次`);
+  } catch (err) {
+    showToast(err.message, true);
   }
 });
 

@@ -33,7 +33,7 @@ describe("dictate read_module", () => {
               self_score: {
                 dims: [
                   { name: "美学纲领", score: 5 },
-                  { name: "交互范式", score: 5 },
+                  { name: "体验锚定", score: 5 },
                   { name: "背景与规则", score: 5 },
                 ],
               },
@@ -84,7 +84,7 @@ describe("dictate read_module", () => {
               self_score: {
                 dims: [
                   { name: "美学纲领", score: 5 },
-                  { name: "交互范式", score: 5 },
+                  { name: "体验锚定", score: 5 },
                   { name: "背景与规则", score: 3, gap: "规则因果仍需确认" },
                 ],
               },
@@ -208,7 +208,7 @@ describe("dictate read_module", () => {
               self_score: {
                 dims: [
                   { name: "美学纲领", score: 3 },
-                  { name: "交互范式", score: 5 },
+                  { name: "体验锚定", score: 5 },
                   { name: "背景与规则", score: 5 },
                 ],
               },
@@ -230,7 +230,7 @@ describe("dictate read_module", () => {
               self_score: {
                 dims: [
                   { name: "美学纲领", score: 3, gap: "发生方式仍偏宽" },
-                  { name: "交互范式", score: 5 },
+                  { name: "体验锚定", score: 5 },
                   { name: "背景与规则", score: 5 },
                 ],
               },

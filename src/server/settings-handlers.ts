@@ -19,6 +19,7 @@ import {
   ensureActiveProfileDefault,
   loadAppSettings,
   normalizeContextTraceKeepLatest,
+  normalizeDictateFillRetries,
   normalizePreferenceCollectEveryTurns,
   saveAppSettings,
   setActivePresetId,
@@ -138,6 +139,7 @@ export async function handleSettingsApi(
       activePresetId?: string | null;
       contextTraceKeepLatest?: number;
       preferenceCollectEveryTurns?: number;
+      dictateFillRetries?: number;
     };
     const settings = loadAppSettings();
     if (body.activeProfileId !== undefined) {
@@ -155,6 +157,9 @@ export async function handleSettingsApi(
       settings.preferenceCollectEveryTurns = normalizePreferenceCollectEveryTurns(
         body.preferenceCollectEveryTurns,
       );
+    }
+    if (body.dictateFillRetries !== undefined) {
+      settings.dictateFillRetries = normalizeDictateFillRetries(body.dictateFillRetries);
     }
     saveAppSettings(settings);
     json(res, 200, { settings });

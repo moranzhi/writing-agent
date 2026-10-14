@@ -1,15 +1,17 @@
 /**
- * 一句用户话：先用 select_nodes 定目标节点，程序注入这些节点的写法，
- * 再单次 fill 写入。已通过的不再覆盖。
- * 同轮不再 fill-retry：失败项记入「失败待补」，下轮继续。
+ * 一句用户话：先用 select_nodes 定目标节点，程序注入这些节点的写法，再 fill 写入。
+ * 已通过的不再覆盖。未通过的可在同轮按设置补写若干次：底稿上只改失败点，已接受的自评维度带回。
+ * 补写次数用尽后，失败项记入「失败待补」，下轮继续。
  * 没有未通过项时，同一次请求里的 reply_user 才给用户。
+ * 选题与回复二选一：调用 reply_user 则本轮到此为止，不再填写，也不再补回复。
  * 填写步若未调用 reply_user，程序再打一轮瘦回复（只带本轮刚落盘产物）；填写提示不提及此事。
  */
 import { randomUUID } from "node:crypto";
 import type { DriverStepOutcome, DriverToolCall } from "../runtime/driver.js";
 import type { AgentDriver } from "../runtime/driver.js";
-import type { LlmProvider, UsageDetail, UsageSink } from "../llm/client.js";
-import { DICTATE_REPLY_TOOL, DICTATE_SELECT_TOOL, DICTATE_WRITE_LOOP_TOOLS } from "./tools.js";
+import type { ChatMessage, LlmProvider, UsageDetail, UsageSink } from "../llm/client.js";
+import { normalizeDictateFillRetries } from "../config/settings.js";
+import { DICTATE_REPLY_TOOL, DICTATE_SELECT_REPLY_TOOL, DICTATE_SELECT_TOOL, DICTATE_WRITE_LOOP_TOOLS } from "./tools.js";
 import { buildDictateContext, type DictateSegmentChars } from "./context.js";
 import {
   CREATION_PLAN_SCHEMA,
@@ -40,6 +42,7 @@ import {
   formatRemediateChecklist,
   parseDictateRemediate,
   serializeDictateRemediate,
+  type DictateKeptDim,
   type DictateRemediateItem,
 } from "./remediate.js";
 import { resolveModuleForInsertTag } from "./insert-feedback.js";
@@ -81,6 +84,11 @@ export type PlannedRoundParams = {
   systemPrompt?: string;
   /** 更早对话保留轮数；默认 2，见 resolveDictateHistoryTurns */
   historyTurns?: number;
+  /**
+   * 第一次填写失败后，同轮最多再补写几次。
+   * 缺省 0：只填一次，失败留给下一句。
+   */
+  fillRetries?: number;
 };
 
 type PlanInsert = {
@@ -92,11 +100,12 @@ type PlanInsert = {
 };
 
 type SelectPlan = {
+  /** 本轮不落盘时的提问 */
   clarify: string[];
+  /** 本轮不落盘时的回答 */
+  reply: string;
   inserts: PlanInsert[];
   deletes: string[];
-  /** 模型对象上的字段名，空计划时写进回复，方便核对解析有没有对上 */
-  keys: string[];
 };
 
 
@@ -137,31 +146,31 @@ async function runPlannedDictateRound(
   const selected = await params.llm.completeWithTools(selectCtx.messages, {
     caller: "dictate_agent",
     label: "对话落盘 选题",
-    tools: [DICTATE_SELECT_TOOL],
-    toolChoice: { type: "function", function: { name: "select_nodes" } },
+    tools: [DICTATE_SELECT_TOOL, DICTATE_SELECT_REPLY_TOOL],
+    toolChoice: "required",
     usageDetail: detail(turnId, "select", 0, selectCtx.segmentChars),
     usageSink: sinkFor(turnId, "select"),
   });
   if (selected.reasoning?.trim()) params.handlers.onThinkingDone?.(selected.reasoning.trim());
-  const selectCall = selected.toolCalls.find((call) => call.name === "select_nodes") ?? selected.toolCalls[0];
-  const plan = parseSelect(selectCall ? safeJson(selectCall.arguments) : {}, params);
-  mergeRemediationsIntoPlan(plan, remediations.items, params);
-  if (
-    plan.clarify.length >= 2 &&
-    plan.inserts.length === 0 &&
-    plan.deletes.length === 0
-  ) {
-    return {
-      modelCalls: 1,
-      text: plan.clarify.map((item, index) => `${index + 1}. ${item}`).join("\n"),
-    };
+  const replyCall = selected.toolCalls.find((call) => call.name === DICTATE_REPLY_TOOL.function.name);
+  const selectCall = selected.toolCalls.find((call) => call.name === "select_nodes");
+  const earlyReply = replyCall
+    ? replyText({
+        id: replyCall.id || "reply",
+        name: replyCall.name,
+        arguments: replyCall.arguments,
+      })
+    : "";
+  if (earlyReply && !selectCall) {
+    return { modelCalls: 1, text: earlyReply };
   }
+  const plan = parseSelect(selectCall ? safeJson(selectCall.arguments) : {}, params);
+  const noWork = plan.inserts.length === 0 && plan.deletes.length === 0;
+  const speaking = noWork && (plan.clarify.length > 0 || plan.reply.length > 0);
+  if (!speaking && !earlyReply) mergeRemediationsIntoPlan(plan, remediations.items, params);
   if (plan.inserts.length === 0 && plan.deletes.length === 0) {
-    const fields = plan.keys.length ? plan.keys.join("、") : "空对象";
-    return {
-      modelCalls: 1,
-      text: `这一轮没有写入产物。选题返回的字段是 ${fields}，没有可执行的写入项。可以说得更具体些，或点明先写哪一块。`,
-    };
+    const text = earlyReply || (speaking ? formatSpeak(plan) : "") || selected.content?.trim() || "这轮先不落盘。";
+    return { modelCalls: 1, text };
   }
 
   const blocked = plan.inserts.filter((item) => item.tag.startsWith("!"));
@@ -177,6 +186,13 @@ async function runPlannedDictateRound(
     [...rest, ...openings].some((row) => row.tag === item.tag) ||
     plan.deletes.includes(item.tag),
   );
+  const drafts = new Map<string, string>();
+  const keptDims = new Map<string, DictateKeptDim[]>();
+  for (const item of priorFailures) {
+    if (item.kind === "delete") continue;
+    if (item.draft) drafts.set(item.tag, item.draft);
+    if (item.keptDims?.length) keptDims.set(item.tag, item.keptDims);
+  }
   const tail = formatDictateRoundTail({
     ...tailOpts,
     phase: "fill",
@@ -189,6 +205,7 @@ async function runPlannedDictateRound(
         moduleId: item.moduleId,
         kind: item.kind,
       })),
+      drafts,
     ),
   });
   const ctx = buildDictateContext({
@@ -207,35 +224,64 @@ async function runPlannedDictateRound(
   let replyFromTool = "";
   let lastProse = "";
   let modelCalls = 1;
+  const fillRetries = normalizeDictateFillRetries(params.fillRetries);
+  let messages: ChatMessage[] = ctx.messages;
+  let fillAttempts = 0;
 
-  // 单次 fill：失败记入待补，留给下轮，不再同轮 fill-retry。
-  if (pending.size > 0 || pendingDeletes.size > 0) {
-    const filled = await params.llm.completeWithTools(ctx.messages, {
+  while (pending.size > 0 || pendingDeletes.size > 0) {
+    if (fillAttempts > fillRetries) break;
+    const filled = await params.llm.completeWithTools(messages, {
       caller: "dictate_agent",
-      label: "对话落盘 填写",
+      label: fillAttempts === 0 ? "对话落盘 填写" : `对话落盘 补写 ${fillAttempts}`,
       tools: DICTATE_WRITE_LOOP_TOOLS,
       toolChoice: "required",
       usageDetail: {
-        ...detail(turnId, "fill", 0, ctx.segmentChars),
+        ...detail(
+          turnId,
+          fillAttempts === 0 ? "fill" : "fill-retry",
+          fillAttempts,
+          ctx.segmentChars,
+        ),
         plannedTags: [...pending, ...pendingDeletes],
       },
-      usageSink: sinkFor(turnId, "fill"),
+      usageSink: sinkFor(turnId, fillAttempts === 0 ? "fill" : "fill-retry"),
     });
+    fillAttempts += 1;
     modelCalls += 1;
     if (filled.reasoning?.trim()) params.handlers.onThinkingDone?.(filled.reasoning.trim());
     const prose = filled.content?.trim() ?? "";
     if (prose) lastProse = prose;
     const calls: DriverToolCall[] = filled.toolCalls.map((call, index) => ({
-      id: call.id || `call-0-${index}`,
+      id: call.id || `call-${fillAttempts}-${index}`,
       name: call.name,
       arguments: call.arguments,
     }));
-    if (calls.length > 0) {
-      const settled = await settleWriteStep(params, apply, calls, passed, pending, pendingDeletes, errors);
-      if (pending.size === 0 && pendingDeletes.size === 0) {
-        replyFromTool = settled.reply;
-      }
+    const settled =
+      calls.length > 0
+        ? await settleWriteStep(
+            params,
+            apply,
+            calls,
+            passed,
+            pending,
+            pendingDeletes,
+            errors,
+            drafts,
+            keptDims,
+          )
+        : { results: [], reply: "" };
+    if (pending.size === 0 && pendingDeletes.size === 0) {
+      replyFromTool = settled.reply;
+      break;
     }
+    if (fillAttempts > fillRetries) break;
+    messages = appendFillContinuation(
+      messages,
+      filled.content,
+      calls,
+      settled.results,
+      incrementalRetryNote(passed, pending, pendingDeletes, errors),
+    );
   }
 
   const moduleByTag = new Map(
@@ -247,11 +293,13 @@ async function runPlannedDictateRound(
     errors,
     moduleByTag,
     prior: remediations.items,
+    drafts,
+    keptDims,
   });
 
-  let reply = replyFromTool;
+  let reply = replyFromTool || earlyReply;
   if (
-    !replyFromTool &&
+    !reply &&
     pending.size === 0 &&
     pendingDeletes.size === 0 &&
     passed.size > 0
@@ -266,15 +314,25 @@ async function runPlannedDictateRound(
     (tag) => `${tag}（${errors.get(tag) ?? "尚未通过"}）`,
   );
   const pendingLines = [...blockedLines, ...failed];
+  const retryNote = fillAttempts > 1 ? `已同轮补写 ${fillAttempts - 1} 次。` : "";
   const text = pendingLines.length
     ? [
         reply,
-        `失败待补（下轮继续）：${pendingLines.join("、")}。`,
+        `失败待补（下轮继续）：${pendingLines.join("、")}。${retryNote}`,
       ]
         .filter(Boolean)
         .join("\n")
     : reply;
   return { text, modelCalls };
+}
+
+function formatSpeak(plan: SelectPlan): string {
+  const questions =
+    plan.clarify.length <= 1
+      ? plan.clarify[0] ?? ""
+      : plan.clarify.map((item, index) => `${index + 1}. ${item}`).join("\n");
+  if (questions && plan.reply && questions !== plan.reply) return `${questions}\n\n${plan.reply}`;
+  return questions || plan.reply;
 }
 
 async function runLeanReply(
@@ -359,6 +417,8 @@ async function settleWriteStep(
   pending: Set<string>,
   pendingDeletes: Set<string>,
   errors: Map<string, string>,
+  drafts: Map<string, string>,
+  keptDims: Map<string, DictateKeptDim[]>,
 ): Promise<{ results: Array<{ callId: string; content: string }>; reply: string }> {
   const results: Array<{ callId: string; content: string }> = [];
   const forward: DriverToolCall[] = [];
@@ -382,7 +442,12 @@ async function settleWriteStep(
     }
     if (call.name === "insert" && tag) {
       const args = asRecord(safeJson(call.arguments));
-      forward.push({ ...call, arguments: JSON.stringify({ ...args, position: tag }) });
+      const merged = mergeKeptDimsIntoArgs(
+        args,
+        keptDims.get(tag),
+        scoreDimensionsForTag(params, tag),
+      );
+      forward.push({ ...call, arguments: JSON.stringify({ ...merged, position: tag }) });
       continue;
     }
     forward.push(call);
@@ -409,7 +474,11 @@ async function settleWriteStep(
           const planned = [...pending, ...pendingDeletes].find(
             (item) => item === tag || tag.startsWith(`${item}#`),
           );
-          errors.set(planned ?? tag, payload.error);
+          const plannedTag = planned ?? tag;
+          errors.set(plannedTag, payload.error);
+          if (call?.name === "insert") {
+            rememberFailedInsert(call, plannedTag, params, drafts, keptDims);
+          }
         }
       }
     }
@@ -442,6 +511,137 @@ function callTag(call: DriverToolCall, params: PlannedRoundParams): string {
 function replyText(call: DriverToolCall): string {
   const args = asRecord(safeJson(call.arguments));
   return String(args.text ?? args.reply ?? args.content ?? args.message ?? "").trim();
+}
+
+const MAX_FAILED_DRAFT_CHARS = 24_000;
+
+function rememberFailedInsert(
+  call: DriverToolCall,
+  tag: string,
+  params: PlannedRoundParams,
+  drafts: Map<string, string>,
+  keptDims: Map<string, DictateKeptDim[]>,
+): void {
+  const args = asRecord(safeJson(call.arguments));
+  const content = String(args.content ?? "").trim();
+  if (content) {
+    drafts.set(
+      tag,
+      content.length > MAX_FAILED_DRAFT_CHARS
+        ? `${content.slice(0, MAX_FAILED_DRAFT_CHARS)}\n…（底稿已截断）`
+        : content,
+    );
+  }
+  const expected = scoreDimensionsForTag(params, tag);
+  const harvested = harvestKeptDims(args.self_score, expected);
+  if (!harvested.length) return;
+  const merged = new Map((keptDims.get(tag) ?? []).map((dim) => [dim.name, dim] as const));
+  for (const dim of harvested) merged.set(dim.name, dim);
+  keptDims.set(tag, [...merged.values()]);
+}
+
+function scoreDimensionsForTag(params: PlannedRoundParams, tag: string): string[] {
+  const module = resolveModuleForInsertTag(tag, params.moduleCatalog);
+  if (!module) return [];
+  return params.moduleReadIndex?.get(module.id)?.score_dimensions ?? [];
+}
+
+function mergeKeptDimsIntoArgs(
+  args: Record<string, unknown>,
+  kept: readonly DictateKeptDim[] | undefined,
+  expected: readonly string[],
+): Record<string, unknown> {
+  if (!kept?.length || !expected.length) return args;
+  const score = asRecord(args.self_score);
+  const dims = Array.isArray(score.dims) ? [...score.dims] : [];
+  const names = new Set(
+    dims.map((item) => String(asRecord(item).name ?? "").trim()).filter(Boolean),
+  );
+  const additions = kept.filter((dim) => expected.includes(dim.name) && !names.has(dim.name));
+  if (!additions.length) return args;
+  return { ...args, self_score: { ...score, dims: [...dims, ...additions] } };
+}
+
+function harvestKeptDims(raw: unknown, expected: readonly string[]): DictateKeptDim[] {
+  if (!expected.length) return [];
+  const dims = Array.isArray(asRecord(raw).dims) ? asRecord(raw).dims : [];
+  const out: DictateKeptDim[] = [];
+  const seen = new Set<string>();
+  for (const item of dims) {
+    const row = asRecord(item);
+    const name = String(row.name ?? "").trim();
+    const score = Number(row.score);
+    if (!name || !expected.includes(name) || seen.has(name)) continue;
+    if (!Number.isInteger(score) || score < 1 || score > 5) continue;
+    const gap = String(row.gap ?? "").trim();
+    if (score <= 3 && !gap) continue;
+    const options = Array.isArray(row.options)
+      ? row.options.map((option) => String(option).trim()).filter(Boolean)
+      : [];
+    if (options.length > 0 && (options.length < 2 || options.length > 3)) continue;
+    seen.add(name);
+    out.push({
+      name,
+      score,
+      ...(gap ? { gap } : {}),
+      ...(options.length ? { options } : {}),
+    });
+  }
+  return out;
+}
+
+function appendFillContinuation(
+  messages: ChatMessage[],
+  assistantContent: string | null,
+  calls: DriverToolCall[],
+  results: Array<{ callId: string; content: string }>,
+  note: string,
+): ChatMessage[] {
+  const next = [...messages];
+  if (calls.length === 0) {
+    next.push({ role: "user", content: note });
+    return next;
+  }
+  next.push({
+    role: "assistant",
+    content: assistantContent,
+    tool_calls: calls.map((call) => ({
+      id: call.id,
+      type: "function" as const,
+      function: { name: call.name, arguments: call.arguments },
+    })),
+  });
+  const byId = new Map(results.map((item) => [item.callId, item.content]));
+  for (const call of calls) {
+    next.push({
+      role: "tool",
+      tool_call_id: call.id,
+      content: byId.get(call.id) ?? JSON.stringify({ error: "无结果" }),
+    });
+  }
+  next.push({ role: "user", content: note });
+  return next;
+}
+
+function incrementalRetryNote(
+  passed: ReadonlySet<string>,
+  pending: ReadonlySet<string>,
+  pendingDeletes: ReadonlySet<string>,
+  errors: ReadonlyMap<string, string>,
+): string {
+  const kept = [...passed].filter((tag) => !tag.startsWith("del:"));
+  const deleted = [...passed].filter((tag) => tag.startsWith("del:")).map((tag) => tag.slice(4));
+  return [
+    "同轮补写：只改未通过项。",
+    kept.length ? `已通过，不要再 insert：${kept.join("、")}` : "",
+    deleted.length ? `已删除，不要再 delete：${deleted.join("、")}` : "",
+    "未通过：",
+    ...[...pending].map((tag) => `- 写入 ${tag}：${errors.get(tag) ?? "尚未通过"}`),
+    ...[...pendingDeletes].map((tag) => `- 删除 ${tag}：${errors.get(tag) ?? "尚未通过"}`),
+    "未通过的正文以上一次 insert 为底稿，只改失败点。已写对的段落、字段，以及已接受的 self_score 维度，保持原样。不要整份重写。",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function sinkFor(_turnId: string, _step: string): UsageSink {
@@ -483,7 +683,13 @@ function tailState(params: PlannedRoundParams): DictatePromptTailOpts {
 
 function parseSelect(raw: unknown, params: PlannedRoundParams): SelectPlan {
   const row = asRecord(raw);
-  const clarify = stringList(row.clarify);
+  const clarify = [
+    ...askList(row.ask),
+    ...askList(row.askUser),
+    ...askList(row.ask_user),
+    ...stringList(row.clarify),
+  ].filter((item, index, all) => all.indexOf(item) === index);
+  const reply = String(row.reply ?? "").trim();
   let deletes = stringList(row.deletes).filter((tag) => isAllowedProductTag(tag));
   const inserts: PlanInsert[] = [];
   let items = Array.isArray(row.nodes)
@@ -491,7 +697,7 @@ function parseSelect(raw: unknown, params: PlannedRoundParams): SelectPlan {
     : Array.isArray(row.inserts)
       ? row.inserts
       : [];
-  if (items.length === 0 && clarify.length < 2 && deletes.length === 0) {
+  if (items.length === 0 && deletes.length === 0) {
     const recovered = recoverSelectWork(row);
     items = recovered.items;
     deletes = recovered.deletes.filter((tag) => isAllowedProductTag(tag));
@@ -549,7 +755,7 @@ function parseSelect(raw: unknown, params: PlannedRoundParams): SelectPlan {
       reason: reason || undefined,
     });
   }
-  return { clarify, inserts, deletes, keys: Object.keys(row) };
+  return { clarify, reply, inserts, deletes };
 }
 
 /** 选题没交 inserts 时，从方案正文、operations 或别名字段收出本轮要写的能力，再自动发填写。 */
@@ -699,7 +905,12 @@ function canonicalProductTag(
 }
 
 
-function formatChecklist(group: PlanInsert[], deletes: string[], errors: ItemFailure[]): string {
+function formatChecklist(
+  group: PlanInsert[],
+  deletes: string[],
+  errors: ItemFailure[],
+  drafts?: ReadonlyMap<string, string>,
+): string {
   const nodes = group.map((item) => item.moduleId || item.tag).filter(Boolean);
   const failedTags = new Set(errors.map((item) => item.tag));
   const pendingWrite = group.filter((item) => !failedTags.has(item.tag)).map((item) => item.tag);
@@ -709,9 +920,15 @@ function formatChecklist(group: PlanInsert[], deletes: string[], errors: ItemFai
     pendingWrite.length ? `待写：${pendingWrite.join("、")}` : "",
     pendingDelete.length ? `待删：${pendingDelete.join("、")}` : "",
     errors.length
-      ? `失败待补：\n${errors.map((item) => `- ${item.tag}：${item.error}`).join("\n")}`
+      ? `失败待补：\n${errors
+          .map((item) => {
+            const draft = item.kind === "delete" ? "" : drafts?.get(item.tag)?.trim() ?? "";
+            if (!draft) return `- ${item.tag}：${item.error}`;
+            return `- ${item.tag}：${item.error}\n  底稿（只改失败点，已写对的段落和字段保持原样）：\n${draft}`;
+          })
+          .join("\n")}`
       : "",
-    "状态说明：待写/待删=本轮目标；失败待补=上轮或本轮未通过，须补上；已落的产物以黑板为准，不要无故整份重写。",
+    "状态说明：待写/待删=本轮目标；失败待补=上轮或本轮未通过，须补上；已落的产物以黑板为准。有底稿时只改失败点，不要整份重写。",
   ];
   return lines.filter(Boolean).join("\n");
 }
@@ -753,6 +970,8 @@ function persistRemediations(
     errors: Map<string, string>;
     moduleByTag: Map<string, string>;
     prior: readonly DictateRemediateItem[];
+    drafts: ReadonlyMap<string, string>;
+    keptDims: ReadonlyMap<string, DictateKeptDim[]>;
   },
 ): void {
   const priorByKey = new Map(
@@ -761,6 +980,8 @@ function persistRemediations(
   const next: DictateRemediateItem[] = [];
   for (const tag of state.pending) {
     const prev = priorByKey.get(`insert:${tag}`);
+    const draft = state.drafts.get(tag) ?? prev?.draft;
+    const kept = state.keptDims.get(tag) ?? prev?.keptDims;
     next.push({
       tag,
       kind: "insert",
@@ -768,6 +989,8 @@ function persistRemediations(
       ...(state.moduleByTag.get(tag) || prev?.moduleId
         ? { moduleId: state.moduleByTag.get(tag) || prev?.moduleId }
         : {}),
+      ...(draft ? { draft } : {}),
+      ...(kept?.length ? { keptDims: kept } : {}),
     });
   }
   for (const tag of state.pendingDeletes) {
@@ -821,6 +1044,18 @@ function operationName(rec: Record<string, unknown>): string {
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function askList(value: unknown): string[] {
+  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      const rec = asRecord(item);
+      return String(rec.prompt ?? rec.text ?? rec.question ?? "").trim();
+    })
+    .filter(Boolean);
 }
 
 function stringList(value: unknown): string[] {

@@ -5,7 +5,7 @@
 
 import { tryParseJsonDoc } from "../parse/json-doc.js";
 
-export const AESTHETICS_PRODUCT_TAG = "设计.美学纲领与交互范式";
+export const AESTHETICS_PRODUCT_TAG = "设计.美学纲领";
 
 export const EXPERIENCE_ANCHOR_RECIPE_NAMES = ["快穿短局", "数据化跑团体验"] as const;
 
@@ -94,7 +94,7 @@ export function formatExperienceAnchorBlock(score: ExperienceAnchorScore): strin
   lines.push(
     score.anchored
       ? "3/3：各能力何时用里的「已有美学」成立。开场白仍须等其它何时用已成立的能力落完。"
-      : "未满 3/3：「已有美学」不成立。本轮只把缺口写进「设计.美学纲领与交互范式」的「体验锚定」（站位、核心感觉、轮转停点）。不得宣称已锚定，不得 insert 开场白。",
+      : "未满 3/3：「已有美学」不成立。本轮只把缺口写进「设计.美学纲领」的「体验锚定」（站位、核心感觉、轮转停点）。不得宣称已锚定，不得 insert 开场白。",
   );
   return lines.join("\n");
 }
@@ -115,7 +115,7 @@ export function experienceAnchorToolPayload(score: ExperienceAnchorScore): {
 
 export function openingBlockedByAnchorMessage(score: ExperienceAnchorScore): string {
   const missing = score.items.filter((item) => !item.ok).map((item) => item.id);
-  return `拒绝写入开场白：体验锚定 ${score.passed}/${score.total}，缺 ${missing.join("、") || "三件"}。先补「设计.美学纲领与交互范式」的「体验锚定」，再写开场。`;
+  return `拒绝写入开场白：体验锚定 ${score.passed}/${score.total}，缺 ${missing.join("、") || "三件"}。先补「设计.美学纲领」的「体验锚定」，再写开场。`;
 }
 
 function scoreStance(raw: string | undefined): ExperienceAnchorItem {

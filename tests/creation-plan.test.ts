@@ -46,7 +46,7 @@ async function fixture() {
 describe("creation plan", () => {
   it("covers all current content modules and excludes approved mechanical or legacy nodes", async () => {
     const { modules } = await fixture();
-    expect(modules).toHaveLength(14);
+    expect(modules).toHaveLength(15);
     expect(modules.map((module) => module.id)).not.toEqual(
       expect.arrayContaining([
         "creation-plan",
@@ -99,7 +99,7 @@ describe("creation plan", () => {
     expect(catalog).toBeTruthy();
     const zeroModules = creationPlanModules(catalog!, "zero_layer");
     const ids = zeroModules.map((module) => module.id);
-    expect(zeroModules).toHaveLength(14);
+    expect(zeroModules).toHaveLength(15);
     expect(ids).toEqual(
       expect.arrayContaining([
         "zero-layer-status",

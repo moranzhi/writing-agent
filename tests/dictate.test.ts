@@ -124,8 +124,8 @@ describe("dictate context", () => {
     expect(catalog).toBeTruthy();
     const block = formatModuleCatalogForDictate(catalog!);
     expect(block).toContain("【能力 · 何时落盘】");
-    expect(block).toContain("美学纲领与交互范式");
-    expect(block).toContain("落盘：insert 「设计.美学纲领与交互范式」");
+    expect(block).toContain("美学纲领：");
+    expect(block).toContain("落盘：insert 「设计.美学纲领」");
     expect(block).toContain("何时用");
     expect(block).toContain("何时不用");
     expect(block).toContain("declare_variable");
@@ -136,7 +136,7 @@ describe("dictate context", () => {
     expect(block).toContain("可增殖");
     expect(block).not.toContain("role=prototype");
     expect(block).toContain("落盘：insert 「设计.叙事指南」");
-    expect(block).toContain("落盘：insert 「设计.故事推进」");
+    expect(block).toContain("落盘：insert 「设计.故事推进与交互范式」");
     expect(block).not.toMatch(/^- 叙事指南与故事推进/m);
   });
 
@@ -180,11 +180,12 @@ describe("dictate context", () => {
   it("resolves insert tag to module and builds user-facing brief", async () => {
     const catalog = await loadModuleCatalog("dialogue/world-simulator");
     expect(catalog).toBeTruthy();
-    const mod = resolveModuleForInsertTag(
-      "设计.美学纲领与交互范式",
-      catalog!,
+    expect(resolveModuleForInsertTag("设计.美学纲领", catalog!)?.id).toBe(
+      "aesthetics-interaction",
     );
-    expect(mod?.id).toBe("aesthetics-interaction");
+    expect(
+      resolveModuleForInsertTag("设计.美学纲领与交互范式", catalog!)?.id,
+    ).toBe("aesthetics-interaction");
     expect(
       resolveModuleForInsertTag("设计.开场白", catalog!)?.id,
     ).toBe("opening-setup");
@@ -203,6 +204,9 @@ describe("dictate context", () => {
     expect(resolveModuleForInsertTag("设计.叙事指南", catalog!)?.id).toBe(
       "narrative-guide",
     );
+    expect(
+      resolveModuleForInsertTag("设计.故事推进与交互范式", catalog!)?.id,
+    ).toBe("story-progression");
     expect(resolveModuleForInsertTag("设计.故事推进", catalog!)?.id).toBe(
       "story-progression",
     );
@@ -214,9 +218,9 @@ describe("dictate context", () => {
       catalog: catalog!,
       skillPackRoot: "dialogue/world-simulator",
     });
-    const brief = index.get("设计.美学纲领与交互范式");
+    const brief = index.get("设计.美学纲领");
     expect(brief).toBeTruthy();
-    expect(brief!).toContain("# 本轮关注 · 美学纲领与交互范式");
+    expect(brief!).toContain("# 本轮关注 · 美学纲领");
     expect(brief!).toContain("不要求固定标题");
     expect(brief!).toContain("本模块内容包括");
     expect(brief!).toContain("## 写入用户回复时做什么");

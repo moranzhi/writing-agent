@@ -18,6 +18,7 @@
       <a class="st-brand" href="/">Writing Agent</a>
       <nav class="st-nav" aria-label="主导航">
         <a href="/">对话</a>
+        <a href="/chat.html">直聊</a>
         <a href="/modules.html">技能</a>
         <a href="/libraries.html">库</a>
         <a href="/stats.html">Token</a>
@@ -131,6 +132,27 @@
                 <button type="button" class="btn-primary" id="btn-save-context-keep">保存</button>
                 <button type="button" class="btn-secondary" id="btn-prune-context">修剪已打开会话</button>
                 <button type="button" class="btn-secondary danger-outline" id="btn-clear-context">清除全部痕迹</button>
+              </div>
+            </div>
+            <div class="settings-card storage-card">
+              <h3>对话落盘补写</h3>
+              <p class="settings-help">
+                同一句用户消息里，填写没通过时可以再自动补几枪。每一枪只改失败点：已经通过的产物不动，没通过的用上一份正文当底稿，已经填对的自评维度会带回去。次数用尽后仍标成失败待补，等下一句继续。
+              </p>
+              <label class="field">
+                同轮最多补写次数
+                <input
+                  type="number"
+                  id="dictate-fill-retries"
+                  min="0"
+                  max="12"
+                  step="1"
+                  value="0"
+                />
+              </label>
+              <p class="settings-help muted">0 = 只填一次。最大 12。例如设为 7，就是第一次填写之外最多再试 7 次。</p>
+              <div class="storage-actions">
+                <button type="button" class="btn-primary" id="btn-save-fill-retries">保存次数</button>
               </div>
             </div>
           </section>

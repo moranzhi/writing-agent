@@ -14,22 +14,58 @@ import { defaultPlaySlots } from "../src/skills/play-slots.js";
 
 describe("dictate play-bind", () => {
   it("classifies style tags", () => {
-    expect(isDictateStyleBindTag("设计.美学纲领")).toBe(true);
-    expect(isDictateStyleBindTag("设计.正文组成")).toBe(true);
     expect(isDictateStyleBindTag("设计.模仿范例")).toBe(true);
     expect(isDictateStyleBindTag("设计.模仿要点")).toBe(true);
     expect(isDictateStyleBindTag("设计.叙事指南")).toBe(true);
     expect(isDictateStyleBindTag("设计.故事推进")).toBe(true);
     expect(isDictateStyleBindTag("设计.用户需求")).toBe(true);
     expect(isDictateStyleBindTag("设计.用户约束")).toBe(true);
+    expect(isDictateStyleBindTag("设计.监控栏")).toBe(true);
     expect(isDictateStyleBindTag("用户.需求")).toBe(false);
+    // 中转与壳不进游玩文风挂载
+    expect(isDictateStyleBindTag("设计.美学纲领")).toBe(false);
+    expect(isDictateStyleBindTag("设计.正文组成")).toBe(false);
+  });
+
+  it("excludes design_only and reply shell from play bind products", () => {
+    const board = new Blackboard();
+    board.write({
+      tag: "设计.实现机制",
+      content: "因果",
+      source: "dictate",
+      metadata: { [DICTATE_ORDER_META_KEY]: 10 },
+    });
+    board.write({
+      tag: "设计.本局创作方案",
+      content: '{"schema":"creation-plan.v1","items":[]}',
+      source: "dictate",
+    });
+    board.write({
+      tag: "设计.美学纲领与交互范式",
+      content: "体验",
+      source: "dictate",
+    });
+    board.write({
+      tag: "设计.正文组成",
+      content: JSON.stringify({
+        schema: "context-fragment.v1",
+        正文: {
+          frontend: { html: "<div>", css: "x", js: "y" },
+          数据契约: { blocks: { body: { 类型: "markdown", 来源: "model_generated" } } },
+        },
+      }),
+      source: "dictate",
+    });
+    const tags = collectDictateBindProducts(board).map((p) => p.tag);
+    expect(tags).toEqual(["设计.实现机制"]);
   });
 
   it("builds gm context_order: persona → products → history → input", () => {
     const order = buildDictateContextOrder({
       products: [
         { tag: "用户.需求", content: "雨夜", order: -40 },
-        { tag: "设计.美学纲领", content: "冷色", order: -30 },
+        { tag: "设计.叙事指南", content: "冷色短句", order: -30 },
+        { tag: "设计.本局创作方案", content: "{}", order: -50 },
         { tag: "设计.正文组成", content: "{}", order: 0 },
       ],
       playSlots: defaultPlaySlots(),
@@ -39,13 +75,44 @@ describe("dictate play-bind", () => {
     const refs = gm!.inserts.map((i) => i.ref);
     expect(refs[0]).toBe(WORKER_PERSONA_REF);
     expect(refs).toContain("用户.需求");
-    expect(refs).toContain("设计.美学纲领");
-    expect(refs).toContain("设计.正文组成");
+    expect(refs).toContain("设计.叙事指南");
+    expect(refs).not.toContain("设计.本局创作方案");
+    expect(refs).not.toContain("设计.正文组成");
     expect(refs).toContain(DIALOGUE_HISTORY_TAG);
     expect(refs[refs.length - 1]).toBe("用户.最新输入");
     const histIdx = refs.indexOf(DIALOGUE_HISTORY_TAG);
     expect(refs.indexOf("用户.需求")).toBeLessThan(histIdx);
-    expect(refs.indexOf("设计.正文组成")).toBeLessThan(histIdx);
+    expect(refs.indexOf("设计.叙事指南")).toBeLessThan(histIdx);
+  });
+
+  it("keeps image prompt on the auditor and off the main world", () => {
+    const image = JSON.stringify({
+      schema: "context-fragment.v1",
+      技能: "画面与生图",
+      brief: "西幻",
+      mount: ["auditor"],
+      稳变: "stable",
+      正文: { 工作流: "western-fantasy" },
+    });
+    const order = buildDictateContextOrder({
+      products: [
+        { tag: "设计.舞台骨架", content: "舞台", order: 1 },
+        { tag: "设计.画面与生图", content: image, order: 2 },
+        { tag: "设计.变量设计与更新规则", content: "真值", order: 3 },
+      ],
+      playSlots: { ...defaultPlaySlots(), auditor: true },
+    });
+    const gm = order.slots
+      .find((s) => s.ref === "world-simulator")!
+      .inserts.map((i) => i.ref);
+    const auditor = order.slots
+      .find((s) => s.ref === "auditor")!
+      .inserts.map((i) => i.ref);
+    expect(gm).toContain("设计.舞台骨架");
+    expect(gm).not.toContain("设计.画面与生图");
+    expect(auditor).toContain("设计.画面与生图");
+    expect(auditor).toContain("设计.变量设计与更新规则");
+    expect(auditor).not.toContain("设计.舞台骨架");
   });
 
   it("groups context by change frequency before applying importance order", () => {
@@ -84,7 +151,7 @@ describe("dictate play-bind", () => {
       metadata: { [DICTATE_ORDER_META_KEY]: -40 },
     });
     board.write({
-      tag: "设计.美学纲领",
+      tag: "设计.叙事指南",
       content: "冷色短句",
       source: "dictate",
       metadata: { [DICTATE_ORDER_META_KEY]: -30 },
@@ -103,14 +170,14 @@ describe("dictate play-bind", () => {
     });
 
     const products = collectDictateBindProducts(board);
-    expect(products.map((p) => p.tag)).toEqual(["用户.需求", "设计.美学纲领"]);
+    expect(products.map((p) => p.tag)).toEqual(["用户.需求", "设计.叙事指南"]);
     expect(products.every((p) => p.tag !== "设计.开场白")).toBe(true);
 
     const result = bindDictateProductsToPlaySpec(board);
     const narr = result.contextOrder.slots.find((s) => s.ref === "narrator");
     expect(narr).toBeTruthy();
     const narrRefs = narr!.inserts.map((i) => i.ref);
-    expect(narrRefs).toContain("设计.美学纲领");
+    expect(narrRefs).toContain("设计.叙事指南");
     expect(narrRefs).not.toContain("用户.需求");
     expect(narrRefs).toContain("输出.用户展示");
     expect(narrRefs).not.toContain("运行.本轮.裁决");

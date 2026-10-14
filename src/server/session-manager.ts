@@ -58,6 +58,7 @@ import {
 import {
   loadAppSettings,
   normalizeContextTraceKeepLatest,
+  normalizeDictateFillRetries,
   normalizePreferenceCollectEveryTurns,
 } from "../config/settings.js";
 import { isAbortError, runWithAbortSignal } from "../llm/run-abort.js";
@@ -139,6 +140,7 @@ import {
   formatRecipeExamplesForCreationPlan,
   formatModuleCatalogForDictate,
   findModuleByName,
+  readModuleArtifactContent,
   findStepByRef,
   type FlowStepTitleHint,
   isProgressPointerTag,
@@ -597,10 +599,13 @@ export class SessionManager {
     const s = this.require(sessionId);
     const trimmedTag = tag.trim();
     if (!trimmedTag) throw new Error("tag 不能为空");
-    s.runtime.getBlackboard().write({
+    const board = s.runtime.getBlackboard();
+    const existing = board.getLatestByTag(trimmedTag);
+    board.write({
       tag: trimmedTag,
       content: content ?? "",
       source: "user",
+      ...(existing?.metadata ? { metadata: existing.metadata } : {}),
     });
     if (s.bookId) this.persist(s);
     return this.toView(sessionId);
@@ -1145,6 +1150,7 @@ export class SessionManager {
       moduleCatalog,
       moduleReadIndex,
       repeatableFamilies,
+      fillRetries: normalizeDictateFillRetries(loadAppSettings().dictateFillRetries),
       handlers: {
         listProducts: () => this.listDictateProducts(s),
         writeProduct: (tag, content, order, metadata) => {
@@ -3123,11 +3129,15 @@ export class SessionManager {
     const step = findStepByRef(cleaned, stepId.trim());
     if (!step) throw new Error(`找不到节点：${stepId}`);
     const mod = findModuleByName(catalog, step.name);
-    const tag = mod?.artifact?.trim() || null;
-    const content = tag
-      ? s.runtime.getBlackboard().getContentByTag(tag)?.trim() || ""
-      : "";
-    return { stepId: step.id, name: step.name, tag, content };
+    const stored = readModuleArtifactContent(mod, (tag) =>
+      s.runtime.getBlackboard().getContentByTag(tag),
+    );
+    return {
+      stepId: step.id,
+      name: step.name,
+      tag: stored?.tag ?? null,
+      content: stored?.content ?? "",
+    };
   }
 
   async spawnStep(id: string, moduleName: string): Promise<SessionView> {

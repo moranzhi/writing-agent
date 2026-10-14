@@ -3,13 +3,13 @@ import type { ToolDefinition } from "../llm/client.js";
 /**
  * 对话落盘创作期工具：产物 / 变量 / 映射均须 toolcall；聊天只做确认与建议。
  */
-/** 第一次请求仅此一个工具：点出下一步要写的节点。 */
+/** 第一次请求与 reply_user 二选一：点出下一步要写的节点。 */
 export const DICTATE_SELECT_TOOL: ToolDefinition = {
   type: "function",
   function: {
     name: "select_nodes",
     description:
-      "规定下一步要写入的目标节点。nodes 只填能力目录中的 module_id。这一步不写产物正文。",
+      "规定下一步要写入的目标节点。nodes 只填能力目录中的 module_id。这一步不写产物正文。本轮只回答或只提问时不要调用本工具，改调 reply_user。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -28,6 +28,27 @@ export const DICTATE_SELECT_TOOL: ToolDefinition = {
         },
       },
       required: ["nodes"],
+    },
+  },
+};
+
+/** 选题步的回复。与 select_nodes 二选一；调用后不再填写、不再另起回复。 */
+export const DICTATE_SELECT_REPLY_TOOL: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "reply_user",
+    description:
+      "本轮不写入、不删除。直接回答，或提出 1～2 个问题，每个问题给 2～3 个可接着说的选项。与 select_nodes 二选一。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: {
+          type: "string",
+          description: "给用户的回复。提问时写成 1～2 个问题，每个问题给 2～3 个可接着说的选项。",
+        },
+      },
+      required: ["text"],
     },
   },
 };

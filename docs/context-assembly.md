@@ -51,6 +51,18 @@ Worker / skill 执行时，Runtime 将黑板 tag 与固定体裁说明拼成 LLM
 
 **不是** agent 在游玩时自由往 prompt 里插段落；agent 只决定 **invoke 哪个 skill**；该 skill 的契约决定看见什么。
 
+### 2.1 落档不进游玩投影
+
+对话落盘绑定时（`src/dictate/play-bind.ts`）下列 tag **不**写入 `设计.上下文投影排序`：
+
+| 类别 | 例 | 原因 |
+|------|----|------|
+| 创作中转 `feeds: design_only` | `设计.本局创作方案`、`设计.美学纲领与交互范式` | 只指导后续写作 |
+| 呈现壳 `feeds: program` | `设计.正文组成`、`设计.0层正文组成` | 程序持有 html/css/js；模型只经 `contractOutputInstruction` 看见数据契约 |
+| 开场 / 编排 | `设计.开场白#*`、`设计.worker集`、排序表自身 | 开场进历史；编排不重复挂 |
+
+游玩填楼时：程序读壳并灌 `present.v1`；主世界/转述 system 里只追加契约区块列表，不附 frontend 源码。
+
 ---
 
 ## 3. 三分工

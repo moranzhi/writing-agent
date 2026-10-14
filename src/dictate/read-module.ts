@@ -20,11 +20,22 @@ import {
   listActivePreferences,
 } from "../preference/store.js";
 import {
+  getImageWorkflow,
+  listImageWorkflows,
+} from "../image-workflow/store.js";
+import {
   getStylePack,
   listActiveStylePacks,
 } from "../style-pack/store.js";
 
 export const DICTATE_MODULE_READ_STATE_TAG = "运行.对话落盘.已读能力";
+
+/** 改名后旧目录名仍能 read_module，已有对话不用重学 id。 */
+const MODULE_READ_NAME_ALIASES: Record<string, readonly string[]> = {
+  "aesthetics-interaction": ["美学纲领与交互范式"],
+  "story-progression": ["故事推进"],
+  mechanism: ["实现机制"],
+};
 
 export type DictateModuleReadPayload = {
   module_id: string;
@@ -99,6 +110,9 @@ export async function buildDictateModuleReadIndex(params: {
     };
     index.set(module.id, payload);
     index.set(module.name, payload);
+    for (const alias of MODULE_READ_NAME_ALIASES[module.id] ?? []) {
+      if (!index.has(alias)) index.set(alias, payload);
+    }
   }
   return index;
 }
@@ -171,6 +185,19 @@ export function readLibraryEntries(params: {
       })),
     };
   }
+  if (libraryId === "image-workflows") {
+    const entries = ids.map(getImageWorkflow);
+    const missing = ids.filter((_, index) => !entries[index]);
+    if (missing.length) return { error: `工作流库无条目：${missing.join("、")}` };
+    return {
+      entries: entries.map((entry) => ({
+        id: entry!.id,
+        name: entry!.name,
+        summary: entry!.summary,
+        ...(entry!.promptNotes ? { prompt_notes: entry!.promptNotes } : {}),
+      })),
+    };
+  }
   return { error: `库 ${libraryId} 尚不支持按条目读取` };
 }
 
@@ -202,6 +229,17 @@ function libraryDirectories(module: ModuleCatalogEntry): DictateModuleReadPayloa
           id: entry.id,
           name: entry.name,
           summary: clip(entry.content),
+        })),
+      };
+    }
+    if (id === "image-workflows") {
+      return {
+        library_id: id,
+        label: provider?.label ?? id,
+        entries: listImageWorkflows().map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          summary: entry.summary,
         })),
       };
     }

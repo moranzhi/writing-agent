@@ -1405,6 +1405,10 @@ code {
   background: var(--st-surface);
 }
 
+.settings-section .storage-card + .storage-card {
+  margin-top: 16px;
+}
+
 .storage-card h3 {
   margin: 0 0 8px;
   font-size: 15px;
