@@ -255,6 +255,9 @@ describe("trimOpenRouterUsualCatalog", () => {
     );
     expect(usualOpenRouterBucket("google/gemini-3.8-flash")).toBe("gemini-flash");
     expect(usualOpenRouterBucket("google/gemini-2.5-pro")).toBe("gemini-pro");
+    expect(usualOpenRouterBucket("google/gemini-3.1-pro-preview")).toBe("gemini-pro");
+    expect(usualOpenRouterBucket("google/gemini-4-argon")).toBe("gemini");
+    expect(usualOpenRouterBucket("google/gemini-3.5-flash-lite")).toBeNull();
     expect(usualOpenRouterBucket("openai/gpt-4o:batch")).toBeNull();
     const trimmed = JSON.parse(
       trimOpenRouterUsualCatalog(
@@ -292,6 +295,39 @@ describe("trimOpenRouterUsualCatalog", () => {
     expect(trimmed.data.map((row) => row.id).sort()).toEqual([
       "anthropic/claude-haiku-5.5",
       "openai/gpt-6-luna",
+    ]);
+    const gemini = JSON.parse(
+      trimOpenRouterUsualCatalog(
+        JSON.stringify({
+          data: [
+            {
+              id: "google/gemini-2.5-pro",
+              created: 10,
+              pricing: { prompt: "0.000001", completion: "0.000005" },
+            },
+            {
+              id: "google/gemini-3.1-pro-preview",
+              created: 20,
+              pricing: { prompt: "0.000002", completion: "0.000008" },
+            },
+            {
+              id: "google/gemini-3.8-flash",
+              created: 30,
+              pricing: { prompt: "0.0000003", completion: "0.000001" },
+            },
+            {
+              id: "google/gemini-4-argon",
+              created: 40,
+              pricing: { prompt: "0.000003", completion: "0.000012" },
+            },
+          ],
+        }),
+      ),
+    ) as { data: Array<{ id: string }> };
+    expect(gemini.data.map((row) => row.id).sort()).toEqual([
+      "google/gemini-3.1-pro-preview",
+      "google/gemini-3.8-flash",
+      "google/gemini-4-argon",
     ]);
     const pinned = JSON.parse(
       trimOpenRouterUsualCatalog(

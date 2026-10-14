@@ -117,6 +117,7 @@ export function isOpenRouterModelsUrl(url: string): boolean {
 
 /**
  * 对比用的当前档：每个家族只留最新一档（DeepSeek / Claude / GLM / Gemini / GPT / Grok）。
+ * Gemini 另留非 flash/pro 的代号档（如 gemini-4-argon）；Pro 若只有 preview 也算当前档。
  * 同一档有多个 id 时留 created 更新的那个。
  */
 export function usualOpenRouterBucket(modelId: string): string | null {
@@ -132,7 +133,11 @@ export function usualOpenRouterBucket(modelId: string): string | null {
     return null;
   }
   const parts = name.split(/[^a-z0-9.]+/);
-  if (parts.some((part) => USUAL_SKIP_PARTS.has(part))) return null;
+  const skipped = parts.filter((part) => USUAL_SKIP_PARTS.has(part));
+  // Gemini 当前 Pro 在 OpenRouter 上仍带 preview，不能整档丢掉。
+  const geminiPreviewOnly =
+    name.includes("gemini") && skipped.length > 0 && skipped.every((part) => part === "preview");
+  if (skipped.length && !geminiPreviewOnly) return null;
   if (name.includes("claude-haiku")) return "claude-haiku";
   if (name.includes("claude-sonnet")) return "claude-sonnet";
   if (name.includes("claude-opus")) return "claude-opus";
@@ -148,6 +153,7 @@ export function usualOpenRouterBucket(modelId: string): string | null {
   }
   if (name.includes("gemini") && name.includes("pro")) return "gemini-pro";
   if (name.includes("gemini") && name.includes("flash")) return "gemini-flash";
+  if (name.includes("gemini")) return "gemini";
   if (name.startsWith("gpt-") && name.includes("luna-pro")) return "gpt-luna-pro";
   if (name.startsWith("gpt-") && name.includes("luna")) return "gpt-luna";
   if (name.startsWith("gpt-") && name.includes("sol-pro")) return "gpt-sol-pro";
