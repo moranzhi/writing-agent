@@ -33,10 +33,12 @@
   <body data-lifecycle="design" data-nav-level="root">
     <div class="layout">
       <div class="main-chrome" id="main-chrome">
+        <div id="price-watch" class="price-watch" hidden></div>
         <header class="main-head" id="main-head">
           <div class="main-head-left" aria-hidden="true"></div>
           <nav class="main-app-nav" aria-label="应用">
             <div id="persona-picker-host" class="persona-picker-host" hidden></div>
+            <a href="/chat.html">直聊</a>
             <a href="/modules.html">技能</a>
             <a href="/libraries.html">库</a>
             <a href="/stats.html">Token</a>
@@ -110,7 +112,6 @@
                 </ol>
               </nav>
               <div class="panel-head-actions rail-head-actions">
-                <button type="button" class="btn-sm" id="btn-new-book" title="新建">+</button>
                 <span class="burst-badge" id="burst-badge" hidden></span>
                 <button type="button" class="btn-sm rail-collapse" id="btn-rail-collapse" title="收起侧栏" aria-label="收起侧栏">‹</button>
               </div>
@@ -230,6 +231,7 @@
     </menu>
 
     <menu id="dictate-product-menu" class="context-menu" hidden>
+      <button type="button" class="context-menu-item" data-dictate-product-action="edit">修改</button>
       <button type="button" class="context-menu-item" data-dictate-product-action="peek">查看完整内容</button>
       <button type="button" class="context-menu-item" data-dictate-product-action="copy">复制全文</button>
     </menu>
@@ -336,5 +338,6 @@
     </dialog>
 
     <script type="module" src="/app.js?v=20261007-view-raw"></script>
+    <script type="module" src="/price-watch.js"></script>
   </body>
 </html>

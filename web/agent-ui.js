@@ -928,6 +928,10 @@ function wireDictateProductMenu() {
       tagEl?.getAttribute("title")?.trim() ||
       tagEl?.textContent?.trim() ||
       "产物";
+    if (action === "edit") {
+      beginDictateProductEdit(card);
+      return;
+    }
     if (action === "peek") {
       openContentPeek({
         title,
@@ -1606,12 +1610,34 @@ export function renderSkillPicker(_view, _onPick) {
 }
 
 let activeRailTab = "books";
-/** 用户手动展开侧栏后，在本会话保持展开，直到再点收起 */
-let railUserExpanded = false;
+const RAIL_EXPANDED_KEY = "wa-rail-user-expanded";
+const COORD_COLLAPSED_KEY = "wa-coord-rail-collapsed";
+
+function readBoolStore(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+function writeBoolStore(key, value) {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 左侧栏：可收起时是否由用户展开（localStorage 记忆） */
+let railUserExpanded = readBoolStore(RAIL_EXPANDED_KEY, false);
 /** 创作右侧栏：history=此前对话；products=转述产物 */
 let coordRailMode = "history";
-/** 创作验收右侧栏：默认收起（对话）；转述看产物时默认展开 */
-let coordRailCollapsed = true;
+/** 右侧栏是否收起（localStorage 记忆；默认收起） */
+let coordRailCollapsed = readBoolStore(COORD_COLLAPSED_KEY, true);
 
 function syncCoordRailChrome() {
   const rail = document.getElementById("coord-rail");
@@ -1658,6 +1684,7 @@ function scrollCoordDrawerToLatest() {
 function setCoordRailCollapsed(collapsed) {
   const opening = coordRailCollapsed && !collapsed;
   coordRailCollapsed = Boolean(collapsed);
+  writeBoolStore(COORD_COLLAPSED_KEY, coordRailCollapsed);
   syncCoordRailChrome();
   if (opening) {
     requestAnimationFrame(() => scrollCoordDrawerToLatest());
@@ -1724,6 +1751,7 @@ function wireRailChrome() {
     expand.dataset.wired = "1";
     expand.addEventListener("click", () => {
       railUserExpanded = true;
+      writeBoolStore(RAIL_EXPANDED_KEY, true);
       syncRailCollapse();
     });
   }
@@ -1733,6 +1761,7 @@ function wireRailChrome() {
     collapse.addEventListener("click", () => {
       if (document.body.dataset.railCanCollapse !== "1") return;
       railUserExpanded = false;
+      writeBoolStore(RAIL_EXPANDED_KEY, false);
       syncRailCollapse();
     });
   }
@@ -1768,8 +1797,9 @@ function syncRailCollapse(view) {
 
 export function resetRailChrome() {
   activeRailTab = "books";
+  // 根目录必须展开左栏；记忆仍留在 localStorage，进作品后恢复
   railUserExpanded = true;
-  coordRailCollapsed = true;
+  coordRailCollapsed = readBoolStore(COORD_COLLAPSED_KEY, true);
   document.body.dataset.railCanCollapse = "0";
   document.body.classList.remove(
     "rail-collapsed",
@@ -1779,7 +1809,7 @@ export function resetRailChrome() {
   const rail = document.getElementById("coord-rail");
   if (rail) {
     rail.hidden = true;
-    rail.dataset.collapsed = "1";
+    rail.dataset.collapsed = coordRailCollapsed ? "1" : "0";
   }
   setRailTab("books");
   wireRailChrome();
@@ -1852,9 +1882,9 @@ function maybeSyncRail(view) {
   }
   const started = hasStartedCreation(view);
   const wasCollapsible = document.body.dataset.railCanCollapse === "1";
-  // 刚进入创作：默认缩进；未开写：展开并停在作品
+  // 刚进入可收起：恢复浏览器记忆，无记忆则默认收起
   if (started && !wasCollapsible) {
-    railUserExpanded = false;
+    railUserExpanded = readBoolStore(RAIL_EXPANDED_KEY, false);
   }
   if (!started) {
     railUserExpanded = true;
@@ -2889,7 +2919,16 @@ function renderContextFragmentHtml(doc, opts = {}) {
     }
   }
 
-  const body = frag.正文 != null ? frag.正文 : frag.body;
+  let body = frag.正文 != null ? frag.正文 : frag.body;
+  if (
+    frag.体验锚定 != null &&
+    body &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    body.体验锚定 == null
+  ) {
+    body = { ...body, 体验锚定: frag.体验锚定 };
+  }
   if (typeof body === "string" && body.trim()) {
     parts.push(
       `<section class="artifact-block"><h4>正文</h4>${renderProseHtml(body)}</section>`,
@@ -3147,11 +3186,30 @@ function renderSpecialtyBodyHtml(body, skill) {
     if (html) return html;
   }
   if (
+    body.既成机制 != null ||
     body.支撑点 != null ||
     (Array.isArray(body.依据的核心体验) && body.覆盖检验 != null) ||
+    skillName.includes("世界法则") ||
     skillName.includes("实现机制")
   ) {
     const html = renderMechanismBodyHtml(body);
+    if (html) return html;
+  }
+  const storySkill =
+    skillName.includes("故事推进") && !skillName.includes("叙事指南");
+  const aestheticsShape =
+    skillName.includes("美学") ||
+    body.美学纲领 != null ||
+    body.体验内核 != null ||
+    body.呈现要点 != null;
+  if (
+    !aestheticsShape &&
+    (storySkill ||
+      body.用户输入用法 != null ||
+      body.单轮篇幅 != null ||
+      (body.交互范式 != null && body.推进方式 != null))
+  ) {
+    const html = renderStoryProgressionBodyHtml(body);
     if (html) return html;
   }
   if (
@@ -3193,8 +3251,11 @@ function renderSpecialtyBodyHtml(body, skill) {
   body = normalizeAestheticsBody(body);
   const productKeys = [
     { key: "美学纲领", missing: "（未写）" },
-    { key: "交互范式", missing: "（未写）" },
+    { key: "体验锚定", missing: "（未写）" },
   ];
+  if (body.交互范式 != null && body.交互范式 !== "") {
+    productKeys.push({ key: "交互范式", missing: "（未写）" });
+  }
   const evalKeys = [
     {
       key: body.背景与规则 == null && body.设定逻辑 != null ? "设定逻辑" : "背景与规则",
@@ -3337,7 +3398,60 @@ function renderReplyFormatBodyHtml(body) {
   return `<div class="artifact-friendly artifact-reply-format">${parts.join("")}</div>`;
 }
 
-/** 叙事指南 · 一份全文结构化卡（不强调双投影裁剪） */
+/** 故事推进与交互范式：左权限，右推进合同 */
+function renderStoryProgressionBodyHtml(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const interaction = body.交互范式;
+  const hasInteraction = interaction != null && interaction !== "";
+  const order = [
+    "推进方式",
+    "用户输入用法",
+    "驱动力",
+    "成败与难度",
+    "变量钩子",
+    "选用偏好",
+    "单轮篇幅",
+    "扩写要求",
+    "续写要求",
+    "OOC处理",
+    "主角设定偏好",
+  ];
+  const used = new Set(["交互范式", ...order]);
+  const right = [];
+  const pushBlock = (key, value) => {
+    right.push(`<section class="af-block af-block--extra" data-af-block="${esc(key)}">
+      <header class="af-block-head"><h3 class="af-block-title">${esc(key)}</h3></header>
+      <div class="af-block-body">${renderStructuredValueHtml(value, 0)}</div>
+    </section>`);
+  };
+  for (const key of order) {
+    if (body[key] == null || body[key] === "") continue;
+    pushBlock(key, body[key]);
+  }
+  for (const [key, value] of Object.entries(body)) {
+    if (used.has(key) || value == null || value === "") continue;
+    pushBlock(key, value);
+  }
+  const interactionHtml = hasInteraction
+    ? renderAestheticsNodeHtml(interaction, "交互范式", 0)
+    : `<p class="ws-muted">（未写）</p>`;
+  return `<div class="af-split af-split--progression">
+    <div class="af-split-grid">
+      <div class="af-split-product" aria-label="交互范式">
+        <section class="af-block af-block--product" data-af-block="交互范式">
+          <header class="af-block-head">
+            <h3 class="af-block-title">交互范式${hasInteraction ? "" : `<span class="af-block-miss">缺</span>`}</h3>
+          </header>
+          <div class="af-block-body">${interactionHtml}</div>
+        </section>
+      </div>
+      <div class="af-split-progress" aria-label="推进合同">
+        ${right.join("") || `<p class="ws-muted">（推进合同未写）</p>`}
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderNarrativeBodyHtml(body) {
   const order = [
     "依据的体验",
@@ -3841,9 +3955,59 @@ function renderWorldBlueprintBodyHtml(body) {
   return parts.length ? `<div class="skill-view skill-view-world-blueprint">${parts.join("")}</div>` : "";
 }
 
-/** 实现机制 · 专用正文卡 */
+/** 世界法则 · 专用正文卡（旧稿字段 法则内容 / 支撑点 仍能显示） */
 function renderMechanismBodyHtml(body) {
   const parts = [];
+  const laws = Array.isArray(body.既成机制) ? body.既成机制 : [];
+  if (laws.length) {
+    parts.push(
+      skillSection(
+        "既成机制",
+        `<div class="skill-entity-grid">${laws
+          .map((item) => {
+            if (!item || typeof item !== "object") return "";
+            const law = item.法则 || item.法则内容 || "";
+            const chains = Array.isArray(item.连锁)
+              ? item.连锁
+              : Array.isArray(item.因果影响)
+                ? item.因果影响
+                : [];
+            const bounds = Array.isArray(item["代价与边界"])
+              ? item["代价与边界"]
+              : Array.isArray(item["边界或例外"])
+                ? item["边界或例外"]
+                : [];
+            const scale = item.标尺 ? String(item.标尺) : "";
+            return `<article class="skill-entity-card">
+              <header class="skill-entity-head"><div class="skill-entity-name">${esc(String(item.名称 || "?"))}</div></header>
+              ${law ? `<p>${esc(String(law))}</p>` : ""}
+              ${chains.length ? skillProseList(chains.map((line) => String(line))) : ""}
+              ${bounds.length ? `<p class="ws-muted">${esc(bounds.map((line) => String(line)).join("；"))}</p>` : ""}
+              ${scale ? `<p class="ws-muted">${esc(clampPreviewText(scale, 240))}</p>` : ""}
+            </article>`;
+          })
+          .join("")}</div>`,
+      ),
+    );
+  }
+  const joint = Array.isArray(body.共同作用) ? body.共同作用 : [];
+  if (joint.length) {
+    parts.push(
+      skillSection(
+        "共同作用",
+        `<ul class="artifact-list">${joint
+          .map((item) => {
+            if (typeof item === "string") return `<li>${esc(item)}</li>`;
+            if (!item || typeof item !== "object") return "";
+            const who = Array.isArray(item.涉及机制) ? item.涉及机制.join(" · ") : "";
+            return `<li><strong>${esc(String(item.关系 || "关系"))}</strong>${who ? ` · ${esc(who)}` : ""}${
+              item.推演影响 ? `<div class="ws-muted">${esc(String(item.推演影响))}</div>` : ""
+            }</li>`;
+          })
+          .join("")}</ul>`,
+      ),
+    );
+  }
   if (Array.isArray(body.依据的核心体验) && body.依据的核心体验.length) {
     parts.push(skillSection("依据的核心体验", skillProseList(body.依据的核心体验)));
   }
@@ -3890,7 +4054,14 @@ function renderMechanismBodyHtml(body) {
   if (body.覆盖检验 && typeof body.覆盖检验 === "object") {
     parts.push(skillSection("覆盖检验", skillKvBlock(body.覆盖检验)));
   }
-  const used = new Set(["依据的核心体验", "支撑点", "支撑点关系", "覆盖检验"]);
+  const used = new Set([
+    "依据的核心体验",
+    "支撑点",
+    "支撑点关系",
+    "覆盖检验",
+    "既成机制",
+    "共同作用",
+  ]);
   for (const [k, v] of Object.entries(body)) {
     if (used.has(k) || v == null || v === "") continue;
     parts.push(skillSection(k, renderStructuredValueHtml(v, 0)));
@@ -6089,7 +6260,7 @@ function renderDictateProductsList(view) {
   if (!items.length) {
     return `<div class="dictate-products-empty-block">
       <p class="dictate-products-empty-title">尚无产物</p>
-      <p class="dictate-products-empty-desc">Agent 落盘后会出现在这里。点击行展开，右键可查看全文或复制。</p>
+      <p class="dictate-products-empty-desc">Agent 落盘后会出现在这里。点击行展开后可直接修改，右键也可查看全文或复制。</p>
     </div>`;
   }
   return `<div class="dictate-products-list" role="list">${items
@@ -6105,7 +6276,7 @@ function renderDictateProductsList(view) {
         .replace(/^设计\./, "")
         .replace(/^用户\./, "")
         .replace(/#/g, " · ");
-      return `<div class="dictate-product dictate-product--rail" role="listitem" data-dictate-product>
+      return `<div class="dictate-product dictate-product--rail" role="listitem" data-dictate-product data-product-tag="${esc(tag)}">
         <button type="button" class="dictate-product-sum" aria-expanded="false">
           <span class="dictate-product-sum-top">
             <span class="dictate-product-tag" title="${esc(tag)}">${esc(shortTag || tag || "未命名")}</span>
@@ -6130,13 +6301,100 @@ function renderDictateProductsList(view) {
     .join("")}</div>`;
 }
 
+/** 正在改的那一行在刷新时先留着，保存成功后再按这条 tag 重新展开 */
+let openDictateProductTag = "";
+let dictateProductSaveLock = false;
+
 function hydrateDictateProductBody(card) {
-  if (!card) return;
+  if (!card || card.classList.contains("is-editing")) return;
   const body = card.querySelector(".dictate-product-body");
   if (!body || body.dataset.pending !== "1") return;
   const content = readDictateProductContent(card);
-  body.innerHTML = renderStoredProductHtml(content);
+  body.innerHTML = `<div class="dictate-product-tools"><button type="button" class="btn-sm" data-dictate-edit>修改</button></div>${renderStoredProductHtml(content)}`;
   delete body.dataset.pending;
+}
+
+function beginDictateProductEdit(card) {
+  if (!card) return;
+  if (card.classList.contains("is-editing")) {
+    card.querySelector("textarea")?.focus();
+    return;
+  }
+  const body = card.querySelector(".dictate-product-body");
+  if (!body) return;
+  const root = card.closest(".dictate-products-list") || card.parentElement;
+  root?.querySelectorAll("[data-dictate-product].is-open").forEach((other) => {
+    if (other !== card) setDictateProductOpen(other, false);
+  });
+  setDictateProductOpen(card, true);
+  const content = readDictateProductContent(card);
+  card.classList.add("is-editing");
+  openDictateProductTag = card.dataset.productTag || "";
+  body.hidden = false;
+  delete body.dataset.pending;
+  body.innerHTML = `<div class="dictate-product-edit">
+    <textarea class="dictate-product-ta" spellcheck="false" aria-label="产物全文"></textarea>
+    <div class="dictate-product-edit-actions">
+      <button type="button" class="btn-sm btn-primary" data-dictate-save>保存</button>
+      <button type="button" class="btn-sm" data-dictate-cancel>取消</button>
+      <span class="dictate-product-edit-status" aria-live="polite"></span>
+    </div>
+  </div>`;
+  const ta = body.querySelector("textarea");
+  if (ta) {
+    ta.value = content;
+    ta.focus();
+    ta.setSelectionRange(0, 0);
+  }
+}
+
+function cancelDictateProductEdit(card) {
+  if (!card) return;
+  card.classList.remove("is-editing");
+  const body = card.querySelector(".dictate-product-body");
+  if (body) {
+    body.dataset.pending = "1";
+    body.innerHTML = "";
+  }
+  hydrateDictateProductBody(card);
+}
+
+async function saveDictateProductEdit(card) {
+  const tag = card?.dataset.productTag?.trim() || "";
+  const sessionId =
+    document.getElementById("coord-drawer-body")?.dataset.sessionId || "";
+  const ta = card?.querySelector("textarea");
+  const status = card?.querySelector(".dictate-product-edit-status");
+  const saveBtn = card?.querySelector("[data-dictate-save]");
+  if (!tag || !sessionId || !ta) {
+    if (status) status.textContent = "无法保存";
+    return;
+  }
+  if (saveBtn) saveBtn.disabled = true;
+  if (status) status.textContent = "保存中";
+  dictateProductSaveLock = true;
+  try {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/board`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag, content: ta.value }),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "写入失败");
+    card.classList.remove("is-editing");
+    openDictateProductTag = tag;
+    dictateProductSaveLock = false;
+    window.dispatchEvent(
+      new CustomEvent("wa:session-updated", { detail: data }),
+    );
+  } catch (err) {
+    dictateProductSaveLock = false;
+    if (saveBtn) saveBtn.disabled = false;
+    if (status) status.textContent = err instanceof Error ? err.message : "写入失败";
+  }
 }
 
 function setDictateProductOpen(card, open) {
@@ -6153,18 +6411,52 @@ function wireDictateProductAccordion(root) {
   if (!root || root.dataset.dictateProductAccordionWired) return;
   root.dataset.dictateProductAccordionWired = "1";
   root.addEventListener("click", (e) => {
+    const editBtn = e.target.closest("[data-dictate-edit]");
+    if (editBtn && root.contains(editBtn)) {
+      beginDictateProductEdit(editBtn.closest("[data-dictate-product]"));
+      return;
+    }
+    const saveBtn = e.target.closest("[data-dictate-save]");
+    if (saveBtn && root.contains(saveBtn)) {
+      void saveDictateProductEdit(saveBtn.closest("[data-dictate-product]"));
+      return;
+    }
+    const cancelBtn = e.target.closest("[data-dictate-cancel]");
+    if (cancelBtn && root.contains(cancelBtn)) {
+      cancelDictateProductEdit(cancelBtn.closest("[data-dictate-product]"));
+      return;
+    }
     const sum = e.target.closest(".dictate-product-sum");
     if (!sum || !root.contains(sum)) return;
     // 右键菜单用 pointer，这里只处理左键展开
     if (e.button != null && e.button !== 0) return;
     const card = sum.closest("[data-dictate-product]");
     if (!card) return;
+    if (root.querySelector("[data-dictate-product].is-editing")) return;
     e.preventDefault();
     const willOpen = !card.classList.contains("is-open");
     root.querySelectorAll("[data-dictate-product].is-open").forEach((other) => {
       if (other !== card) setDictateProductOpen(other, false);
     });
+    if (willOpen) openDictateProductTag = card.dataset.productTag || "";
+    else if (openDictateProductTag === (card.dataset.productTag || "")) {
+      openDictateProductTag = "";
+    }
     setDictateProductOpen(card, willOpen);
+  });
+  root.addEventListener("keydown", (e) => {
+    const ta = e.target.closest?.(".dictate-product-ta");
+    if (!ta || !root.contains(ta)) return;
+    const card = ta.closest("[data-dictate-product]");
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelDictateProductEdit(card);
+      return;
+    }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      void saveDictateProductEdit(card);
+    }
   });
 }
 
@@ -6180,6 +6472,14 @@ function fillCoordRailProducts(view) {
   }
   coordRail.hidden = false;
   if (drawerBody) {
+    drawerBody.dataset.sessionId = view.id || "";
+    if (
+      dictateProductSaveLock ||
+      drawerBody.querySelector("[data-dictate-product].is-editing")
+    ) {
+      syncCoordRailChrome();
+      return;
+    }
     drawerBody.innerHTML = renderDictateProductsList(view);
     const cards = drawerBody.querySelectorAll(".dictate-product");
     cards.forEach((el, i) => {
@@ -6187,6 +6487,13 @@ function fillCoordRailProducts(view) {
     });
     wireDictateProductContextMenu(drawerBody);
     wireDictateProductAccordion(drawerBody);
+    if (openDictateProductTag) {
+      const reopen = [...cards].find(
+        (el) => el.dataset.productTag === openDictateProductTag,
+      );
+      if (reopen) setDictateProductOpen(reopen, true);
+      else openDictateProductTag = "";
+    }
   }
   if (drawerCount) {
     drawerCount.textContent = String(items.length);
@@ -6552,7 +6859,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
     document.body.dataset.designSurface = surface;
     syncCoordRailChrome();
   } else {
-    document.body.classList.remove("coord-rail-collapsed");
+    // 勿在此清掉收起 class：游玩/对话每次重绘都会走这里，清掉会把右侧栏弹开
     delete document.body.dataset.designSurface;
   }
 
@@ -6727,8 +7034,7 @@ export function renderMessageFeed(view, loading, handlers = {}) {
   // —— 游玩 / 转述对话流 ——
   if (isPlayView(view) && coordRail) {
     document.body.classList.add("play-workspace");
-    coordRailCollapsed = false;
-    document.body.classList.remove("coord-rail-collapsed");
+    // 收起状态跟 localStorage / 用户点击，不在每次发消息重绘时强行展开
     fillPlayAux(view, handlers, { busy: loading });
     syncCoordRailChrome();
   }

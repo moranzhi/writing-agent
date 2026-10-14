@@ -2602,6 +2602,18 @@ function renderBookContents(book, list) {
   }
 }
 
+function appendBookListAdd(list) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "book-list-add";
+  btn.id = "btn-book-list-add";
+  btn.title = "新建";
+  btn.setAttribute("aria-label", "新建作品");
+  btn.textContent = "+";
+  btn.addEventListener("click", () => openNewBookDialog());
+  list.appendChild(btn);
+}
+
 function renderBookList() {
   const list = $("book-list");
   if (!list) return;
@@ -2643,11 +2655,9 @@ function renderBookList() {
   if (!modeBooks.length) {
     const empty = document.createElement("p");
     empty.className = "sidebar-empty";
-    empty.innerHTML = `此方式下暂无作品<br><button type="button" class="btn-sm" id="btn-new-inline">+ 新建</button>`;
+    empty.textContent = "此方式下暂无作品";
     list.appendChild(empty);
-    $("btn-new-inline")?.addEventListener("click", () => {
-      openNewBookDialog({ presetMode: modeId === "recipe" ? "dictate" : modeId });
-    });
+    appendBookListAdd(list);
     return;
   }
 
@@ -2676,6 +2686,7 @@ function renderBookList() {
       }),
     );
   }
+  appendBookListAdd(list);
   if (enterPickerBookId && sidebarNav.level === "mode") {
     const row = list.querySelector(`[data-book-id="${enterPickerBookId}"]`);
     if (row) showEnterPicker(enterPickerBookId, row);
@@ -2791,7 +2802,7 @@ function setupBookBoxSelect() {
   list.addEventListener("mousedown", (e) => {
     if (sidebarNav.level !== "mode" || e.button !== 0) return;
     if (e.target.closest("#book-action-menu")) return;
-    if (e.target.closest(".explorer-row")) return;
+    if (e.target.closest(".explorer-row, .book-list-add")) return;
     dragging = true;
     start = { x: e.clientX, y: e.clientY };
     overlay.hidden = true;
@@ -4417,7 +4428,6 @@ $("lifecycle-toggle")?.addEventListener("click", (e) => {
   if (stage === "play") enterPlayNow();
   else if (stage === "design") void setLifecycle("design");
 });
-$("btn-new-book")?.addEventListener("click", () => openNewBookDialog());
 $("btn-cancel-new")?.addEventListener("click", () => $("dialog-new-book").close());
 $("book-enter-pop")?.addEventListener("click", (e) => {
   e.stopPropagation();
