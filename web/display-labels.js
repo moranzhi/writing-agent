@@ -34,11 +34,12 @@ const WORKER_LABELS = {
 };
 
 const FIXED_TOPIC_LABELS = {
-  "aesthetics-interaction": "美学纲领与交互范式",
+  "aesthetics-interaction": "美学纲领",
   interaction: "交互范式",
   narrative_guide: "叙事指南与故事推进",
   "narrative-guide": "叙事指南",
-  "story-progression": "故事推进",
+  "image-prompt": "画面与生图",
+  "story-progression": "故事推进与交互范式",
   input_protocol: "输入协议",
   core_premise: "核心前提",
   aesthetics: "美学纲领",
@@ -53,6 +54,14 @@ const PHASE_UNIT_LABELS = {
 export function displayStageLabel(id) {
   if (!id) return "";
   return STAGE_LABELS[id] ?? id;
+}
+
+export function displayProductSurfaceLabel(id) {
+  if (!id) return "";
+  const map = {
+    "direct-chat": "直聊",
+  };
+  return map[id] ?? id;
 }
 
 export function displayCreationModeLabel(id) {

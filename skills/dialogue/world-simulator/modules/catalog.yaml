@@ -21,7 +21,7 @@
 # （declaration / when / when_not / boundary）注入 design-flow。
 # when/when_not 必须是规划对照用户话与已有产物就能判定的信号；调用条件写在技能 meta，不要写进配方 process。
 #
-# 标准范例：aesthetics-interaction（美学纲领与交互范式）
+# 标准范例：aesthetics-interaction（美学纲领）
 # 后来写能力：同结构 prompt.md（含默认问题）+ 本表一行索引
 #
 # 世界模拟器常用能力见下「体验→世界→机制→呈现→收成」；编排按需选用，勿默认全选。
@@ -43,13 +43,13 @@ modules:
 
   # —— 体验契约 ——
   - id: aesthetics-interaction
-    name: 美学纲领与交互范式
+    name: 美学纲领
     layer: final
     mount: [world-simulator, narrator]
     declaration: >-
       钉清用户会在意的体验承诺：站位、反复感到什么、轮转何时停。
       询问相近故合为一步。
-    artifact: 设计.美学纲领与交互范式
+    artifact: 设计.美学纲领
 
   - id: protagonist
     name: 主角设定
@@ -119,7 +119,7 @@ modules:
     libraries: [style-packs]
     declaration: >-
       美学已有方向时：把感觉落成可执行的遣词、笔墨落点、禁忌与推进方式；
-      不重做体验问卷。工序编排用本步；对话落盘拆成「叙事指南」「故事推进」
+      不重做体验问卷。工序编排用本步；对话落盘拆成「叙事指南」「故事推进与交互范式」
     artifact: 设计.叙事指南与故事推进
 
   - id: narrative-guide
@@ -129,12 +129,12 @@ modules:
     layer: final
     mount: [narrator, world-simulator]
     declaration: >-
-      从文风库选取本局写法（默认 1～2，确需可到 3），
-      落成风格推荐与要求、笔墨落点、少量禁忌与可选写法档；不钉推进
+      从文风库写成遣词、视角执行、段落形态、笔墨落点和少量禁忌；
+      体验句留在美学纲领，不钉推进
     artifact: 设计.叙事指南
 
   - id: story-progression
-    name: 故事推进
+    name: 故事推进与交互范式
     intake: dictate
     libraries: [preferences]
     layer: final
@@ -142,17 +142,28 @@ modules:
     declaration: >-
       从偏好库选取约束，只选定一种用户输入用法，
       并写清每一轮里扩写（演本轮材料）与续写（材料后往下写）的定义、比例与 OOC 处理；不写遣词
-    artifact: 设计.故事推进
+    artifact: 设计.故事推进与交互范式
+
+  - id: image-prompt
+    name: 画面与生图
+    intake: dictate
+    libraries: [image-workflows]
+    layer: final
+    mount: [auditor]
+    declaration: >-
+      从工作流库选定一种画面工作流，并写成旁观每轮可执行的生图提示词合同；
+      游玩时不再改选。只挂旁观
+    artifact: 设计.画面与生图
 
   # —— 机制与数据 ——
   - id: mechanism
-    name: 实现机制
+    name: 世界法则
     layer: final
     mount: [world-simulator]
     declaration: >-
-      保存世界中稳定成立的因果法则，供主世界层推演事件后果、
-      剧情变化和人物反应；一次可写多条共同作用的机制
-    artifact: 设计.实现机制
+      写出世界相对熟悉基底的根本变造及其连锁（制度、权力、日常），
+      以及金手指与玩法系统的固定规则；不预定人物对玩家的反应
+    artifact: 设计.世界法则
 
   - id: topology
     name: 拓扑图谱
@@ -161,8 +172,8 @@ modules:
     mount: [world-simulator, auditor]
     repeatable: true
     declaration: >-
-      为一个独有但结构复杂的对象定义节点、连接、初始图与开场后的维护规则；
-      一份产物一张图，可按地图、关系链、升级树等对象反复
+      为一张图定义节点、连接、初始图与开场后的维护规则。
+      地图、关系链、升级树，以及社会阶梯、价目、兑换等级等有序标尺，都在这里；一份产物一张图
     artifact: 设计.拓扑图谱
 
   - id: variable-design
@@ -171,8 +182,8 @@ modules:
     layer: final
     mount: [world-simulator, auditor]
     declaration: >-
-      定义必须跨轮保存的最少真值、合法更新条件、权限与派生映射，
-      供程序选择简单状态工具或复杂维护副 Worker
+      定义必须跨轮保存的最少真值、合法更新条件、权限与派生映射；
+      默认值只留短事实，人物档案留在具体实例；有真值即旁观填表
     artifact: 设计.变量设计与更新规则
 
   - id: variable-context
@@ -190,7 +201,7 @@ modules:
     mount: [world-simulator, narrator]
     declaration: >-
       定义普通楼层每轮实际启用的语义区域、出现条件、权威来源与内容要求；
-      可含隐藏更新语义区，不决定前端排版和渲染
+      默认含文字选项；字数区间与占比照写故事推进与交互范式，不决定前端排版
     artifact: 设计.监控栏
 
   - id: zero-layer-status

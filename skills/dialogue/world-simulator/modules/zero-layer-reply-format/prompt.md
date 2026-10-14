@@ -16,7 +16,9 @@ when_not: |
 boundary: |
   0层回复呈现决定槽位内容和更新语义；本能力决定固定外壳、位置、渲染与更新应用。
   权威状态由程序投影；本能力只消费数据，不让正文模型重复生成。
-feeds: gm,narrator
+  创作时一次写好 frontend 并由程序持有；游玩不把 html/css/js 塞进模型上下文。
+  程序按数据契约要求模型只交槽位更新结构化内容，再灌进已固定的壳。
+feeds: program
 ```
 
 ## opening
@@ -73,7 +75,7 @@ HTML、CSS、JS 合计不超过 60 KB。材料足够便直接成稿；会改变�
   "schema": "context-fragment.v1",
   "技能": "0层正文组成",
   "brief": "一句话说明持久卡的主工作面、辅助导航与更新方式",
-  "mount": ["world-simulator", "narrator"],
+  "mount": [],
   "稳变": "stable",
   "正文": {
     "参考壳": [
@@ -162,7 +164,7 @@ HTML、CSS、JS 合计不超过 60 KB。材料足够便直接成稿；会改变�
 7. topology 读取结构化节点与连接绘制 SVG，并提供列表降级。
 8. 预览是非正史验收数据，不写成开场。
 9. 产物正文不含自评、追问或开放问题。
-10. `mount` 固定为 `["world-simulator", "narrator"]`。
+10. `mount` 固定为 `[]`：壳不进游玩投影；程序持有 frontend，只向模型注入数据契约。
 
 ## score
 

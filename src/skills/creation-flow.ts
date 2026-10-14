@@ -1309,16 +1309,95 @@ export function creationFlowFromRecipeSeed(
   };
 }
 
+/**
+ * 改名后，旧步骤名和旧产物 tag 仍对上同一能力。
+ * 新写入用目录里的现名和现 tag；读取时两边都认。
+ */
+const MODULE_LEGACY: Record<
+  string,
+  { names: string[]; artifacts: string[]; current: string }
+> = {
+  mechanism: {
+    names: ["实现机制"],
+    artifacts: ["设计.实现机制"],
+    current: "设计.世界法则",
+  },
+};
+
+/** 读上下文时，现用 tag 与旧 tag 互为兜底。 */
+export function tagReadFallbacks(tag: string): string[] {
+  const t = tag.trim();
+  for (const legacy of Object.values(MODULE_LEGACY)) {
+    if (t === legacy.current) return [...legacy.artifacts];
+    if (legacy.artifacts.includes(t)) return [legacy.current];
+  }
+  return [];
+}
+
+/** 写成现用 tag 后，旧 tag 应清掉，避免两份法则同时进上下文。 */
+export function legacyTagsRetiredByWrite(tag: string): string[] {
+  const t = tag.trim();
+  for (const legacy of Object.values(MODULE_LEGACY)) {
+    if (t === legacy.current) return [...legacy.artifacts];
+  }
+  return [];
+}
+
+/** 现用产物 tag 在前，旧 tag 在后。 */
+export function moduleArtifactTags(
+  mod: Pick<ModuleCatalogEntry, "id" | "artifact">,
+): string[] {
+  const current = mod.artifact?.trim();
+  const legacy = MODULE_LEGACY[mod.id]?.artifacts ?? [];
+  return [...new Set([...(current ? [current] : []), ...legacy])];
+}
+
+export function moduleOwnsArtifactTag(
+  mod: Pick<ModuleCatalogEntry, "id" | "artifact">,
+  tag: string,
+): boolean {
+  const bare = tag.trim();
+  if (!bare) return false;
+  return moduleArtifactTags(mod).some(
+    (artifact) => bare === artifact || bare.startsWith(`${artifact}#`),
+  );
+}
+
+function filledOwnsModule(
+  filled: ReadonlySet<string>,
+  mod: Pick<ModuleCatalogEntry, "id" | "artifact">,
+): boolean {
+  return moduleArtifactTags(mod).some((tag) => filled.has(tag));
+}
+
+/** 黑板里已有内容的那条 tag；都空时返回现用 tag。 */
+export function readModuleArtifactContent(
+  mod: Pick<ModuleCatalogEntry, "id" | "artifact"> | null | undefined,
+  read: (tag: string) => string | undefined,
+): { tag: string; content: string } | null {
+  if (!mod) return null;
+  const tags = moduleArtifactTags(mod);
+  for (const tag of tags) {
+    const content = read(tag)?.trim() || "";
+    if (content) return { tag, content };
+  }
+  const current = tags[0];
+  return current ? { tag: current, content: "" } : null;
+}
+
 /** 无 id 时的兜底（目录仍应显式写 id） */
 function slugFromName(name: string): string {
   const map: Record<string, string> = {
     美学纲领与交互范式: "aesthetics-interaction",
     交互范式: "interaction",
-    美学纲领: "aesthetics",
+    美学纲领: "aesthetics-interaction",
+    故事推进与交互范式: "story-progression",
     叙事指南: "narrative-guide",
+    画面与生图: "image-prompt",
     叙事指南与故事推进: "narrative",
     故事推进: "story-progression",
-    实现机制: "mechanism",
+    世界法则: "mechanism",
+    实现机制: "mechanism", // 旧称
     舞台骨架: "world-blueprint",
     世界蓝图与人文地理: "world-blueprint", // 旧称
     世界蓝图: "world-blueprint", // 旧简称
@@ -1958,8 +2037,8 @@ export function formatFlowProgressForAgent(params: {
     for (const step of flow.steps) {
       if (isPrototypeStep(step)) continue;
       const acceptedHere = isStepAccepted(step, accepted);
-      const art = catalog ? artifactTagForStep(step.name, catalog) : null;
-      const hasArtifact = Boolean(art && filled.has(art));
+      const modForArt = catalog ? findModuleByName(catalog, step.name) : null;
+      const hasArtifact = Boolean(modForArt && filledOwnsModule(filled, modForArt));
       const repeatable = repeatableNames.has(step.name);
       if (acceptedHere || (!repeatable && hasArtifact)) {
         markDone(
@@ -1981,7 +2060,7 @@ export function formatFlowProgressForAgent(params: {
   if (catalog) {
     for (const mod of catalogModulesForIntake(catalog, "recipe")) {
       if (mod.repeatable === true) continue;
-      if (!mod.artifact || !filled.has(mod.artifact)) continue;
+      if (!filledOwnsModule(filled, mod)) continue;
       if (doneNames.has(mod.name)) continue;
       markDone(mod.name, undefined, "产物已在黑板", false);
     }
@@ -2032,7 +2111,7 @@ export function formatFlowProgressForAgent(params: {
     catalog && flow
       ? flow.steps.filter((step) => {
           if (isPrototypeStep(step)) return false;
-          const mod = catalog.modules.find((m) => m.name === step.name);
+          const mod = findModuleByName(catalog, step.name);
           return Boolean(mod?.closer) && !isStepAccepted(step, accepted);
         })
       : [];
@@ -2131,7 +2210,10 @@ export function validateCreationFlow(
   const seenIds = new Set<string>();
   const allowed = catalog
     ? new Set(
-        catalogModulesForIntake(catalog, "recipe").map((m) => m.name),
+        catalogModulesForIntake(catalog, "recipe").flatMap((m) => [
+          m.name,
+          ...(MODULE_LEGACY[m.id]?.names ?? []),
+        ]),
       )
     : null;
   const reportedFreshDup = new Set<string>();
@@ -2147,7 +2229,7 @@ export function validateCreationFlow(
       errors.push(`「${step.name}」不在模块目录中`);
     }
 
-    const mod = catalog?.modules.find((m) => m.name === step.name);
+    const mod = catalog ? findModuleByName(catalog, step.name) : null;
     if (isReviseStep(step)) {
       const ref = step.revises?.trim() ?? "";
       if (!ref) {
@@ -2220,7 +2302,7 @@ export function validateStepReadyToRun(
   step: CreationFlowStep,
   catalog: ModuleCatalog | null,
 ): CreationFlowValidation {
-  const mod = catalog?.modules.find((m) => m.name === step.name);
+  const mod = findModuleByName(catalog, step.name);
   if (!mod?.params?.length) return { ok: true, errors: [] };
   const missing = missingRequiredStepParams(step, mod);
   if (missing.length === 0) return { ok: true, errors: [] };
@@ -2260,7 +2342,7 @@ export function artifactTagForStep(
   name: string,
   catalog: ModuleCatalog | null,
 ): string | null {
-  return catalog?.modules.find((m) => m.name === name)?.artifact ?? null;
+  return findModuleByName(catalog, name)?.artifact ?? null;
 }
 
 /**
@@ -2458,7 +2540,7 @@ export function listCallableCatalogModules(params: {
   for (const mod of catalogModulesForIntake(catalog, "recipe")) {
     if (scheduled.has(mod.name)) continue;
     if (!mod.repeatable) {
-      if (mod.artifact && filled.has(mod.artifact)) continue;
+      if (filledOwnsModule(filled, mod)) continue;
       if (accepted.has(mod.name)) continue;
     }
     out.push({
@@ -2566,7 +2648,7 @@ export function formatCreationFlowForUser(
         ...(blockedBy?.length ? { blockedBy } : {}),
         runState,
         ...(mod?.artifact ? { artifactTag: mod.artifact } : {}),
-        ...(mod?.artifact && filled.has(mod.artifact) ? { hasArtifact: true } : {}),
+        ...(mod && filledOwnsModule(filled, mod) ? { hasArtifact: true } : {}),
         ...(!proto && s.params ? { params: s.params } : {}),
         ...(paramsMissing.length > 0 ? { paramsMissing } : {}),
       };
@@ -2579,7 +2661,13 @@ export function findModuleByName(
   name: string,
 ): ModuleCatalogEntry | null {
   if (!catalog) return null;
-  return catalog.modules.find((m) => m.name === name) ?? null;
+  const exact = catalog.modules.find((m) => m.name === name);
+  if (exact) return exact;
+  const legacyId = Object.entries(MODULE_LEGACY).find(([, legacy]) =>
+    legacy.names.includes(name),
+  )?.[0];
+  if (!legacyId) return null;
+  return catalog.modules.find((m) => m.id === legacyId) ?? null;
 }
 
 /** 已验收步骤名列表（JSON 数组或换行文本） */

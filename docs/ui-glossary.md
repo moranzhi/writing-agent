@@ -125,6 +125,7 @@
 | Intake | **需求描述** | 启动填空 | — |
 | Burst | **本轮调度** | — | 少对用户说 burst。 |
 | Questions card | **询问卡** | Questions | 详见 `ui-design.md` §8。 |
+| Direct chat / `direct-chat` | **直聊** | — | 与作品「对话」并列的轻量多轮 LLM 面；两层（上下文壳 → 会话）。见 `direct-chat.md`。 |
 
 ---
 
@@ -206,6 +207,7 @@
 | `interaction` | 交互范式（旧；已并入上一行） |
 | `narrative_guide` | 叙事指南与故事推进 |
 | `narrative-guide` | 叙事指南（对话落盘） |
+| `image-prompt` | 画面与生图（对话落盘） |
 | `story-progression` | 故事推进（对话落盘） |
 | `user-requirements` | 用户需求（偏好库选用） |
 | `input_protocol` | 输入协议 |

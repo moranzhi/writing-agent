@@ -49,7 +49,7 @@ feeds: design_only
 2. 禁止重写上游长文；只写顺序与投影。
 3. 每轮槽：order 0＝该槽固定人设；其后按「稳→对话.历史→易变」软排。
 4. 主世界层必须含 ref=`对话.历史`（默认 projection=summary）；转述与旁观维护默认不含历史。
-5. 主世界层应挂「设计.叙事指南」「设计.故事推进」（工序编排则为「设计.叙事指南与故事推进」）等 mount 到 gm 的块；有「设计.随机范围整理」则挂 gm（summary 即可）；转述只读本轮正文（输出.用户展示）+ 文风/壳。
+5. 主世界层应挂「设计.叙事指南」「设计.故事推进与交互范式」（旧档仍挂「设计.故事推进」；工序编排则为「设计.叙事指南与故事推进」）等 mount 到 gm 的块；有「设计.随机范围整理」则挂 gm（summary 即可）；转述只读本轮正文（输出.用户展示）+ 文风/壳。
 6. 旁观维护在回合末：须含「输出.用户展示」与变量合同，不含历史。
 7. 越稳越靠前；本轮输入/真值/正文通常在历史之后。
 8. 同一内容可挂多槽。
@@ -96,7 +96,7 @@ feeds: design_only
       "inserts": [
         { "order": 0, "ref": "worker.persona", "projection": "fixed" },
         { "order": 1, "ref": "设计.舞台骨架", "projection": "summary" },
-        { "order": 2, "ref": "设计.实现机制", "projection": "summary" },
+        { "order": 2, "ref": "设计.世界法则", "projection": "summary" },
         { "order": 3, "ref": "设计.变量设计与更新规则", "projection": "summary" },
         { "order": 4, "ref": "设计.生成规则", "projection": "summary" },
         { "order": 5, "ref": "设计.叙事指南与故事推进", "projection": "summary" },

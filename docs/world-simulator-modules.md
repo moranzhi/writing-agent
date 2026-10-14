@@ -173,12 +173,13 @@ recipes/world-simulator|expand-assistant/recipe.yaml
 |------|-----|------|
 | 美学纲领与交互范式 | `aesthetics-interaction` | **范例已写**；前端 mosaic 视图 |
 | 主角设定 | `protagonist` | **已写**：代入名片（名字/背景/特殊设定）；挂在当前选用的用户角色卡下；关掉这局就不加载 |
-| 实现机制 | `mechanism` | **已写**：`context-fragment.v1`（支撑点正文 + 自评 + 追问）；`feeds: gm`；**专用卡已接** |
+| 世界法则 | `mechanism` | **已写**：`context-fragment.v1`（法则 + 连锁）；旧称实现机制，产物旧 tag `设计.实现机制` 仍可读；`feeds: gm`；**专用卡已接** |
 | 舞台骨架 | `world-blueprint` | **已写**：`context-fragment.v1`；社会结构 + 世界状况；**专用卡已接** |
 | 生成规则 | `generation-rules` | **已写**：`context-fragment.v1`；方向池优先、元素池仅封闭集合；可反复；**〔先验产物〕**；规划字段 `target`；挂 gm+auditor；**专用卡已接** |
 | 具体实例 | `concrete-instances` | **已写**：`context-fragment.v1`；只按规则执行；可反复；**〔先验产物〕**；规划字段 `rule_id` |
 | 叙事指南与故事推进 | `narrative` | **工序编排**：一份全文双挂；结构化卡。对话落盘不排本步 |
 | 叙事指南 | `narrative-guide` | **对话落盘**：遣词/笔墨/禁忌/写法档；`intake: dictate` |
+| 画面与生图 | `image-prompt` | **对话落盘**：从工作流库选一种并写提示词合同；只挂旁观；`intake: dictate` |
 | 故事推进 | `story-progression` | **对话落盘**：推进方式 + 用户输入用法；`intake: dictate` |
 | 拓扑图谱 | `topology` | 必须生成且不适合走生成规则→实例时，用拓扑结构写出（升级路径、地图、人物关系等） |
 | 回复呈现 | `status-bar` | **已写**：每轮终稿看什么（正文/字数/日期/变量）；旧称设计监控栏 |

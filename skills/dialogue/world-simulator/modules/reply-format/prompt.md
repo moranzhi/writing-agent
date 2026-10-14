@@ -21,7 +21,9 @@ boundary: |
   隐藏维护区不进 DOM；表由旁观副 LLM 维护，主回复不建填表通道。
   随机数是变量表隐藏行，也与本能力无关。
   壳参考库只提供布局与交互方法参考，不是必须照抄的固定产品模板。
-feeds: gm,narrator
+  创作时一次写好 frontend 并由程序持有；游玩不把 html/css/js 塞进模型上下文。
+  程序按数据契约要求模型只交 present.v1 各 block（如正文、标题、选项），再灌进已固定的壳。
+feeds: program
 ```
 
 ## opening
@@ -75,7 +77,7 @@ feeds: gm,narrator
   "schema": "context-fragment.v1",
   "技能": "正文组成",
   "brief": "一句话说明普通消息的阅读结构与特殊渲染",
-  "mount": ["world-simulator", "narrator"],
+  "mount": [],
   "稳变": "stable",
   "正文": {
     "参考壳": [
@@ -148,7 +150,7 @@ feeds: gm,narrator
 6. `示例灌数` 是非正史预览，schema 固定 `present.v1`，只含用户可见 blocks。
 7. 不重定义语义区域、篇幅、文风、变量规则、随机数或 0 层槽位更新。
 8. 产物正文不含自评、追问或开放问题。
-9. `mount` 固定为 `["world-simulator", "narrator"]`；兼容旧称 tag `设计.回复格式`。
+9. `mount` 固定为 `[]`：壳不进游玩投影；程序持有 frontend，只向模型注入数据契约。兼容旧称 tag `设计.回复格式`。
 
 ## score
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   artifactTagForStep,
   extractModuleOpening,
+  findModuleByName,
   formatCreationFlowForUser,
   deriveFlowStepTitle,
   titleFromSuggestion,
@@ -444,11 +445,11 @@ describe("creation-flow", () => {
   it("loads world-simulator catalog and formats for agent", async () => {
     const catalog = await loadModuleCatalog("dialogue/world-simulator");
     expect(catalog?.modules.some((m) => m.name === "美学纲领与交互范式")).toBe(
-      true,
+      false,
     );
     expect(catalog?.modules.some((m) => m.name === "主角设定")).toBe(true);
     expect(catalog?.modules.some((m) => m.name === "交互范式")).toBe(false);
-    expect(catalog?.modules.some((m) => m.name === "美学纲领")).toBe(false);
+    expect(catalog?.modules.some((m) => m.name === "美学纲领")).toBe(true);
     expect(
       catalog?.modules.find((m) => m.name === "生成规则")?.repeatable,
     ).toBe(true);
@@ -476,7 +477,7 @@ describe("creation-flow", () => {
     expect(gen?.boundary).toBeTruthy();
     const block = formatModuleCatalogForAgent(catalog!);
     expect(block).toContain("【能力");
-    expect(block).toContain("美学纲领与交互范式：");
+    expect(block).toContain("美学纲领：");
     expect(block).toContain("生成规则〔可反复〕〔先验产物〕");
     expect(block).toContain("上下文排序〔程序步〕");
     expect(block).toContain("何时用");
@@ -489,7 +490,7 @@ describe("creation-flow", () => {
     expect(block).not.toMatch(/^- 故事推进：/m);
     const dictateBlock = formatModuleCatalogForDictate(catalog!);
     expect(dictateBlock).toMatch(/^- 叙事指南：/m);
-    expect(dictateBlock).toMatch(/^- 故事推进：/m);
+    expect(dictateBlock).toMatch(/^- 故事推进与交互范式：/m);
     expect(dictateBlock).toContain("开场白与开场变量〔可反复〕〔收口〕");
     expect(dictateBlock).toContain("信息可见范围〔落档程序〕");
     expect(dictateBlock).not.toMatch(/^- 叙事指南与故事推进/m);
@@ -499,12 +500,12 @@ describe("creation-flow", () => {
     expect(catalog?.modules.find((m) => m.name === "叙事指南")?.intake).toBe(
       "dictate",
     );
-    expect(catalog?.modules.find((m) => m.name === "故事推进")?.intake).toBe(
-      "dictate",
-    );
-    expect(catalog?.modules.find((m) => m.name === "故事推进")?.libraries).toEqual([
-      "preferences",
-    ]);
+    expect(
+      catalog?.modules.find((m) => m.name === "故事推进与交互范式")?.intake,
+    ).toBe("dictate");
+    expect(
+      catalog?.modules.find((m) => m.name === "故事推进与交互范式")?.libraries,
+    ).toEqual(["preferences"]);
     expect(catalog?.modules.some((m) => m.id === "user-requirements")).toBe(false);
     expect(
       catalog?.modules.find((m) => m.name === "叙事指南")?.libraries,
@@ -527,7 +528,7 @@ describe("creation-flow", () => {
     const leftover = listCallableCatalogModules({ catalog: catalog! });
     expect(leftover.some((m) => m.name === "叙事指南与故事推进")).toBe(true);
     expect(leftover.some((m) => m.name === "叙事指南")).toBe(false);
-    expect(leftover.some((m) => m.name === "故事推进")).toBe(false);
+    expect(leftover.some((m) => m.name === "故事推进与交互范式")).toBe(false);
 
     const splitFlow = parseCreationFlow(`{
       "steps": [{ "name": "叙事指南", "depends_on": [] }]
@@ -552,7 +553,7 @@ describe("creation-flow", () => {
     expect(ws?.process).toBeTruthy();
     expect(ws?.principles).toBeTruthy();
     expect(
-      ws?.seed?.steps.some((s) => s.name === "美学纲领与交互范式"),
+      ws?.seed?.steps.some((s) => s.name === "美学纲领"),
     ).toBe(true);
     expect(ws?.seed?.status).toBe("open");
     const formatted = formatSelectedRecipeForAgent(ws!);
@@ -724,7 +725,7 @@ recipes:
     expect(selected.promptBody).toContain("【用户已选配方 · 回合推演】");
     expect(selected.promptBody).toContain("回合推演");
     expect(selected.promptBody).toContain("【能力");
-    expect(selected.promptBody).toContain("美学纲领与交互范式");
+    expect(selected.promptBody).toContain("美学纲领：");
     expect(selected.promptBody).toContain("核心思路");
     expect(selected.promptBody).toContain("何时用");
     expect(selected.promptBody).toContain("开局 steps");
@@ -827,7 +828,7 @@ modules:
 
   it("injects aesthetics-interaction module prompt into design-step", async () => {
     const flowRaw = JSON.stringify({
-      steps: [{ name: "美学纲领与交互范式", depends_on: [] }],
+      steps: [{ name: "美学纲领", depends_on: [] }],
     });
     const loaded = await loadWorkerSkillWithContext(
       "world-simulator",
@@ -835,14 +836,14 @@ modules:
       undefined,
       {
         flowRaw,
-        currentStepName: "美学纲领与交互范式",
+        currentStepName: "美学纲领",
         acceptedStepNames: [],
       },
     );
-    expect(loaded.worker.outputTags).toContain("设计.美学纲领与交互范式");
+    expect(loaded.worker.outputTags).toContain("设计.美学纲领");
     expect(loaded.worker.outputTags).not.toContain("创作.当前步骤");
     expect(loaded.worker.inputTags).toContain("创作.当前步骤");
-    expect(loaded.promptBody).toContain("美学纲领与交互范式");
+    expect(loaded.promptBody).toContain("【本步方法 · 美学纲领】");
     expect(loaded.promptBody).toContain("体验契约");
     expect(loaded.promptBody).toContain("程序开场");
     expect(loaded.promptBody).toContain("【本步参数】");
@@ -890,9 +891,9 @@ modules:
     const binding = await resolveDesignStepBinding({
       skillPackRoot: "dialogue/world-simulator",
       flowRaw: JSON.stringify({
-        steps: [{ name: "美学纲领与交互范式", depends_on: [] }],
+        steps: [{ name: "美学纲领", depends_on: [] }],
       }),
-      currentStepName: "美学纲领与交互范式",
+      currentStepName: "美学纲领",
     });
     expect(binding?.opening).toContain("反复获得什么体验");
     expect(binding?.modulePrompt).toContain("```task");
@@ -913,7 +914,7 @@ modules:
       "../src/skills/creation-flow.js"
     );
     const sections = parseModulePromptSections(prompt!);
-    expect(sections.blocks.task).toContain("稳定反馈");
+    expect(sections.blocks.task).toContain("回馈");
     expect(sections.blocks.output).toContain('"核心运转"');
     expect(sections.blocks.output).not.toContain('"自评"');
     expect(sections.blocks.output).not.toContain('"追问"');
@@ -1018,7 +1019,7 @@ modules:
       "../src/skills/creation-flow.js"
     );
     const sections = parseModulePromptSections(prompt!);
-    expect(sections.blocks.task).toContain("只选定一种");
+    expect(sections.blocks.task).toContain("只选一种");
     expect(sections.blocks.task).toContain("read_library_entry");
     expect(sections.blocks.output).toContain('"用户输入用法"');
     expect(sections.blocks.output).toContain('"扩写要求"');
@@ -1037,8 +1038,16 @@ modules:
   it("loads the migrated mechanism contract", async () => {
     const catalog = await loadModuleCatalog("dialogue/world-simulator");
     const module = catalog?.modules.find((item) => item.id === "mechanism");
+    expect(module?.name).toBe("世界法则");
+    expect(module?.artifact).toBe("设计.世界法则");
     expect(module?.layer).toBe("final");
     expect(module?.mount).toEqual(["world-simulator"]);
+    expect(findModuleByName(catalog, "实现机制")?.id).toBe("mechanism");
+    expect(artifactTagForStep("实现机制", catalog)).toBe("设计.世界法则");
+    const legacyFlow = parseCreationFlow(
+      `{"steps":[{"name":"实现机制","depends_on":[]}]}`,
+    )!;
+    expect(validateCreationFlow(legacyFlow, catalog).ok).toBe(true);
 
     const prompt = await loadModulePrompt(
       "dialogue/world-simulator",
@@ -1048,19 +1057,21 @@ modules:
       "../src/skills/creation-flow.js"
     );
     const sections = parseModulePromptSections(prompt!);
-    expect(sections.blocks.task).toContain("多条共同作用");
-    expect(sections.blocks.task).toContain("缺失后果");
+    expect(sections.blocks.task).toContain("连锁");
+    expect(sections.blocks.task).toContain("删掉所有提到玩家的句子");
     expect(sections.blocks.output).toContain('"既成机制"');
-    expect(sections.blocks.output).toContain('"因果影响"');
-    expect(sections.blocks.output).toContain('"推演口径"');
+    expect(sections.blocks.output).toContain('"法则"');
+    expect(sections.blocks.output).toContain('"连锁"');
+    expect(sections.blocks.task).toContain("拓扑图名");
+    expect(sections.blocks.output).not.toContain('"标尺"');
     expect(sections.blocks.output).toContain('"共同作用"');
-    expect(sections.blocks.output).not.toContain('"缺失后果"');
+    expect(sections.blocks.output).not.toContain('"推演口径"');
     expect(sections.blocks.output).not.toContain('"自评"');
-    expect(sections.blocks.score).toContain("骨架必要度");
-    expect(sections.blocks.score).toContain("因果清晰度");
-    expect(sections.blocks.score).toContain("推演开放度");
-    expect(sections.blocks.examples).toContain("灵气复苏");
-    expect(sections.blocks.examples).toContain("全民直播求生");
+    expect(sections.blocks.score).toContain("世界客观度");
+    expect(sections.blocks.score).toContain("连锁充分度");
+    expect(sections.blocks.score).toContain("承重克制度");
+    expect(sections.blocks.examples).toContain("没有黄段子");
+    expect(sections.blocks.examples).toContain("灵气重回");
   });
 
   it("loads the migrated topology contract", async () => {
@@ -1078,6 +1089,7 @@ modules:
       "../src/skills/creation-flow.js"
     );
     const sections = parseModulePromptSections(prompt!);
+    expect(sections.blocks.task).toContain("有序标尺");
     expect(sections.blocks.task).toContain("一张图");
     expect(sections.blocks.task).toContain("static");
     expect(sections.blocks.task).toContain("record");
@@ -1111,8 +1123,8 @@ modules:
     const sections = parseModulePromptSections(prompt!);
     expect(sections.blocks.task).toContain("deterministic");
     expect(sections.blocks.task).toContain("narrative_inference");
-    expect(sections.blocks.task).toContain("inline_tool");
-    expect(sections.blocks.task).toContain("auditor_bundle");
+    expect(sections.blocks.task).toContain("旁观填表");
+    expect(sections.blocks.task).toContain("play_slots");
     expect(sections.blocks.output).toContain('"允许写入者"');
     expect(sections.blocks.output).toContain('"更新规则"');
     expect(sections.blocks.output).toContain('"派生映射"');
@@ -1143,11 +1155,11 @@ modules:
     );
     const sections = parseModulePromptSections(prompt!);
     expect(sections.blocks.task).toContain("语义区域");
-    expect(sections.blocks.task).toContain("inline");
+    expect(sections.blocks.task).toContain("旁观副 LLM");
     expect(sections.blocks.output).toContain('"语义区域"');
     expect(sections.blocks.output).toContain("program_projection");
-    expect(sections.blocks.output).toContain("maintenance_channel");
-    expect(sections.blocks.output).toContain("state_ops");
+    expect(sections.blocks.output).not.toContain("maintenance_channel");
+    expect(sections.blocks.output).not.toContain("state_ops");
     expect(sections.blocks.output).not.toContain('"启用"');
     expect(sections.blocks.output).not.toContain("1000～2000");
     expect(sections.blocks.output).not.toContain('"自评"');
@@ -1658,18 +1670,18 @@ modules:
     const flowRaw = JSON.stringify({
       status: "open",
       steps: [
-        { id: "美学纲领与交互范式", name: "美学纲领与交互范式", depends_on: [] },
+        { id: "美学纲领", name: "美学纲领", depends_on: [] },
       ],
     });
     const binding = await resolveDesignStepBinding({
       skillPackRoot: "dialogue/world-simulator",
       flowRaw,
-      currentStepName: "美学纲领与交互范式",
-      acceptedStepNames: ["美学纲领与交互范式"],
+      currentStepName: "美学纲领",
+      acceptedStepNames: ["美学纲领"],
       inheritExisting: true,
     });
     expect(binding?.opening).toBeNull();
-    expect(binding?.inheritTag).toBe("设计.美学纲领与交互范式");
+    expect(binding?.inheritTag).toBe("设计.美学纲领");
 
     const loaded = await loadWorkerSkillWithContext(
       "world-simulator",
@@ -1677,15 +1689,15 @@ modules:
       undefined,
       {
         flowRaw,
-        currentStepName: "美学纲领与交互范式",
-        acceptedStepNames: ["美学纲领与交互范式"],
+        currentStepName: "美学纲领",
+        acceptedStepNames: ["美学纲领"],
         inheritExisting: true,
       },
     );
     expect(loaded.promptBody).toContain("【回头修改】");
     expect(loaded.promptBody).not.toContain("程序开场");
     expect(loaded.worker.name).toContain("回头修改");
-    expect(loaded.worker.inputTags).toContain("设计.美学纲领与交互范式");
+    expect(loaded.worker.inputTags).toContain("设计.美学纲领");
   });
 
   it("layers follow longest dependency path", () => {

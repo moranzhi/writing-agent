@@ -12,6 +12,7 @@ import {
   formatAcceptedUnitsForPrompt,
 } from "./creation-units.js";
 import { projectFragmentContent } from "./context-fragment.js";
+import { tagReadFallbacks } from "./creation-flow.js";
 import {
   buildHistoryFallback,
   isDialogueHistoryRef,
@@ -75,6 +76,21 @@ function applyPolicy(content: string, policy?: string): string {
 }
 
 function readTagContent(
+  tag: string,
+  inputs: Record<string, string>,
+  blackboard: Blackboard,
+  inputMerge: BlackboardInputMerge,
+): string {
+  const direct = readOneTag(tag, inputs, blackboard, inputMerge);
+  if (direct) return direct;
+  for (const alt of tagReadFallbacks(tag)) {
+    const found = readOneTag(alt, inputs, blackboard, inputMerge);
+    if (found) return found;
+  }
+  return "";
+}
+
+function readOneTag(
   tag: string,
   inputs: Record<string, string>,
   blackboard: Blackboard,

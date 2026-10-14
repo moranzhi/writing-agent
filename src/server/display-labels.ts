@@ -36,11 +36,12 @@ const WORKER_LABELS: Record<string, string> = {
 };
 
 const FIXED_TOPIC_LABELS: Record<string, string> = {
-  "aesthetics-interaction": "美学纲领与交互范式",
+  "aesthetics-interaction": "美学纲领",
   interaction: "交互范式",
   narrative_guide: "叙事指南与故事推进",
   "narrative-guide": "叙事指南",
-  "story-progression": "故事推进",
+  "image-prompt": "画面与生图",
+  "story-progression": "故事推进与交互范式",
   input_protocol: "输入协议",
   core_premise: "核心前提",
   aesthetics: "美学纲领",
@@ -58,6 +59,11 @@ const CREATION_MODE_LABELS: Record<string, string> = {
   listen_serial: "听书连载",
 };
 
+/** 顶栏产品面（与作品对话并列） */
+const PRODUCT_SURFACE_LABELS: Record<string, string> = {
+  "direct-chat": "直聊",
+};
+
 const SKILL_PACK_LABELS: Record<string, string> = {
   "world-simulator": "回合推演",
   "expand-assistant": "扩写助手",
@@ -72,6 +78,12 @@ const SKILL_PACK_LABELS: Record<string, string> = {
 export function displayStageLabel(id: string | undefined | null): string {
   if (!id) return "";
   return STAGE_LABELS[id] ?? id;
+}
+
+/** 顶栏产品面展示名 */
+export function displayProductSurfaceLabel(id: string | undefined | null): string {
+  if (!id) return "";
+  return PRODUCT_SURFACE_LABELS[id] ?? id;
 }
 
 /** 进料方式展示名（新建对话框 / 工作面 kicker） */

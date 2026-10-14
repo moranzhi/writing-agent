@@ -3,6 +3,7 @@
  * 新库：实现 formatForPrompt，在本文件 register。
  */
 
+import { formatImageWorkflowCatalogForPrompt } from "../image-workflow/catalog.js";
 import { formatPreferenceCatalogForPrompt } from "../preference/catalog.js";
 import { formatStylePackCatalogForPrompt } from "../style-pack/catalog.js";
 
@@ -72,6 +73,12 @@ registerLibrary({
   id: "preferences",
   label: "偏好库",
   formatForPrompt: formatPreferenceCatalogForPrompt,
+});
+
+registerLibrary({
+  id: "image-workflows",
+  label: "工作流库",
+  formatForPrompt: formatImageWorkflowCatalogForPrompt,
 });
 
 /**

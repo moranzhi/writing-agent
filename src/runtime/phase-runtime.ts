@@ -91,6 +91,8 @@ import {
   isInstanceStep,
   findStepByRef,
   findModuleByName,
+  legacyTagsRetiredByWrite,
+  readModuleArtifactContent,
   hasAcceptedCloserStep,
   parseCreationFlow,
   DESIGN_FLOW_WORKER_ID,
@@ -1127,15 +1129,18 @@ export class PhaseRuntime {
       const other = findStepByRef(flow, item);
       return other?.name === step.name;
     }).length;
-    const tag = findModuleByName(catalog, step.name)?.artifact?.trim();
-    if (tag) {
+    const stored = readModuleArtifactContent(
+      findModuleByName(catalog, step.name),
+      (tag) => this.blackboard.getContentByTag(tag),
+    );
+    if (stored?.content) {
       const pruned = pruneRepeatableArtifactContent({
-        raw: this.blackboard.getContentByTag(tag) ?? "",
+        raw: stored.content,
         step,
         remainingSameModule,
       });
       this.blackboard.write({
-        tag,
+        tag: stored.tag,
         content: pruned,
         source: "runtime",
       });
@@ -1710,11 +1715,12 @@ export class PhaseRuntime {
     }
 
     const pendingModule = findModuleByName(catalog, step.name);
+    const storedArtifact = readModuleArtifactContent(pendingModule, (tag) =>
+      this.blackboard.getContentByTag(tag),
+    );
     if (reenter) {
-      const artTag = pendingModule?.artifact?.trim();
-      const hasArt = Boolean(
-        artTag && this.blackboard.getContentByTag(artTag)?.trim(),
-      );
+      const artTag = storedArtifact?.tag;
+      const hasArt = Boolean(storedArtifact?.content);
       if (
         !isStepAccepted(step, accepted) &&
         !hasArt &&
@@ -1764,7 +1770,7 @@ export class PhaseRuntime {
     if (reenter) {
       const existing = this.ensureReenterArtifact(
         pinned.id,
-        pendingModule?.artifact,
+        storedArtifact?.tag ?? pendingModule?.artifact,
       );
       if (existing) {
         this.reopenArtifactForRevision(existing, pinned);
@@ -2719,6 +2725,11 @@ export class PhaseRuntime {
       content: toWrite,
       source: workerId,
     });
+    if (toWrite.trim()) {
+      for (const oldTag of legacyTagsRetiredByWrite(tag)) {
+        this.blackboard.deleteByTag(oldTag);
+      }
+    }
     if (
       inferLifecycleStage(this.session) === "play" &&
       (tag === "输出.用户展示" || tag === "输出.开场白")
