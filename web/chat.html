@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>直聊 · Writing Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="/theme-init.js"></script>
+    <link rel="stylesheet" href="/settings.css" />
+    <link rel="stylesheet" href="/chat.css" />
+  </head>
+  <body class="settings-page chat-page">
+    <header class="st-top">
+      <a class="st-brand" href="/">Writing Agent</a>
+      <nav class="st-nav" aria-label="主导航">
+        <a href="/">对话</a>
+        <a href="/chat.html" aria-current="page">直聊</a>
+        <a href="/modules.html">技能</a>
+        <a href="/libraries.html">库</a>
+        <a href="/stats.html">Token</a>
+        <a href="/settings.html">设置</a>
+      </nav>
+    </header>
+
+    <div class="st-shell chat-shell">
+      <aside class="chat-rail" aria-label="直聊导航">
+        <nav class="path-bar chat-path" id="chat-path" aria-label="位置">
+          <ol class="path-bar-list" id="chat-path-list"></ol>
+        </nav>
+        <div class="chat-rail-actions">
+          <button type="button" class="st-btn" id="btn-new-shell">新建上下文</button>
+          <button type="button" class="st-btn" id="btn-new-conv" hidden>
+            新建会话
+          </button>
+        </div>
+        <div class="chat-rail-list" id="chat-rail-list"></div>
+        <p class="chat-rail-note">
+          未选存档即为快速对话（浏览器缓存，最多 2 条），可保存为持久会话。
+        </p>
+      </aside>
+
+      <main class="chat-main" id="chat-main">
+        <section class="chat-room" id="chat-room">
+          <header class="chat-room-head">
+            <div class="chat-room-titles">
+              <h2 id="chat-room-title">临时会话</h2>
+              <p class="chat-room-sub" id="chat-room-sub">未选存档时即快速对话</p>
+            </div>
+            <div class="chat-room-actions">
+              <button type="button" class="st-btn" id="btn-save-temp" hidden>
+                保存
+              </button>
+              <button type="button" class="st-btn" id="btn-add-window">
+                新增窗口
+              </button>
+            </div>
+          </header>
+
+          <div class="chat-arena" id="chat-arena" aria-live="polite" aria-label="模型竞技场"></div>
+
+          <footer class="chat-composer">
+            <p class="chat-status" id="chat-status" hidden></p>
+            <div class="chat-input-shell">
+              <textarea
+                id="chat-input"
+                rows="1"
+                placeholder="输入消息，Enter 发送（所有窗口同时回复），Shift+Enter 换行"
+              ></textarea>
+              <div class="chat-shell-actions">
+                <button
+                  type="button"
+                  class="chat-btn-icon chat-btn-icon-primary"
+                  id="btn-send"
+                  title="发送（Enter）"
+                  aria-label="发送"
+                >
+                  <svg class="chat-send-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M1.4 2.1 14.6 8 1.4 13.9l.2-4.4L10 8 1.6 6.5l-.2-4.4Z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </footer>
+        </section>
+      </main>
+
+      <aside class="chat-context" id="chat-context" aria-label="上下文配置">
+        <header class="chat-context-head">
+          <h2>上下文</h2>
+          <p class="chat-context-sub" id="context-sub">选择或新建后编辑</p>
+        </header>
+        <div class="chat-shell-editor" id="shell-editor">
+          <label>
+            名称
+            <input type="text" id="shell-name" disabled />
+          </label>
+          <label>
+            系统提示
+            <textarea
+              id="shell-system"
+              rows="3"
+              placeholder="空则用默认直聊契约"
+              disabled
+            ></textarea>
+          </label>
+          <label>
+            史前设定
+            <textarea id="shell-lore-before" rows="3" disabled></textarea>
+          </label>
+          <label>
+            种子历史
+            <textarea
+              id="shell-seed-history"
+              rows="4"
+              placeholder="手填历史，会拼在多轮之前"
+              disabled
+            ></textarea>
+          </label>
+          <label>
+            史后状态
+            <textarea id="shell-lore-after" rows="2" disabled></textarea>
+          </label>
+          <label>
+            尾注
+            <textarea id="shell-post-turn" rows="2" disabled></textarea>
+          </label>
+          <div class="chat-shell-editor-actions">
+            <button type="button" class="st-btn st-btn-primary" id="btn-save-shell" disabled>
+              应用
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <dialog class="chat-dialog" id="dialog-promote">
+      <form method="dialog" id="form-promote">
+        <h3>保存临时会话</h3>
+        <label>
+          上下文名称
+          <input type="text" id="promote-shell-name" value="临时上下文" required />
+        </label>
+        <label>
+          会话名称
+          <input type="text" id="promote-conv-name" value="会话" required />
+        </label>
+        <div class="chat-dialog-actions">
+          <button type="submit" class="st-btn st-btn-primary" value="ok">保存</button>
+          <button type="submit" class="st-btn" value="cancel">取消</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="chat-dialog" id="dialog-add-window">
+      <form method="dialog" id="form-add-window">
+        <h3>新增窗口</h3>
+        <p class="chat-dialog-hint">选一个 API 配置，中间多开一列对照窗；发送时各列同时回复。</p>
+        <label>
+          模型配置
+          <select id="add-window-profile"></select>
+        </label>
+        <div class="chat-dialog-actions">
+          <button type="submit" class="st-btn st-btn-primary" value="ok">添加</button>
+          <button type="submit" class="st-btn" value="cancel">取消</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/chat.js"></script>
+  </body>
+</html>

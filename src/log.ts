@@ -218,6 +218,7 @@ export function labelCaller(caller: string | undefined): string {
   if (who === "dictate_agent") return "对话落盘";
   if (who.startsWith("listen_serial_")) return "听书连载";
   if (who === "preset-probe") return "预设探测";
+  if (who === "direct-chat") return "直聊";
   if (who.startsWith("model-compare:")) {
     return `模型对比 ${who.slice("model-compare:".length)}`;
   }

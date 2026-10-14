@@ -7,6 +7,8 @@ import { sessionManager } from "./session-manager.js";
 import { handleSettingsApi } from "./settings-handlers.js";
 import { handleBooksApi } from "./book-handlers.js";
 import { handleStatsApi } from "./stats-handlers.js";
+import { handleDirectChatApi } from "./direct-chat-handlers.js";
+import { syncOpenRouterPrices, type PriceWatchItem } from "../stats/pricing.js";
 import { ensureConsoleUtf8, getRuntimeLogPath } from "../log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +52,7 @@ async function serveStatic(res: ServerResponse, filePath: string): Promise<void>
 
 const server = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
@@ -77,8 +79,13 @@ const server = createServer(async (req, res) => {
           "GET /api/skills",
           "GET /api/directors",
           "GET /api/modules",
+          "GET /api/direct-chat/shells",
+          "POST /api/direct-chat/ephemeral/complete",
           "GET /api/stats/tokens",
           "GET /api/stats/pricing",
+          "GET /api/stats/pricing/openrouter",
+          "POST /api/stats/pricing/openrouter",
+          "GET /api/stats/pricing/notice",
           "POST /api/stats/pricing/sources",
         ],
       });
@@ -90,6 +97,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (await handleBooksApi(req, res, url.pathname)) {
+      return;
+    }
+
+    if (await handleDirectChatApi(req, res, url.pathname)) {
       return;
     }
 
@@ -796,7 +807,42 @@ const server = createServer(async (req, res) => {
   }
 });
 
+function moneyBit(amount: number, currency: string): string {
+  const symbol = currency === "CNY" ? "¥" : "$";
+  const body = amount >= 1 ? amount.toFixed(2) : amount.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  return `${symbol}${body}`;
+}
+
+function watchLine(item: PriceWatchItem): string {
+  if (item.status === "changed" && item.previous && item.current) {
+    const currency = item.current.currency;
+    return `${item.model} 变了：输入 ${moneyBit(item.previous.input, currency)} → ${moneyBit(item.current.input, currency)}，输出 ${moneyBit(item.previous.output, currency)} → ${moneyBit(item.current.output, currency)} / 百万 token`;
+  }
+  if (item.status === "unchanged") return `${item.model} 价格没变`;
+  if (item.status === "baseline") return `${item.model} 第一次记下单价，下次启动再比`;
+  return `${item.model} 这次价目里没有`;
+}
+
 server.listen(PORT, () => {
   console.log(`对话页  http://localhost:${PORT}`);
   console.log(`运行日志（UTF-8）  ${getRuntimeLogPath()}`);
+  void syncOpenRouterPrices()
+    .then((notice) => {
+      if (notice.error) {
+        console.warn(`[价目] OpenRouter 拉取失败：${notice.error}`);
+        return;
+      }
+      if (!notice.items.length) {
+        console.log("[价目] OpenRouter 已更新。最近还没有调用记录，先不比价格。");
+        return;
+      }
+      const changed = notice.items.some((item) => item.status === "changed");
+      const log = changed ? console.warn : console.log;
+      log(`[价目] ${notice.items.map(watchLine).join("；")}`);
+    })
+    .catch((err) => {
+      console.warn(
+        `[价目] OpenRouter 拉取异常：${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
 });

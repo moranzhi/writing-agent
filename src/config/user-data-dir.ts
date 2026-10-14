@@ -18,8 +18,16 @@ export function getBooksDir(): string {
   return path.join(getUserDataDir(), "books");
 }
 
+export function getDirectChatsDir(): string {
+  return path.join(getUserDataDir(), "direct-chats");
+}
+
 export function ensureUserDataDirs(): void {
   mkdirSync(getPresetsDir(), { recursive: true });
   mkdirSync(getBooksDir(), { recursive: true });
   mkdirSync(path.join(getUserDataDir(), "stats"), { recursive: true });
+  mkdirSync(path.join(getUserDataDir(), "image-workflows"), { recursive: true });
+  mkdirSync(getDirectChatsDir(), { recursive: true });
+  mkdirSync(path.join(getDirectChatsDir(), "shells"), { recursive: true });
+  mkdirSync(path.join(getDirectChatsDir(), "conversations"), { recursive: true });
 }
