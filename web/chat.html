@@ -37,6 +37,9 @@
           <button type="button" class="st-btn" id="btn-new-conv" hidden>
             新建会话
           </button>
+          <button type="button" class="st-btn" id="btn-save-temp" hidden>
+            保存
+          </button>
         </div>
         <div class="chat-rail-list" id="chat-rail-list"></div>
         <p class="chat-rail-note">
@@ -46,30 +49,23 @@
 
       <main class="chat-main" id="chat-main">
         <section class="chat-room" id="chat-room">
-          <header class="chat-room-head">
-            <div class="chat-room-titles">
-              <h2 id="chat-room-title">临时会话</h2>
-              <p class="chat-room-sub" id="chat-room-sub">未选存档时即快速对话</p>
-            </div>
-            <div class="chat-room-actions">
-              <button type="button" class="st-btn" id="btn-save-temp" hidden>
-                保存
-              </button>
-              <button type="button" class="st-btn" id="btn-add-window">
-                新增窗口
-              </button>
-            </div>
-          </header>
-
+          <p class="chat-temp-mark" id="chat-temp-mark" hidden>临时会话</p>
           <div class="chat-arena" id="chat-arena" aria-live="polite" aria-label="模型竞技场"></div>
 
           <footer class="chat-composer">
             <p class="chat-status" id="chat-status" hidden></p>
+            <div class="chat-composer-row">
+              <details class="chat-more" id="chat-more">
+                <summary class="chat-more-sum" title="更多操作" aria-label="更多操作">
+                  <span class="hamburger-icon" aria-hidden="true"></span>
+                </summary>
+                <div class="chat-more-panel" id="chat-more-panel" role="menu"></div>
+              </details>
             <div class="chat-input-shell">
               <textarea
                 id="chat-input"
                 rows="1"
-                placeholder="输入消息，Enter 发送（所有窗口同时回复），Shift+Enter 换行"
+                placeholder="输入消息，Enter 发送（所有模型同时回复），Shift+Enter 换行"
               ></textarea>
               <div class="chat-shell-actions">
                 <button
@@ -84,6 +80,7 @@
                   </svg>
                 </button>
               </div>
+            </div>
             </div>
           </footer>
         </section>
@@ -159,7 +156,7 @@
     <dialog class="chat-dialog" id="dialog-add-window">
       <form method="dialog" id="form-add-window">
         <h3>新增窗口</h3>
-        <p class="chat-dialog-hint">选一个 API 配置，中间多开一列对照窗；发送时各列同时回复。</p>
+        <p class="chat-dialog-hint">选一个 API 配置，新增对照模型；发送时各模型同时回复。</p>
         <label>
           模型配置
           <select id="add-window-profile"></select>

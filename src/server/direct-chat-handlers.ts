@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createConversation,
@@ -14,8 +15,13 @@ import {
   saveConversation,
   updateConversation,
   updateShell,
+  type DirectChatAssistantReply,
+  type DirectChatConversation,
   type DirectChatMessage,
+  type DirectChatMultiTurnResult,
+  type DirectChatMultiWindowResult,
   type DirectChatShellSlots,
+  type DirectChatStreamDelta,
   type DirectChatTurn,
   type DirectChatWindow,
 } from "../direct-chat/index.js";
@@ -32,6 +38,129 @@ async function readBody(req: IncomingMessage): Promise<string> {
 function json(res: ServerResponse, status: number, data: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(data));
+}
+
+function wantsNdjson(req: IncomingMessage): boolean {
+  return String(req.headers.accept || "").includes("application/x-ndjson");
+}
+
+type MultiStreamHooks = {
+  onDelta: (event: DirectChatStreamDelta) => void;
+  onWindow: (result: DirectChatMultiWindowResult) => void;
+};
+
+function replyFromWindowResult(
+  result: DirectChatMultiWindowResult,
+): DirectChatAssistantReply {
+  return {
+    windowId: result.windowId,
+    content: result.reply ?? "",
+    ...(result.reasoning ? { thinking: result.reasoning } : {}),
+    ...(result.model ? { model: result.model } : {}),
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
+  };
+}
+
+/** 流式增量按窗口累加，并定期写入会话，避免刷新后丢掉已生成的正文 */
+function createStreamingSaver(
+  conversation: DirectChatConversation,
+  windows: DirectChatWindow[],
+  text: string,
+  turnId: string,
+) {
+  const ts = new Date().toISOString();
+  const replies: DirectChatAssistantReply[] = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  const saveNow = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (closed) return;
+    const turn: DirectChatTurn = {
+      id: turnId,
+      user: { content: text, createdAt: ts },
+      replies: replies.map((r) => ({ ...r })),
+      createdAt: ts,
+    };
+    saveConversation({
+      ...conversation,
+      windows,
+      turns: [...conversation.turns.filter((t) => t.id !== turnId), turn],
+    });
+  };
+
+  const saveSoon = () => {
+    if (closed || timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      saveNow();
+    }, 400);
+  };
+
+  return {
+    onDelta(event: DirectChatStreamDelta) {
+      let reply = replies.find((r) => r.windowId === event.windowId);
+      if (!reply) {
+        reply = { windowId: event.windowId, content: "" };
+        replies.push(reply);
+      }
+      if (event.field === "thinking") {
+        reply.thinking = `${reply.thinking || ""}${event.delta}`;
+      } else {
+        reply.content += event.delta;
+      }
+      saveSoon();
+    },
+    onWindow(result: DirectChatMultiWindowResult) {
+      const next = replyFromWindowResult(result);
+      const idx = replies.findIndex((r) => r.windowId === result.windowId);
+      if (idx >= 0) replies[idx] = next;
+      else replies.push(next);
+      saveNow();
+    },
+    close() {
+      closed = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
+}
+
+async function writeMultiStream(
+  res: ServerResponse,
+  run: (hooks: MultiStreamHooks) => Promise<DirectChatMultiTurnResult>,
+  finish: (multi: DirectChatMultiTurnResult) => Record<string, unknown>,
+): Promise<void> {
+  res.writeHead(200, {
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+  });
+  const writeEvent = (event: unknown) => {
+    res.write(`${JSON.stringify(event)}\n`);
+  };
+  try {
+    const multi = await run({
+      onDelta: (event) => writeEvent({ type: "delta", ...event }),
+      onWindow: (result) => writeEvent({ type: "window", result }),
+    });
+    writeEvent({ type: "done", multi, ...finish(multi) });
+    res.end();
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    try {
+      writeEvent({ type: "error", error });
+      res.end();
+    } catch {
+      res.destroy();
+    }
+  }
 }
 
 function slotsFromBody(body: Record<string, unknown>): DirectChatShellSlots {
@@ -269,8 +398,10 @@ export async function handleDirectChatApi(
           json(res, 400, { error: "请先新增至少一个模型窗口" });
           return true;
         }
-        try {
-          const multi = await runDirectChatMultiTurn({
+        const turnId = randomUUID();
+        const saver = createStreamingSaver(conversation, windows, text, turnId);
+        const run = (hooks?: MultiStreamHooks) =>
+          runDirectChatMultiTurn({
             message: text,
             slots: {
               systemPrompt: shell.systemPrompt,
@@ -283,11 +414,41 @@ export async function handleDirectChatApi(
             windows,
             turns: conversation.turns,
             complete: body.complete,
+            turnId,
+            onDelta: (event) => {
+              saver.onDelta(event);
+              hooks?.onDelta(event);
+            },
+            onWindow: (result) => {
+              saver.onWindow(result);
+              hooks?.onWindow(result);
+            },
           });
+        try {
+          if (wantsNdjson(req)) {
+            await writeMultiStream(res, run, (multi) => {
+              saver.close();
+              const updated = saveConversation({
+                ...conversation,
+                windows,
+                turns: [
+                  ...conversation.turns.filter((t) => t.id !== multi.turn.id),
+                  multi.turn,
+                ],
+              });
+              return { conversation: updated, shell };
+            });
+            return true;
+          }
+          const multi = await run();
+          saver.close();
           const updated = saveConversation({
             ...conversation,
             windows,
-            turns: [...conversation.turns, multi.turn],
+            turns: [
+              ...conversation.turns.filter((t) => t.id !== multi.turn.id),
+              multi.turn,
+            ],
           });
           json(res, 200, {
             conversation: updated,
@@ -355,8 +516,8 @@ export async function handleDirectChatApi(
         json(res, 400, { error: "请先新增至少一个模型窗口" });
         return true;
       }
-      try {
-        const multi = await runDirectChatMultiTurn({
+      const run = (hooks?: MultiStreamHooks) =>
+        runDirectChatMultiTurn({
           message: text,
           slots: slotsFromBody(body),
           presetId:
@@ -368,7 +529,15 @@ export async function handleDirectChatApi(
           windows,
           turns,
           complete: body.complete,
+          onDelta: hooks?.onDelta,
+          onWindow: hooks?.onWindow,
         });
+      try {
+        if (wantsNdjson(req)) {
+          await writeMultiStream(res, run, () => ({}));
+          return true;
+        }
+        const multi = await run();
         json(res, 200, { multi });
       } catch (err) {
         json(res, 400, {

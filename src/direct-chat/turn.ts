@@ -40,6 +40,8 @@ export type DirectChatTurnInput = {
   /** 覆盖当前 API profile */
   profileId?: string | null;
   complete?: boolean;
+  /** 思维链或正文的增量，边生成边回调 */
+  onDelta?: (field: "thinking" | "content", delta: string) => void;
 };
 
 export type DirectChatTurnResult = {
@@ -243,14 +245,22 @@ export async function runDirectChatTurn(
   const trackingRef = { current: {} as LlmTrackingContext };
   try {
     const llm = createTrackedLlm(preset, input.profileId, trackingRef);
-    const result = await llm.complete(buildDirectChatTaskMessages(turnInput), {
-      caller: "direct-chat",
-    });
+    const messages = buildDirectChatTaskMessages(turnInput);
+    const callbacks = {
+      onReasoningDelta: (delta: string) => input.onDelta?.("thinking", delta),
+      onContentDelta: (delta: string) => input.onDelta?.("content", delta),
+    };
+    const result = llm.completeStream
+      ? await llm.completeStream(messages, { caller: "direct-chat" }, callbacks)
+      : await llm.complete(messages, { caller: "direct-chat" });
     const contextTrace = trackingRef.current.pendingContextTrace;
+    const reasoning = result.reasoning ?? null;
+    let reply = result.content ?? "";
+    if (reasoning && reply === reasoning) reply = "";
     return {
       messages: assembled,
-      reply: result.content,
-      reasoning: result.reasoning ?? null,
+      reply,
+      reasoning,
       model: result.model,
       completed: true,
       ...(contextTrace ? { contextTrace } : {}),
@@ -304,6 +314,18 @@ export type DirectChatMultiTurnInput = {
   /** 已落定轮次（不含本轮） */
   turns: DirectChatTurn[];
   complete?: boolean;
+  /** 落盘用的回合 id；流式写入时与中途存档对齐 */
+  turnId?: string;
+  /** 某个窗口的增量 */
+  onDelta?: (event: DirectChatStreamDelta) => void;
+  /** 某个窗口一结束就回调，不必等其余窗口 */
+  onWindow?: (result: DirectChatMultiWindowResult) => void;
+};
+
+export type DirectChatStreamDelta = {
+  windowId: string;
+  field: "thinking" | "content";
+  delta: string;
 };
 
 export type DirectChatMultiWindowResult = {
@@ -342,8 +364,10 @@ export async function runDirectChatMultiTurn(
         presetId: input.presetId,
         profileId: win.profileId,
         complete: input.complete,
+        onDelta: (field, delta) =>
+          input.onDelta?.({ windowId: win.id, field, delta }),
       });
-      return {
+      const result = {
         windowId: win.id,
         profileId: win.profileId,
         reply: single.reply,
@@ -354,6 +378,8 @@ export async function runDirectChatMultiTurn(
         ...(single.skipReason ? { skipReason: single.skipReason } : {}),
         ...(single.error ? { error: single.error } : {}),
       } satisfies DirectChatMultiWindowResult;
+      input.onWindow?.(result);
+      return result;
     }),
   );
 
@@ -367,7 +393,7 @@ export async function runDirectChatMultiTurn(
   }));
 
   const turn: DirectChatTurn = {
-    id: randomUUID(),
+    id: input.turnId || randomUUID(),
     user: { content: message, createdAt: ts },
     replies,
     createdAt: ts,
